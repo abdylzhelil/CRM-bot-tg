@@ -1,0 +1,18 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:///data/crm.db
+    volumes:
+      - ./data:/srv/data
+  # Для PostgreSQL: раскомментируйте db, поменяйте DATABASE_URL на
+  # postgresql+asyncpg://crm:crm@db:5432/crm и добавьте depends_on: [db].
+  # db:
+  #   image: postgres:16
+  #   restart: unless-stopped
+  #   environment: {POSTGRES_USER: crm, POSTGRES_PASSWORD: crm, POSTGRES_DB: crm}
+  #   volumes: [pgdata:/var/lib/postgresql/data]
+# volumes:
+#   pgdata:
