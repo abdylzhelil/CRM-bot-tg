@@ -14,7 +14,6 @@ LEVELS = [
     (4, "🥇 Золото", 200),
     (5, "👑 Легенда", 1000),
 ]
-TOP_LEVEL = 4  # с этого уровня «право первооткрывателя» длиннее
 
 
 def level_of(groups: int, leads: int) -> int:
@@ -48,12 +47,6 @@ async def stats(s: AsyncSession, user_id: int) -> tuple[int, int]:
 async def current(s: AsyncSession, user_id: int) -> int:
     groups, leads = await stats(s, user_id)
     return level_of(groups, leads)
-
-
-async def head_start_min(s: AsyncSession, user_id: int) -> int:
-    """На сколько минут раньше остальных получает заявку автор группы."""
-    key = "first_min_top" if await current(s, user_id) >= TOP_LEVEL else "first_min"
-    return await settings.get_int(s, key)
 
 
 async def refresh(s: AsyncSession, user_id: int) -> int | None:

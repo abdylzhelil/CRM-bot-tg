@@ -1,5 +1,4 @@
 """Этап 4: право первооткрывателя, уровни, рейтинг по городам."""
-from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy import select
@@ -39,19 +38,15 @@ def test_level_thresholds():
     assert "ещё 3" in levels.next_step(2, 47)
 
 
-async def test_finder_first_paid_after_head_start_free_late(maker, tgbot):
+async def test_finder_gets_own_group_leads_instantly(maker, tgbot):
     await make_user(maker, 50)  # бесплатный автор группы
     await make_user(maker, 51, plan="full")
     await make_user(maker, 52)
     await add_group(maker, 50)
     lead = await intake.handle(lead_msg())
     d = await got(maker, lead.id)
-    assert set(d) == {ADMIN_ID, 50, 51, 52}
-    t = now()
-    assert d[50].deliver_after <= t and d[ADMIN_ID].deliver_after <= t  # автор и админ — сразу
-    assert timedelta(minutes=1) < d[51].deliver_after - t < timedelta(minutes=3)  # платный — после форы 2 мин
-    assert d[52].deliver_after - t > timedelta(minutes=20)  # бесплатный — как обычно
-    assert tgbot.texts(50) and not tgbot.texts(51)  # автору пришло сразу
+    assert 50 in d and d[50].deliver_after <= now() and d[ADMIN_ID].deliver_after <= now()
+    assert tgbot.texts(50)  # автору пришло сразу, без задержки бесплатного тарифа
 
 
 async def test_finder_ignores_free_daily_limit(maker, tgbot):
@@ -62,34 +57,46 @@ async def test_finder_ignores_free_daily_limit(maker, tgbot):
         assert 50 in await got(maker, lead.id)
 
 
-async def test_no_head_start_without_finder(maker, tgbot):
-    await make_user(maker, 51, plan="full")
-    lead = await intake.handle(lead_msg(group=-100999))
-    assert (await got(maker, lead.id))[51].deliver_after <= now()
-
-
 async def test_finder_must_match_niche(maker, tgbot):
     await make_user(maker, 50, niches=("Дизайн",))
-    await make_user(maker, 51, plan="full")
     await add_group(maker, 50)
     lead = await intake.handle(lead_msg())
-    d = await got(maker, lead.id)
-    assert 50 not in d and d[51].deliver_after <= now()  # автор не по нише — форы нет
+    assert 50 not in await got(maker, lead.id)
 
 
-async def test_gold_gets_longer_head_start_and_level_up_message(maker, tgbot):
+async def test_level_up_message(maker, tgbot):
     await make_user(maker, 50)
-    await make_user(maker, 51, plan="full")
     await add_group(maker, 50, leads_count=198)
-    async with maker() as s:
-        assert await levels.head_start_min(s, 50) == 2
     await intake.handle(lead_msg())
     await intake.handle(lead_msg())  # 200 заявок -> 🥇
     async with maker() as s:
-        assert (await s.get(User, 50)).level == 4 and await levels.head_start_min(s, 50) == 3
+        assert (await s.get(User, 50)).level == 4
     assert any("Золото" in t for t in tgbot.texts(50))
-    lead = await intake.handle(lead_msg())
-    assert timedelta(minutes=2) < (await got(maker, lead.id))[51].deliver_after - now() < timedelta(minutes=4)
+
+
+async def test_leads_split_evenly_between_users(maker, tgbot):
+    for uid in range(100, 104):  # 4 платных пользователя
+        await make_user(maker, uid, plan="full")
+    counts = {uid: 0 for uid in range(100, 104)}
+    seen = []
+    for _ in range(20):
+        lead = await intake.handle(lead_msg(group=-100999))
+        d = await got(maker, lead.id)
+        owners = [u for u in d if u in counts]
+        seen.append(owners)
+        for u in owners:
+            counts[u] += 1
+    # когда заявок достаточно — каждая уходит одному человеку, а в сумме все получают поровну
+    assert all(len(o) == 1 for o in seen[5:])
+    assert max(counts.values()) - min(counts.values()) <= 1
+
+
+async def test_few_leads_go_to_several(maker, tgbot):
+    for uid in range(100, 104):
+        await make_user(maker, uid, plan="full")
+    lead = await intake.handle(lead_msg(group=-100999))  # первая заявка за сутки — одинаковая для всех
+    d = await got(maker, lead.id)
+    assert {100, 101, 102, 103} <= set(d)
 
 
 async def test_rating_by_city_and_screen(maker, tgbot):

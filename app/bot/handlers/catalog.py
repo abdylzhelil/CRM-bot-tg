@@ -24,7 +24,6 @@ STATUS = {
 async def catalog_menu(target: Message | CallbackQuery, user: User) -> None:
     async with Session() as s:
         per = await settings.get_int(s, "bonus_leads")
-        first = await settings.get_int(s, "first_min")
         groups_n, leads_n = await levels.stats(s, user.tg_id)
     level = levels.level_of(groups_n, leads_n)
     await reply(target, (
@@ -33,8 +32,7 @@ async def catalog_menu(target: Message | CallbackQuery, user: User) -> None:
         "мы подключим его к поиску заявок.\n\n"
         f"🎁 <b>Бонус:</b> за каждые {per} заявок, найденных в добавленной вами группе, — "
         "+1 день 💎 Полного тарифа.\n"
-        f"⚡ <b>Право первооткрывателя:</b> заявки из вашей группы приходят вам первыми — на {first}–"
-        f"{first + 1} мин раньше остальных.\n\n"
+        "⚡ <b>Право первооткрывателя:</b> заявки из вашей группы всегда приходят вам — даже сверх дневного лимита.\n\n"
         f"Ваш уровень: <b>{levels.name(level)}</b> (заявок из ваших групп: {leads_n})\n{levels.next_step(level, leads_n)}"
     ), kb([
         [("📚 Каталог по моим нишам", "cg:browse:mine"), ("🌍 Весь каталог", "cg:browse:all")],

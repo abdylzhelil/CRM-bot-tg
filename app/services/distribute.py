@@ -4,8 +4,7 @@
 так заказчика не заваливают сообщениями, а у исполнителя выше шанс. Платные — первыми и мгновенно,
 бесплатные — с задержкой и дневным лимитом.
 
-Право первооткрывателя: автору группы (добавлена через 🌐 Каталог) заявка из неё приходит первой — сразу, мимо
-дневного лимита; платные получают её через 2–3 минуты (чем выше уровень автора, тем дольше фора).
+Заявки делятся поровну между пользователями (см. recipients): много заявок — у каждого свои, мало — одну получают несколько.
 """
 import logging
 import random
@@ -15,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Category, Delivery, Group, Lead, SpamVote, User, UserCategory, UserNegative, now
-from app.services import geo, levels, quiet, settings
+from app.services import geo, quiet, settings
 from app.services.text import compile_negatives, lemmas, negative_hit, tokens
 
 log = logging.getLogger(__name__)
@@ -56,11 +55,19 @@ async def eligible(s: AsyncSession, u: User, lead: Lead, voted: set[int], lead_l
     return not negative_hit(lead_lemmas, raw, compile_negatives(list(negatives)))
 
 
-async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str]]:
-    """Кому отдать заявку: [(пользователь, когда)].
+async def niche_flow(s: AsyncSession, root: int) -> int:
+    """Сколько заявок по нише пришло за последние сутки (включая текущую)."""
+    ids = (await s.scalars(select(Category.id).where((Category.id == root) | (Category.parent_id == root)))).all()
+    return await s.scalar(select(func.count()).select_from(Lead).where(
+        Lead.category_id.in_(ids), Lead.created_at > now() - timedelta(days=1))) or 1
 
-    когда: "first" — автор группы (право первооткрывателя), "now" — сразу, "head" — после форы автора,
-    "late" — бесплатный тариф с задержкой.
+
+async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str]]:
+    """Кому отдать заявку: [(пользователь, когда)]; когда: "now" — сразу, "late" — бесплатный тариф с задержкой.
+
+    Заявки делятся поровну: на каждую берём k человек с наименьшим числом заявок за сутки, где
+    k = ceil(людей / заявок ниши за сутки). Заявок много — у каждого свои, разные; мало — одну получают несколько.
+    Автор группы (из каталога) всегда получает заявки своей группы. Администраторы получают все.
     """
     root = await root_category(s, lead.category_id)
     if root is None:
@@ -83,36 +90,32 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str]]:
         else:
             (admins if u.is_admin else paid if is_paid(u) else free).append(u)
 
-    cap = await settings.get_int(s, "max_recipients")
     limit = await settings.get_int(s, "free_daily_limit")
     load = {u.tg_id: await delivered_today(s, u.tg_id) for u in paid + free}
+    free = [u for u in free if load[u.tg_id] < limit]
+    pool = len(paid) + len(free)
+    k = min(await settings.get_int(s, "max_recipients"), -(-pool // await niche_flow(s, root)))
     # справедливо: меньше получивших сегодня — раньше; при равенстве — случайно
     order = lambda us: sorted(us, key=lambda u: (load[u.tg_id], random.random()))  # noqa: E731
     chosen = [(u, "now") for u in admins]
     if finder is not None:
-        chosen.append((finder, "first"))
-        cap -= 1
+        chosen.append((finder, "now"))
     for u in order(paid):
-        if cap <= 0:
+        if k <= 0:
             break
-        chosen.append((u, "head" if finder is not None else "now"))
-        cap -= 1
+        chosen.append((u, "now"))
+        k -= 1
     for u in order(free):
-        if cap <= 0:
+        if k <= 0:
             break
-        if load[u.tg_id] >= limit:
-            continue
         chosen.append((u, "late"))
-        cap -= 1
+        k -= 1
     return chosen
 
 
 async def distribute(s: AsyncSession, lead: Lead) -> list[Delivery]:
     delay = timedelta(minutes=await settings.get_int(s, "free_delay_min"))
-    group = await s.get(Group, lead.group_id) if lead.group_id else None
-    head = timedelta(minutes=await levels.head_start_min(s, group.submitted_by)) if group and group.submitted_by else timedelta()
-    after = {"first": timedelta(), "now": timedelta(), "head": head, "late": delay}
-    rows = [Delivery(lead_id=lead.id, user_id=u.tg_id, deliver_after=now() + after[when])
+    rows = [Delivery(lead_id=lead.id, user_id=u.tg_id, deliver_after=now() + (delay if when == "late" else timedelta()))
             for u, when in await recipients(s, lead)]
     s.add_all(rows)
     await s.commit()
