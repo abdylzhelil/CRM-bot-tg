@@ -41,6 +41,7 @@ async def open_acc(cb: CallbackQuery) -> None:
     await reply(cb, text, kb([
         [("⏯ Вкл/выкл", f"acc:tog:{a.id}"), ("🔁 Перезапустить", f"acc:restart:{a.id}")],
         [("📈 Лимит в сутки", f"acc:limit:{a.id}"), ("🌐 Прокси", f"acc:proxy:{a.id}")],
+        [("📁 Разложить группы по папкам", f"acc:folders:{a.id}")],
         [("◀️ Назад", "acc:list")],
     ]))
 
@@ -59,6 +60,19 @@ async def toggle(cb: CallbackQuery) -> None:
         else:
             await manager.detach(a.id)
     await open_acc(cb)
+
+
+@router.callback_query(F.data.startswith("acc:folders:"))
+async def folders(cb: CallbackQuery) -> None:
+    from app.scout.folders import sync_folders
+
+    aid = int(cb.data.split(":")[2])
+    client = manager.clients.get(aid) if manager else None
+    if client is None:
+        return await cb.answer("Разведчик не подключён", show_alert=True)
+    await cb.answer("Раскладываю…")
+    count = await sync_folders(client, aid)
+    await cb.message.answer(f"📁 Готово: {count} групп в папках «🔍 Разведка» у аккаунта разведчика.")
 
 
 @router.callback_query(F.data.regexp(r"^acc:(limit|proxy):\d+$"))

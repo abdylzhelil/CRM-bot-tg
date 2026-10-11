@@ -55,7 +55,17 @@ class ScoutManager:
         client.add_event_handler(self._on_message, events.NewMessage(incoming=True))
         self.clients[acc.id] = client
         await self._mark(acc.id, "ok")
+        asyncio.create_task(self._tidy(client, acc.id))
         log.info("разведчик %s запущен", acc.name)
+
+    async def _tidy(self, client: TelegramClient, acc_id: int) -> None:
+        """При запуске разложить уже вступленные группы по папкам."""
+        from app.scout.folders import sync_folders
+
+        try:
+            await sync_folders(client, acc_id)
+        except Exception:
+            log.warning("папки разведчика #%s не обновлены", acc_id, exc_info=True)
 
     async def detach(self, acc_id: int) -> None:
         client = self.clients.pop(acc_id, None)

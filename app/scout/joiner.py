@@ -34,6 +34,7 @@ async def paused() -> bool:
 
 async def join_one(client: TelegramClient, acc_id: int) -> bool:
     """Вступить в одну одобренную группу. True — если попытка была (нужна пауза)."""
+    joined_entity = None
     async with Session() as s:
         acc = await s.get(ScoutAccount, acc_id)
         today = date.today().isoformat()
@@ -63,6 +64,7 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             await client(functions.channels.JoinChannelRequest(entity))
             g.status, g.account_id, g.joined_at = "joined", acc_id, now()
             acc.joined_today += 1
+            joined_entity = entity
         except UserAlreadyParticipantError:
             g.status, g.account_id, g.joined_at = "joined", acc_id, now()
         except FloodWaitError as e:
@@ -79,6 +81,14 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             log.exception("вступление в %s", g.title)
             g.status = "skipped"
         await s.commit()
+    if joined_entity is not None:
+        from app.scout.folders import mute, sync_folders
+
+        await mute(client, joined_entity)
+        try:
+            await sync_folders(client, acc_id)
+        except Exception:
+            log.warning("папки разведчика не обновлены", exc_info=True)
     return True
 
 
