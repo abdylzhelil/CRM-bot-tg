@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app import config
 from app.bot import notify
 from app.bot.handlers.stats import build_report
-from app.bot.setup import build
+from app.bot.setup import build, setup_profile
 from app.db import Session, engine, init_db
 from app.migrate import migrate_data, upgrade_schema
 from app.feed import server as feed_server
@@ -84,6 +84,7 @@ async def main() -> None:
         asyncio.create_task(c)
         for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop())
     ]
+    await setup_profile(bot)
     feed = await feed_server.start()
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

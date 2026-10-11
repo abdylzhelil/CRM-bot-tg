@@ -1,10 +1,15 @@
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart
+import logging
+
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import (
+    BotCommand, BotCommandScopeChat, BotCommandScopeDefault, KeyboardButton, MenuButtonCommands, Message,
+    ReplyKeyboardMarkup,
+)
 
 from app import config
 from app.bot import notify
@@ -17,21 +22,89 @@ from app.bot.handlers import (
 from app.models import User
 
 
+log = logging.getLogger(__name__)
+
+HELP = (
+    "❓ <b>Как пользоваться</b>\n\n"
+    "Бот читает Telegram-группы и присылает сообщения людей, которые <b>ищут исполнителя</b> по вашим нишам "
+    "и в вашем городе. Спам, рекламу конкурентов и повторы отсеивает сам.\n\n"
+    "<b>Карточка заявки:</b>\n"
+    "✍️ Ответить — написать человеку в личку\n"
+    "📋 Шаблон — готовый текст ответа с вашими ценами (нажмите на текст — скопируется)\n"
+    "✅ В работу — клиент попадает в 👥 Клиенты, там этапы сделки, заметки и напоминания\n"
+    "⏰ Отложить · ❌ Отказ · 🚫 Спам — автор спама вам больше не придёт\n\n"
+    "<b>Настройки</b> — в 👤 Профиль: ниши, город, минус-слова, режим тишины, свой шаблон и цены, пауза.\n"
+    "Заявка живёт минуты — отвечайте быстро 🔥\n\n"
+    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /profile — профиль, /cancel — отмена ввода."
+)
+
+USER_COMMANDS = [
+    BotCommand(command="menu", description="Главное меню"),
+    BotCommand(command="leads", description="Мои заявки"),
+    BotCommand(command="clients", description="Мои клиенты (CRM)"),
+    BotCommand(command="profile", description="Профиль и настройки"),
+    BotCommand(command="help", description="Как пользоваться"),
+    BotCommand(command="cancel", description="Отменить ввод"),
+]
+ADMIN_COMMANDS = USER_COMMANDS[:-2] + [
+    BotCommand(command="users", description="Пользователи и тарифы"),
+    BotCommand(command="groups", description="Группы и разведчики"),
+    BotCommand(command="settings", description="Настройки бота"),
+] + USER_COMMANDS[-2:]
+DESCRIPTION = (
+    "Нахожу клиентов в Telegram-группах: присылаю сообщения людей, которые ищут исполнителя по вашей нише "
+    "и в вашем городе. Отсеиваю спам и конкурентов, помогаю ответить и довести до сделки (встроенная CRM). "
+    "Нажмите «Запустить» — настройка займёт 30 секунд."
+)
+SHORT_DESCRIPTION = "Заявки клиентов из Telegram-групп по вашей нише и городу + CRM"
+
+
 def menu_keyboard(user: User | None = None) -> ReplyKeyboardMarkup:
     labels = ADMIN_MENU if user is not None and user.is_admin else USER_MENU
     rows = [[KeyboardButton(text=t) for t in labels[i : i + 2]] for i in range(0, len(labels), 2)]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+    # is_persistent — клавиатура видна всегда, /start набирать не нужно
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True,
+                               input_field_placeholder="Выберите раздел")
+
+
+async def setup_profile(bot: Bot) -> None:
+    """Кнопка «Меню» с командами, описание бота до запуска. Ошибки не мешают работе."""
+    try:
+        await bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
+        for admin_id in config.OWNER_IDS:
+            await bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id))
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        await bot.set_my_description(DESCRIPTION)
+        await bot.set_my_short_description(SHORT_DESCRIPTION)
+    except Exception:
+        log.warning("не удалось обновить команды/описание бота", exc_info=True)
 
 
 base = Router()
 
 
 @base.message(CommandStart())
+@base.message(Command("menu"))
 async def start(m: Message, state: FSMContext, user: User) -> None:
     await state.clear()
     if not user.onboarded:
         return await profile.show_niches(m, user)
     await m.answer("👋 Выберите раздел:", reply_markup=menu_keyboard(user))
+
+
+@base.message(Command("help"))
+async def help_cmd(m: Message, state: FSMContext, user: User) -> None:
+    await state.clear()
+    await m.answer(HELP, reply_markup=menu_keyboard(user) if user.onboarded else None)
+
+
+SHORTCUTS = {"leads": "📥 Заявки", "clients": "👥 Клиенты", "profile": "👤 Профиль",
+             "users": "👥 Пользователи", "groups": "🔍 Группы", "settings": "⚙️ Настройки"}
+
+
+@base.message(Command(*SHORTCUTS))
+async def shortcut(m: Message, state: FSMContext, user: User) -> None:
+    await open_section(m, state, user, SHORTCUTS[m.text.split()[0].lstrip("/").split("@")[0]])
 
 
 @base.message(Command("cancel"))
@@ -48,10 +121,14 @@ async def cancel(m: Message, state: FSMContext, user: User) -> None:
 @base.message(F.text.in_(MENU))
 async def menu_in_state(m: Message, state: FSMContext, user: User) -> None:
     """Нажатие кнопки меню прерывает ввод и передаёт управление разделу."""
+    await open_section(m, state, user, m.text)
+
+
+async def open_section(m: Message, state: FSMContext, user: User, section: str) -> None:
     await state.clear()
     if not user.onboarded:
         return await profile.show_niches(m, user)
-    if m.text in ADMIN_ONLY and not user.is_admin:
+    if section in ADMIN_ONLY and not user.is_admin:
         return
     handlers = {
         "📥 Заявки": lambda: leads.leads_menu(m, user),
@@ -66,8 +143,20 @@ async def menu_in_state(m: Message, state: FSMContext, user: User) -> None:
         "🛡 Чёрный список": lambda: blacklist.blacklist_menu(m),
         "👥 Пользователи": lambda: users_admin.users_menu(m),
         "⚙️ Настройки": lambda: settings.settings_menu(m),
+        "❓ Помощь": lambda: m.answer(HELP),
     }
-    await handlers[m.text]()
+    await handlers[section]()
+
+
+fallback = Router(name="fallback")
+
+
+@fallback.message(StateFilter(None))
+async def unknown(m: Message, user: User) -> None:
+    """Любое непонятное сообщение — показать меню (чтобы не набирать /start)."""
+    if not user.onboarded:
+        return await profile.show_niches(m, user)
+    await m.answer("Выберите раздел в меню ниже 👇 или /help — как пользоваться.", reply_markup=menu_keyboard(user))
 
 
 def build(scout_manager) -> tuple[Bot, Dispatcher]:
@@ -90,6 +179,8 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     # личка: всем пользователям
     private = Router(name="private")
     private.message.filter(F.chat.type == "private")
-    private.include_routers(base, inputs.router, profile.router, leads.router, clients.router, stats.router, admin)
+    private.include_routers(
+        base, inputs.router, profile.router, leads.router, clients.router, stats.router, admin, fallback,
+    )
     dp.include_routers(ingroup.router, private)
     return bot, dp

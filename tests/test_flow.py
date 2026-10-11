@@ -123,3 +123,37 @@ async def test_admin_can_manage_users(app_bot, maker):
         u = await s.get(DbUser, 502)
         assert u.plan == "full" and u.plan_until is not None
     assert any("Полный тариф" in t for t in api.texts(502))
+
+
+async def test_no_start_needed_unknown_text_shows_menu(app_bot, maker):
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(ADMIN_ID, "привет"))
+    last = [r for r in api.requests if isinstance(r, SendMessage) and r.chat_id == ADMIN_ID][-1]
+    assert "меню" in last.text and last.reply_markup.is_persistent
+    labels = [b.text for row in last.reply_markup.keyboard for b in row]
+    assert "👥 Пользователи" in labels and "❓ Помощь" in labels
+
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/leads"))
+    assert "Заявки" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/help"))
+    assert "Как пользоваться" in api.texts(ADMIN_ID)[-1]
+
+
+async def test_user_menu_has_no_admin_buttons_and_profile_is_set(app_bot, maker):
+    from aiogram.methods import SetMyCommands, SetMyDescription
+
+    from app.bot.setup import setup_profile
+
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(503, "/start"))
+    async with maker() as s:
+        (await s.get(DbUser, 503)).onboarded = True
+        await s.commit()
+    await dp.feed_update(bot, text_update(503, "что тут"))
+    last = [r for r in api.requests if isinstance(r, SendMessage) and r.chat_id == 503][-1]
+    labels = [b.text for row in last.reply_markup.keyboard for b in row]
+    assert "👥 Пользователи" not in labels and "📥 Заявки" in labels
+
+    await setup_profile(bot)
+    assert any(isinstance(r, SetMyCommands) for r in api.requests)
+    assert any(isinstance(r, SetMyDescription) for r in api.requests)

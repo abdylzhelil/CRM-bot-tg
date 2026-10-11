@@ -127,7 +127,16 @@ async def finish_onboarding(target, user: User) -> None:
     if isinstance(target, CallbackQuery):
         await target.answer()
     async with Session() as s:
+        niches = (await s.scalars(select(Category.name).join(UserCategory, UserCategory.category_id == Category.id)
+                                  .where(UserCategory.user_id == user.tg_id))).all()
         shown = await preview(s, user)
+    if not user.is_admin:
+        from app.bot import notify
+
+        who = esc(user.name or str(user.tg_id)) + (f" (@{esc(user.username)})" if user.username else "")
+        await notify._send(f"🆕 Новый пользователь: {who}\nНиши: {esc(', '.join(niches))}\n"
+                           f"Город: {esc(user.city or 'вся Россия')}")
+    async with Session() as s:
         await msg.answer(
             "✅ Готово! Новые заявки по вашим нишам будут приходить сюда.\n"
             + (f"Вот что было за последние сутки ({len(shown)}):" if shown else
