@@ -5,7 +5,7 @@
 бесплатные — с задержкой и дневным лимитом.
 
 Заявки делятся поровну между пользователями (см. recipients): много заявок — у каждого свои, мало — одну получают
-несколько, но по очереди с интервалом share_gap_min (первым — у кого за сутки меньше заявок).
+несколько, но по очереди с интервалом share_gap_min (выше уровень — раньше).
 """
 import logging
 import random
@@ -67,7 +67,7 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
     """Кому отдать заявку: [(пользователь, когда, место в очереди)].
 
     когда: "now" — сразу, "late" — бесплатный тариф с задержкой. Если заявку получают несколько человек, они идут
-    по очереди с интервалом share_gap_min: первым — тот, у кого за сутки меньше всего заявок (место 0).
+    по очереди с интервалом share_gap_min: первым — автор группы, дальше по уровню (выше — раньше), при равных уровнях — у кого за сутки меньше заявок.
 
     Заявки делятся поровну: на каждую берём k человек с наименьшим числом заявок за сутки, где
     k = ceil(людей / заявок ниши за сутки). Заявок много — у каждого свои, разные; мало — одну получают несколько.
@@ -101,23 +101,13 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
     k = min(await settings.get_int(s, "max_recipients"), -(-pool // await niche_flow(s, root)))
     # справедливо: меньше получивших сегодня — раньше; при равенстве — случайно
     order = lambda us: sorted(us, key=lambda u: (load[u.tg_id], random.random()))  # noqa: E731
+    picked = [(u, "now") for u in order(paid)[:k]]
+    picked += [(u, "late") for u in order(free)[: max(k - len(picked), 0)]]
+    # очередь внутри заявки: автор группы первым, дальше — у кого уровень выше, при равенстве — у кого меньше заявок
+    picked.sort(key=lambda p: (-p[0].level, load[p[0].tg_id]))
     chosen = [(u, "now", 0) for u in admins]
-    rank = 0
-    if finder is not None:
-        chosen.append((finder, "now", rank))
-        rank += 1
-    for u in order(paid):
-        if k <= 0:
-            break
-        chosen.append((u, "now", rank))
-        rank += 1
-        k -= 1
-    for u in order(free):
-        if k <= 0:
-            break
-        chosen.append((u, "late", rank))
-        rank += 1
-        k -= 1
+    queue = ([(finder, "now")] if finder is not None else []) + picked
+    chosen += [(u, when, rank) for rank, (u, when) in enumerate(queue)]
     return chosen
 
 

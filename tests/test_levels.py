@@ -131,3 +131,14 @@ async def test_shared_lead_goes_in_turns(maker, tgbot):
     assert times[0] <= now() and all(1.9 < g < 2.1 for g in gaps)  # первому сразу, остальным каждые 2 минуты
     assert d[ADMIN_ID].deliver_after <= now()  # админ без очереди
     assert sum(1 for u in range(100, 104) if tgbot.texts(u)) == 1  # сразу получил только первый
+
+
+async def test_queue_order_by_level(maker, tgbot):
+    levels_by_user = {100: 0, 101: 3, 102: 5, 103: 1}
+    for uid, lvl in levels_by_user.items():
+        await make_user(maker, uid, plan="full", level=lvl)
+    lead = await intake.handle(lead_msg(group=-100999))
+    d = await got(maker, lead.id)
+    queue = sorted(levels_by_user, key=lambda u: d[u].deliver_after)
+    assert queue == [102, 101, 103, 100]  # выше уровень — раньше
+    assert tgbot.texts(102) and not tgbot.texts(100)

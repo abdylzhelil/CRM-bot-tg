@@ -133,7 +133,7 @@ async def test_spam_votes(maker, tgbot):
     # проголосовавший больше не получает этого автора, остальные — получают
     lead2 = await intake.handle(msg("Срочно нужен сайт визитка, кто возьмётся", author=author))
     got2 = await deliveries(maker, lead2.id)
-    assert 80 not in got2 and 81 in got2
+    assert 80 not in got2 and (81 in got2 or 82 in got2)  # заявки делятся поровну: достаётся одному из двоих
     await leads.lead_action(cb(f"lead:spam:{got[81].id}", 81), voters[1])
     await leads.lead_action(cb(f"lead:spam:{got[82].id}", 82), voters[2])
     async with maker() as s:
