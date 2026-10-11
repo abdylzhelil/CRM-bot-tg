@@ -3,6 +3,9 @@
 Одну заявку получают не больше max_recipients пользователей (администраторы — всегда и сверх лимита),
 так заказчика не заваливают сообщениями, а у исполнителя выше шанс. Платные — первыми и мгновенно,
 бесплатные — с задержкой и дневным лимитом.
+
+Право первооткрывателя: автору группы (добавлена через 🌐 Каталог) заявка из неё приходит первой — сразу, мимо
+дневного лимита; платные получают её через 2–3 минуты (чем выше уровень автора, тем дольше фора).
 """
 import logging
 import random
@@ -11,8 +14,8 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Category, Delivery, Lead, SpamVote, User, UserCategory, UserNegative, now
-from app.services import geo, quiet, settings
+from app.models import Category, Delivery, Group, Lead, SpamVote, User, UserCategory, UserNegative, now
+from app.services import geo, levels, quiet, settings
 from app.services.text import compile_negatives, lemmas, negative_hit, tokens
 
 log = logging.getLogger(__name__)
@@ -53,8 +56,12 @@ async def eligible(s: AsyncSession, u: User, lead: Lead, voted: set[int], lead_l
     return not negative_hit(lead_lemmas, raw, compile_negatives(list(negatives)))
 
 
-async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, bool]]:
-    """Кому отдать заявку: [(пользователь, мгновенно ли)]."""
+async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str]]:
+    """Кому отдать заявку: [(пользователь, когда)].
+
+    когда: "first" — автор группы (право первооткрывателя), "now" — сразу, "head" — после форы автора,
+    "late" — бесплатный тариф с задержкой.
+    """
     root = await root_category(s, lead.category_id)
     if root is None:
         return []
@@ -65,9 +72,15 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, bool]]:
     )).all()
     voted = set((await s.scalars(select(SpamVote.user_id).where(SpamVote.author_id == lead.author_id))).all())
     lead_lemmas = lemmas(lead.text)
-    admins, paid, free = [], [], []
+    group = await s.get(Group, lead.group_id) if lead.group_id else None
+    finder_id = group.submitted_by if group is not None and group.catalog else 0
+    finder, admins, paid, free = None, [], [], []
     for u in users:
-        if await eligible(s, u, lead, voted, lead_lemmas):
+        if not await eligible(s, u, lead, voted, lead_lemmas):
+            continue
+        if u.tg_id == finder_id and not u.is_admin:
+            finder = u
+        else:
             (admins if u.is_admin else paid if is_paid(u) else free).append(u)
 
     cap = await settings.get_int(s, "max_recipients")
@@ -75,28 +88,32 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, bool]]:
     load = {u.tg_id: await delivered_today(s, u.tg_id) for u in paid + free}
     # справедливо: меньше получивших сегодня — раньше; при равенстве — случайно
     order = lambda us: sorted(us, key=lambda u: (load[u.tg_id], random.random()))  # noqa: E731
-    chosen = [(u, True) for u in admins]
+    chosen = [(u, "now") for u in admins]
+    if finder is not None:
+        chosen.append((finder, "first"))
+        cap -= 1
     for u in order(paid):
         if cap <= 0:
             break
-        chosen.append((u, True))
+        chosen.append((u, "head" if finder is not None else "now"))
         cap -= 1
     for u in order(free):
         if cap <= 0:
             break
         if load[u.tg_id] >= limit:
             continue
-        chosen.append((u, False))
+        chosen.append((u, "late"))
         cap -= 1
     return chosen
 
 
 async def distribute(s: AsyncSession, lead: Lead) -> list[Delivery]:
     delay = timedelta(minutes=await settings.get_int(s, "free_delay_min"))
-    rows = [
-        Delivery(lead_id=lead.id, user_id=u.tg_id, deliver_after=now() if instant else now() + delay)
-        for u, instant in await recipients(s, lead)
-    ]
+    group = await s.get(Group, lead.group_id) if lead.group_id else None
+    head = timedelta(minutes=await levels.head_start_min(s, group.submitted_by)) if group and group.submitted_by else timedelta()
+    after = {"first": timedelta(), "now": timedelta(), "head": head, "late": delay}
+    rows = [Delivery(lead_id=lead.id, user_id=u.tg_id, deliver_after=now() + after[when])
+            for u, when in await recipients(s, lead)]
     s.add_all(rows)
     await s.commit()
     return rows

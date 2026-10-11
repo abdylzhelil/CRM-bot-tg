@@ -8,7 +8,7 @@ from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import Category, Group, User, UserCategory
-from app.services import catalog, geo, settings
+from app.services import catalog, geo, levels, settings
 
 router = Router()
 
@@ -24,16 +24,22 @@ STATUS = {
 async def catalog_menu(target: Message | CallbackQuery, user: User) -> None:
     async with Session() as s:
         per = await settings.get_int(s, "bonus_leads")
+        first = await settings.get_int(s, "first_min")
+        groups_n, leads_n = await levels.stats(s, user.tg_id)
+    level = levels.level_of(groups_n, leads_n)
     await reply(target, (
         "🌐 <b>Каталог групп</b>\n\n"
         "Здесь собраны открытые группы и каналы по нишам и городам. Добавьте свою группу или канал — "
         "мы подключим его к поиску заявок.\n\n"
         f"🎁 <b>Бонус:</b> за каждые {per} заявок, найденных в добавленной вами группе, — "
-        "+1 день 💎 Полного тарифа."
+        "+1 день 💎 Полного тарифа.\n"
+        f"⚡ <b>Право первооткрывателя:</b> заявки из вашей группы приходят вам первыми — на {first}–"
+        f"{first + 1} мин раньше остальных.\n\n"
+        f"Ваш уровень: <b>{levels.name(level)}</b> (заявок из ваших групп: {leads_n})\n{levels.next_step(level, leads_n)}"
     ), kb([
         [("📚 Каталог по моим нишам", "cg:browse:mine"), ("🌍 Весь каталог", "cg:browse:all")],
         [("➕ Добавить группу или канал", "cg:add")],
-        [("📂 Мои группы и бонусы", "cg:my")],
+        [("📂 Мои группы и бонусы", "cg:my"), ("🏆 Рейтинг", "cg:top:mine")],
     ]))
 
 
@@ -157,5 +163,24 @@ async def my_groups(cb: CallbackQuery, user: User) -> None:
     lines = [f"{KIND[g.kind]} <b>{esc(g.title[:40])}</b> — {STATUS.get(g.status, g.status)}"
              + (f", заявок: {g.leads_count}" if g.catalog else "") for g in groups]
     days = sum(catalog.bonus_days(g, per) for g in groups)
-    await reply(cb, "📂 <b>Мои группы</b>\n\n" + "\n".join(lines) + f"\n\n🎁 Получено бонусных дней: {days}",
+    await reply(cb, "📂 <b>Мои группы</b>\n\n" + "\n".join(lines) + f"\n\n🎁 Получено бонусных дней: {days}\n🏆 Уровень: {levels.name(user.level)}",
                 kb([[("◀️ Назад", "cg:menu")]]))
+
+
+@router.callback_query(F.data.regexp(r"^cg:top:(mine|all)$"))
+async def top(cb: CallbackQuery, user: User) -> None:
+    everything = cb.data.endswith("all") or not user.city
+    async with Session() as s:
+        board = await levels.rating(s, "" if everything else user.city, limit=0)
+    place = next((i for i, (u, _) in enumerate(board, 1) if u.tg_id == user.tg_id), None)
+    medals = ["🥇", "🥈", "🥉"]
+    lines = [f"{medals[i - 1] if i <= 3 else str(i) + '.'} {esc((u.name or 'Аноним').split()[0][:20])} "
+             f"{levels.name(levels.level_of(1, pts))} — {pts} заяв."
+             f"{' ← вы' if u.tg_id == user.tg_id else ''}" for i, (u, pts) in enumerate(board[:10], 1)]
+    scope = "по всей России" if everything else f"· {esc(user.city)}"
+    text = f"🏆 <b>Рейтинг авторов групп</b> {scope}\n\n" + ("\n".join(lines) or "Пока никого — станьте первым!")
+    if place and place > 10:
+        text += f"\n…\nВаше место: {place}"
+    toggle = ("🌍 Вся Россия", "cg:top:all") if not everything else (
+        ("📍 Мой город", "cg:top:mine") if user.city else ("◀️ Назад", "cg:menu"))
+    await reply(cb, text, kb([[toggle, ("◀️ Каталог", "cg:menu")]]))

@@ -158,3 +158,14 @@ async def bonus(user_id: int, delta, kind: str = "bonus") -> None:
         await _bot.send_message(user_id, text)
     except Exception:
         log.info("не удалось сообщить о бонусе %s", user_id)
+
+
+async def level_up(user_id: int, level: int) -> None:
+    from app.services import levels
+
+    assert _bot, "notify.init(bot) не вызван"
+    extra = "\n⚡ Теперь ваши заявки приходят раньше остальных ещё на минуту дольше." if level == levels.TOP_LEVEL else ""
+    try:
+        await _bot.send_message(user_id, f"🏆 Новый уровень: {levels.name(level)}! Группы, которые вы добавили, работают на вас.{extra}")
+    except Exception:
+        log.info("не удалось сообщить об уровне %s", user_id)
