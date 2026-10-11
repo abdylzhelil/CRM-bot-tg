@@ -3,12 +3,13 @@ import html
 import logging
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app import config
 from app.db import Session
-from app.models import Group, Lead
-from app.services import quiet, settings
+from app.models import Delivery, Group, Lead, User
+from app.services import quiet
 
 log = logging.getLogger(__name__)
 _bot: Bot | None = None
@@ -20,6 +21,7 @@ def init(bot: Bot) -> None:
 
 
 async def _send(text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    """Служебное сообщение администраторам (владельцам из OWNER_IDS)."""
     assert _bot, "notify.init(bot) не вызван"
     for uid in config.OWNER_IDS:
         try:
@@ -32,22 +34,23 @@ async def alert(text: str) -> None:
     await _send(f"🚨 {html.escape(text)}")
 
 
-def lead_keyboard(lead: Lead) -> InlineKeyboardMarkup:
+def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKeyboardMarkup:
     if lead.username:
         reply = InlineKeyboardButton(text="✍️ Ответить", url=f"https://t.me/{lead.username}")
     else:
         reply = InlineKeyboardButton(text="✍️ Ответить", url=f"tg://user?id={lead.author_id}")
+    d = delivery_id
     rows = [
-        [reply, InlineKeyboardButton(text="📋 Шаблон", callback_data=f"lead:tpl:{lead.id}")],
-        [InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{lead.id}")],
+        [reply, InlineKeyboardButton(text="📋 Шаблон", callback_data=f"lead:tpl:{d}")],
+        [InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{d}")],
         [
-            InlineKeyboardButton(text="⏰ Отложить", callback_data=f"lead:later:{lead.id}"),
-            InlineKeyboardButton(text="❌ Отказ", callback_data=f"lead:reject:{lead.id}"),
-            InlineKeyboardButton(text="🚫 Спам", callback_data=f"lead:spam:{lead.id}"),
+            InlineKeyboardButton(text="⏰ Отложить", callback_data=f"lead:later:{d}"),
+            InlineKeyboardButton(text="❌ Отказ", callback_data=f"lead:reject:{d}"),
+            InlineKeyboardButton(text="🚫 Спам", callback_data=f"lead:spam:{d}"),
         ],
     ]
-    if lead.suspicious:
-        rows.append([InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{lead.id}")])
+    if lead.suspicious and admin:
+        rows.append([InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -63,29 +66,45 @@ def lead_text(lead: Lead, category: str) -> str:
     if len(text) > 400:
         text = text[:400] + "…"
     link = f'\n<a href="{lead.link}">Ссылка на сообщение</a>' if lead.link else ""
+    place = f"\nГде: {html.escape(lead.city or lead.region)}" if (lead.city or lead.region) else ""
     spam = f"\nСпам-скор: {lead.spam_score}" if lead.suspicious else ""
     return (
         f"{head} | {html.escape(category)}\nКто: {who}\nГруппа: {html.escape(lead.group_title)}\n"
-        f"Суть: {text}{link}{spam}"
+        f"Суть: {text}{place}{link}{spam}"
     )
 
 
-async def send_lead(lead: Lead, category: str) -> None:
-    await _send(lead_text(lead, category), lead_keyboard(lead))
-    async with Session() as s:
-        row = await s.get(Lead, lead.id)
-        if row:
-            row.notified = True
-            await s.commit()
+async def send_delivery(d: Delivery, lead: Lead, user: User, category: str) -> bool:
+    """Карточка заявки пользователю. False — пользователь недоступен (заблокировал бота)."""
+    assert _bot, "notify.init(bot) не вызван"
+    try:
+        await _bot.send_message(
+            user.tg_id, lead_text(lead, category), reply_markup=lead_keyboard(lead, d.id, user.is_admin),
+            disable_web_page_preview=True,
+        )
+        return True
+    except TelegramForbiddenError:
+        return False
+    except Exception:
+        log.exception("не удалось отправить заявку %s пользователю %s", lead.id, user.tg_id)
+        return True  # не повторяем бесконечно
 
 
-async def deliver_lead(lead: Lead, category: str) -> None:
-    """В режим тишины обычные заявки копятся (их пришлёт quiet_digest), 🔥 горячие идут сразу."""
+async def flush_due() -> int:
+    """Отправить все заявки, время которых пришло. Возвращает, сколько отправлено."""
+    from app.bot.handlers.leads import category_name
+    from app.services.distribute import due
+
+    sent = 0
     async with Session() as s:
-        hours = quiet.parse_hours(await settings.get(s, "quiet_hours"))
-    if quiet.in_quiet(quiet.local_now().hour, hours) and not quiet.is_hot(lead.text):
-        return
-    await send_lead(lead, category)
+        for d, lead, user in await due(s):
+            ok = await send_delivery(d, lead, user, await category_name(s, lead.category_id))
+            d.sent = True
+            if not ok:
+                user.blocked = True
+            sent += ok
+        await s.commit()
+    return sent
 
 
 def group_text(g: Group) -> str:

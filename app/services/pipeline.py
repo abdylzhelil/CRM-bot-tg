@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BlacklistEntry, Group, Lead, SeenMessage, now
-from app.services import settings
+from app.services import geo, settings
 from app.services.antispam import AuthorInfo, Behavior, score_message, text_hash
 from app.services.rules import load_rules
 from app.services.text import match
@@ -98,6 +98,7 @@ async def process(session: AsyncSession, msg: Incoming) -> Lead | None:
         spam_score=value,
         suspicious=value >= await settings.get_int(session, "spam_suspicious"),
     )
+    lead.city, lead.region = geo.detect(msg.text, msg.group_title, group.city if group else "")
     session.add(lead)
     await session.commit()
     return lead

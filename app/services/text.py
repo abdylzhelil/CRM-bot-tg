@@ -14,9 +14,38 @@ def _lemma(token: str) -> str:
     return _morph.parse(token)[0].normal_form
 
 
+def tokens(text: str) -> list[str]:
+    return _TOKEN.findall(text.lower().replace("ё", "е"))
+
+
 def lemmas(text: str) -> list[str]:
-    tokens = _TOKEN.findall(text.lower().replace("ё", "е"))
-    return [_lemma(t) for t in tokens]
+    return [_lemma(t) for t in tokens(text)]
+
+
+@lru_cache(maxsize=10_000)
+def _first_person_verb(token: str) -> bool:
+    tag = _morph.parse(token)[0].tag
+    return "VERB" in tag and "1per" in tag
+
+
+# Минус-фраза: (точная форма?, токены). Глагол от 1-го лица («делаю», «предлагаю») сравнивается
+# точно, иначе «делаю» отсекало бы клиентские «кто делает сайты?». Остальное — по леммам.
+Negative = tuple[bool, list[str]]
+
+
+def compile_negatives(words: list[str]) -> list[Negative]:
+    out: list[Negative] = []
+    for w in words:
+        raw = tokens(w)
+        if len(raw) == 1 and _first_person_verb(raw[0]):
+            out.append((True, raw))
+        elif raw:
+            out.append((False, [_lemma(t) for t in raw]))
+    return out
+
+
+def negative_hit(lem: list[str], raw: list[str], negatives: list[Negative]) -> bool:
+    return any(has_phrase(raw if exact else lem, phrase) for exact, phrase in negatives)
 
 
 def has_phrase(haystack: list[str], phrase: list[str]) -> bool:
@@ -35,13 +64,13 @@ class NodeRules:
     city: list[str] = field(default_factory=list)  # леммы города
     words: list[list[str]] = field(default_factory=list)
     strong: list[list[str]] = field(default_factory=list)
-    negatives: list[list[str]] = field(default_factory=list)
+    negatives: list[Negative] = field(default_factory=list)
 
 
 @dataclass
 class Rules:
     intents: list[list[str]] = field(default_factory=list)
-    negatives: list[list[str]] = field(default_factory=list)
+    negatives: list[Negative] = field(default_factory=list)
     nodes: list[NodeRules] = field(default_factory=list)
 
 
@@ -61,17 +90,18 @@ def match(text: str, rules: Rules, context: str = "") -> Match | None:
 
     context — название группы: нужен для категорий с городом (Недвижимость → Махачкала).
     """
-    lem = lemmas(text)
+    raw = tokens(text)
+    lem = [_lemma(t) for t in raw]
     if not lem:
         return None
-    if any(has_phrase(lem, p) for p in rules.negatives):
+    if negative_hit(lem, raw, rules.negatives):
         return None
     has_intent = any(has_phrase(lem, p) for p in rules.intents)
     ctx = lemmas(context) if context else []
 
     best: tuple[int, int, Match] | None = None
     for node in rules.nodes:
-        if any(has_phrase(lem, p) for p in node.negatives):
+        if negative_hit(lem, raw, node.negatives):
             continue
         if node.city and not (has_phrase(lem, node.city) or has_phrase(ctx, node.city)):
             continue

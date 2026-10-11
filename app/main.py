@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from datetime import timedelta
 
 from sqlalchemy import select
 
@@ -8,10 +7,10 @@ from app import config
 from app.bot import notify
 from app.bot.handlers.stats import build_report
 from app.bot.setup import build
-from app.db import Session, init_db
+from app.db import Session, engine, init_db
+from app.migrate import migrate_data, upgrade_schema
 from app.feed import server as feed_server
-from app.bot.handlers.leads import category_name
-from app.models import Client, Lead, Reminder, now
+from app.models import Client, Reminder, now
 from app.services import quiet, settings
 from app.scout.joiner import join_loop, rotation_loop, search_loop
 from app.scout.manager import ScoutManager
@@ -21,8 +20,15 @@ log = logging.getLogger("crm")
 REPEAT_TOUCH = "Вы ещё рассматриваете наше предложение? Могу ответить на вопросы."
 
 
+async def send_to(user_id: int, text: str, markup=None) -> None:
+    try:
+        await notify._bot.send_message(user_id, text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        log.info("не удалось написать %s", user_id)
+
+
 async def reminder_loop() -> None:
-    """Напоминания «дожать», утренняя пачка после режима тишины, вечерний отчёт."""
+    """Напоминания «дожать» (владельцу клиента) и вечерний отчёт администраторам."""
     last_report = None
     while True:
         try:
@@ -31,14 +37,16 @@ async def reminder_loop() -> None:
                 for r in due:
                     c = await s.get(Client, r.client_id)
                     r.sent = True
+                    if c is None:
+                        continue
                     who = c.name or c.username or c.tg_id
-                    await notify._send(
+                    await send_to(
+                        c.user_id or min(config.OWNER_IDS),
                         f"⏰ {r.text}: {who}\nМожно отправить: «{REPEAT_TOUCH}»",
                         notify.InlineKeyboardMarkup(inline_keyboard=[[
                             notify.InlineKeyboardButton(text="👤 Открыть", callback_data=f"cl:open:{c.id}")]]),
                     )
                 await s.commit()
-            await quiet_digest()
             t = quiet.local_now()
             async with Session() as s:
                 report_hour = await settings.get_int(s, "report_hour")
@@ -50,29 +58,14 @@ async def reminder_loop() -> None:
         await asyncio.sleep(60)
 
 
-async def quiet_digest() -> None:
-    """Когда режим тишины закончился — прислать накопленные заявки одной пачкой."""
-    async with Session() as s:
-        hours = quiet.parse_hours(await settings.get(s, "quiet_hours"))
-        if quiet.in_quiet(quiet.local_now().hour, hours):
-            return
-        pending = (await s.scalars(
-            select(Lead).where(
-                ~Lead.notified, Lead.status == "new",
-                Lead.created_at > now() - timedelta(days=1), Lead.created_at < now() - timedelta(minutes=1),
-            )
-            .order_by(Lead.id)
-        )).all()
-        if not pending:
-            return
-        await notify._send(f"🌅 Пока был режим тишины, пришло заявок: {len(pending)}")
-        for lead in pending[:20]:
-            await notify.send_lead(lead, await category_name(s, lead.category_id))
-        for lead in pending[20:]:
-            lead.notified = True
-        if len(pending) > 20:
-            await notify._send(f"…и ещё {len(pending) - 20} — смотрите в «📥 Заявки».")
-        await s.commit()
+async def delivery_loop() -> None:
+    """Заявки с задержкой (бесплатный тариф) и накопленные за режим тишины."""
+    while True:
+        try:
+            await notify.flush_due()
+        except Exception:
+            log.exception("delivery_loop")
+        await asyncio.sleep(20)
 
 
 async def main() -> None:
@@ -80,14 +73,16 @@ async def main() -> None:
     if not config.BOT_TOKEN or not config.OWNER_IDS:
         raise SystemExit("Задайте BOT_TOKEN и OWNER_IDS в .env")
     await init_db()
+    await upgrade_schema(engine)
     async with Session() as s:
         await seed(s)
+        await migrate_data(s)
     manager = ScoutManager()
     bot, dp = build(manager)
     await manager.start()
     tasks = [
         asyncio.create_task(c)
-        for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop())
+        for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop())
     ]
     feed = await feed_server.start()
     try:

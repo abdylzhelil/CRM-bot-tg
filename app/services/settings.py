@@ -15,6 +15,10 @@ DEFAULTS: dict[str, str] = {
     "rotation_days": "30",
     "quiet_hours": "",
     "report_hour": "21",
+    "max_recipients": "5",
+    "free_daily_limit": "5",
+    "free_delay_min": "30",
+    "spam_votes_to_ban": "3",
 }
 
 LABELS: dict[str, str] = {
@@ -27,8 +31,11 @@ LABELS: dict[str, str] = {
     "spam_block": "Порог «спам» (0–100)",
     "dedupe_days": "Окно антидублей, дней",
     "rotation_days": "Выходить из групп без заявок за N дней",
-    "quiet_hours": "Режим тишины (часы, напр. 23-8)",
     "report_hour": "Час вечернего отчёта",
+    "max_recipients": "Сколько пользователей получают одну заявку",
+    "free_daily_limit": "Бесплатный тариф: заявок в день",
+    "free_delay_min": "Бесплатный тариф: задержка, мин",
+    "spam_votes_to_ban": "Голосов «спам» для общего чёрного списка",
 }
 
 

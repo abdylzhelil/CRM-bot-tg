@@ -14,6 +14,12 @@ router = Router()
 PAGE = 20
 
 
+async def owned(s, client_id: int, user_id: int) -> Client | None:
+    """У каждого пользователя своя CRM: чужих клиентов не видно."""
+    c = await s.get(Client, client_id)
+    return c if c is not None and c.user_id == user_id else None
+
+
 @router.message(F.text == "👥 Клиенты")
 async def clients_menu(m: Message) -> None:
     await show_list(m, "all")
@@ -21,8 +27,9 @@ async def clients_menu(m: Message) -> None:
 
 async def show_list(target, stage: str, query: str = "") -> None:
     async with Session() as s:
-        counts = dict((await s.execute(select(Client.stage, func.count()).group_by(Client.stage))).all())
-        q = select(Client).order_by(Client.updated_at.desc()).limit(PAGE)
+        mine = Client.user_id == target.from_user.id
+        counts = dict((await s.execute(select(Client.stage, func.count()).where(mine).group_by(Client.stage))).all())
+        q = select(Client).where(mine).order_by(Client.updated_at.desc()).limit(PAGE)
         if stage != "all":
             q = q.where(Client.stage == stage)
         if query:
@@ -57,7 +64,7 @@ async def cb_add(cb: CallbackQuery, state: FSMContext) -> None:
 
 async def card(target, client_id: int) -> None:
     async with Session() as s:
-        c = await s.get(Client, client_id)
+        c = await owned(s, client_id, target.from_user.id)
         if not c:
             return await reply(target, "Клиент не найден")
         events = (await s.scalars(
@@ -106,7 +113,9 @@ async def cb_open(cb: CallbackQuery) -> None:
 async def cb_stage(cb: CallbackQuery) -> None:
     _, _, cid, stage = cb.data.split(":")
     async with Session() as s:
-        c = await s.get(Client, int(cid))
+        c = await owned(s, int(cid), cb.from_user.id)
+        if not c or stage not in STAGE_NAMES:
+            return await cb.answer("Клиент не найден")
         c.stage = stage
         s.add(ClientEvent(client_id=c.id, text=f"Этап → {STAGE_NAMES[stage]}"))
         if stage == "thinking":  # «дожать» через 2 дня, если клиент думает
@@ -119,6 +128,8 @@ async def cb_stage(cb: CallbackQuery) -> None:
 async def cb_rem(cb: CallbackQuery) -> None:
     _, _, cid, days = cb.data.split(":")
     async with Session() as s:
+        if not await owned(s, int(cid), cb.from_user.id):
+            return await cb.answer("Клиент не найден")
         s.add(Reminder(client_id=int(cid), due_at=now() + timedelta(days=int(days))))
         s.add(ClientEvent(client_id=int(cid), text=f"Напоминание через {days} дн."))
         await s.commit()

@@ -5,16 +5,13 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 esc = html.escape
 
-MENU = {
-    "📥 Заявки": "leads",
-    "👥 Клиенты": "clients",
-    "🔍 Группы": "groups",
-    "🗂 Категории": "categories",
-    "🔑 Ключевые слова": "keywords",
-    "🛡 Чёрный список": "blacklist",
-    "📊 Статистика": "stats",
-    "⚙️ Настройки": "settings",
-}
+# Кнопки меню: у пользователя — свои разделы, у администратора — ещё и управление ботом
+USER_MENU = ["📥 Заявки", "👥 Клиенты", "🎯 Мои ниши", "📍 Мой город", "👤 Профиль", "📊 Статистика"]
+ADMIN_MENU = USER_MENU + [
+    "🔍 Группы", "🗂 Категории", "🔑 Ключевые слова", "🛡 Чёрный список", "👥 Пользователи", "⚙️ Настройки",
+]
+ADMIN_ONLY = set(ADMIN_MENU) - set(USER_MENU)
+MENU = set(ADMIN_MENU)
 
 
 class Ask(StatesGroup):

@@ -1,17 +1,12 @@
 """Приём от бота модерации: авторизация, список групп, сообщения только из включённых групп."""
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from sqlalchemy import pool, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from unittest.mock import AsyncMock
+from sqlalchemy import select
 
 from app import config
-from app.bot import notify
-from app.bot.handlers import leads
 from app.feed import server
-from app.models import Base, FeedChat, Lead
-from app.seed import seed
-from app.services import intake, rules
+from app.models import FeedChat, Lead
+from tests.conftest import ADMIN_ID
 
 TOKEN = "secret-token"
 H = {"Authorization": f"Bearer {TOKEN}"}
@@ -19,22 +14,11 @@ CHAT = {"id": -1005550001, "title": "Бизнес Дагестан", "username":
 
 
 @pytest.fixture
-async def env(monkeypatch):
-    engine = create_async_engine("sqlite+aiosqlite://", poolclass=pool.StaticPool)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    for mod in (server, intake, notify, leads):
-        monkeypatch.setattr(mod, "Session", maker)
+async def env(maker, tgbot, monkeypatch):
     monkeypatch.setattr(config, "FEED_TOKEN", TOKEN)
-    sent = AsyncMock()
-    monkeypatch.setattr(notify, "_send", sent)
-    rules.invalidate()
-    async with maker() as s:
-        await seed(s)
     client = TestClient(TestServer(server.make_app()))
     await client.start_server()
-    yield client, maker, sent
+    yield client, maker, tgbot
     await client.close()
 
 
@@ -53,7 +37,7 @@ async def test_sync_then_message_only_when_enabled(env):
     client, maker, sent = env
     r = await client.post("/feed/chats", json={"chats": [dict(CHAT, own=True)]}, headers=H)
     assert (await r.json())["enabled"] == []
-    assert "подключён к CRM" in sent.call_args.args[0]
+    assert "подключён к CRM" in sent.texts(ADMIN_ID)[-1]
 
     r = await client.post("/feed/message", json=msg(), headers=H)
     assert (await r.json())["skipped"] == "disabled"
@@ -69,7 +53,7 @@ async def test_sync_then_message_only_when_enabled(env):
     async with maker() as s:
         lead = await s.scalar(select(Lead))
     assert lead.link == "https://t.me/biz_dag/77" and lead.group_title == "Бизнес Дагестан"
-    assert any("Суть" in c.args[0] for c in sent.call_args_list)
+    assert any("Суть" in t for t in sent.texts(ADMIN_ID))
 
 
 async def test_new_group_after_first_sync_notifies(env):
@@ -77,4 +61,4 @@ async def test_new_group_after_first_sync_notifies(env):
     await client.post("/feed/chats", json={"chats": [dict(CHAT, own=True)]}, headers=H)
     other = {"id": -1005550002, "title": "Аренда МХК", "own": False}
     await client.post("/feed/chats", json={"chats": [dict(CHAT, own=True), other]}, headers=H)
-    assert "Аренда МХК" in sent.call_args.args[0]
+    assert "Аренда МХК" in sent.texts(ADMIN_ID)[-1]

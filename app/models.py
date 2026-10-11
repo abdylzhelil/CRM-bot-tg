@@ -54,6 +54,7 @@ class Group(Base):
     joined_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     leads_count: Mapped[int] = mapped_column(Integer, default=0)
     last_lead_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    city: Mapped[str] = mapped_column(String(64), default="")  # город группы, если известен
 
 
 class FeedChat(Base):
@@ -137,6 +138,8 @@ class Lead(Base):
     text_hash: Mapped[str] = mapped_column(String(40), index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
     spam_score: Mapped[int] = mapped_column(Integer, default=0)
+    city: Mapped[str] = mapped_column(String(64), default="")  # город из текста или группы
+    region: Mapped[str] = mapped_column(String(64), default="")
     suspicious: Mapped[bool] = mapped_column(Boolean, default=False)
     # new / postponed / taken / rejected / spam
     status: Mapped[str] = mapped_column(String(12), default="new", index=True)
@@ -158,6 +161,8 @@ STAGE_NAMES = dict(STAGES)
 class Client(Base):
     __tablename__ = "clients"
     id: Mapped[int] = mapped_column(primary_key=True)
+    # чей это клиент: у каждого пользователя своя CRM
+    user_id: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
     name: Mapped[str] = mapped_column(String(255), default="")
     username: Mapped[str] = mapped_column(String(64), default="")
@@ -186,3 +191,67 @@ class Reminder(Base):
     due_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     text: Mapped[str] = mapped_column(String(255), default="Дожать клиента")
     sent: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# ---------- пользователи (многопользовательский режим) ----------
+PLANS = {"free": "🆓 Бесплатный", "full": "💎 Полный"}
+
+
+class User(Base):
+    __tablename__ = "users"
+    tg_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    username: Mapped[str] = mapped_column(String(64), default="")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    plan: Mapped[str] = mapped_column(String(16), default="free")
+    plan_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # None — бессрочно
+    city: Mapped[str] = mapped_column(String(64), default="")  # пусто — вся Россия
+    only_city: Mapped[bool] = mapped_column(Boolean, default=False)  # без заявок «без города»
+    quiet_hours: Mapped[str] = mapped_column(String(8), default="")
+    onboarded: Mapped[bool] = mapped_column(Boolean, default=False)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    reply_template: Mapped[str] = mapped_column(Text, default="")  # свой шаблон ответа клиенту
+    prices: Mapped[str] = mapped_column(Text, default="")
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False)  # заблокировал бота или забанен
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class UserCategory(Base):
+    """Ниши пользователя (корневые категории)."""
+
+    __tablename__ = "user_categories"
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), primary_key=True)
+
+
+class UserNegative(Base):
+    """Личные минус-слова: такие заявки пользователю не приходят."""
+
+    __tablename__ = "user_negatives"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    word: Mapped[str] = mapped_column(String(128))
+
+
+class Delivery(Base):
+    """Заявка, отданная конкретному пользователю. Статус обработки — у каждого свой."""
+
+    __tablename__ = "deliveries"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # new / postponed / taken / rejected / spam
+    status: Mapped[str] = mapped_column(String(12), default="new", index=True)
+    deliver_after: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class SpamVote(Base):
+    """Голоса «это спам» от пользователей; несколько голосов — автор в общий чёрный список."""
+
+    __tablename__ = "spam_votes"
+    author_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

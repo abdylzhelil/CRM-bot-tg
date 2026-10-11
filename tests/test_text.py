@@ -1,10 +1,10 @@
-from app.services.text import NodeRules, Rules, compile_phrases, match
+from app.services.text import NodeRules, Rules, compile_negatives, compile_phrases, match
 
 
 def rules() -> Rules:
     return Rules(
         intents=compile_phrases(["ищу", "нужен", "кто сделает", "сколько стоит"]),
-        negatives=compile_phrases(["делаю", "предлагаю", "вакансия"]),
+        negatives=compile_negatives(["делаю", "предлагаю", "вакансия"]),
         nodes=[
             NodeRules(1, None, 0, "Сайты", words=compile_phrases(["сайт", "лендинг"]),
                       strong=compile_phrases(["сделать сайт"])),
@@ -36,3 +36,8 @@ def test_city_filter():
     assert match("сниму помещение под магазин", rules()) is None
     assert match("ищу помещение в Махачкале", rules()).category_id == 3
     assert match("ищу помещение", rules(), context="Бизнес Махачкала").category_id == 3
+
+
+def test_client_asking_who_does_is_not_negative():
+    assert match("Подскажите, кто делает сайты? Нужен лендинг", rules()).category_id == 1
+    assert match("Делаю сайты недорого, ищу клиентов", rules()) is None

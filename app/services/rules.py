@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Category, Keyword
-from app.services.text import NodeRules, Rules, compile_phrases
+from app.services.text import NodeRules, Rules, compile_negatives, compile_phrases
 
 _TTL = 60.0
 _cache: tuple[float, Rules] | None = None
@@ -33,7 +33,7 @@ async def load_rules(session: AsyncSession) -> Rules:
 
     rules = Rules(
         intents=compile_phrases([k.word for k in kws if k.kind == "intent"]),
-        negatives=compile_phrases([k.word for k in kws if k.kind == "negative" and k.category_id is None]),
+        negatives=compile_negatives([k.word for k in kws if k.kind == "negative" and k.category_id is None]),
     )
     for c in cats.values():
         if not active(c):
@@ -50,7 +50,7 @@ async def load_rules(session: AsyncSession) -> Rules:
                 city=compile_phrases([city])[0] if city else [],
                 words=compile_phrases([k.word for k in own if k.kind == "category"]),
                 strong=compile_phrases([k.word for k in own if k.kind == "strong"]),
-                negatives=compile_phrases([k.word for k in own if k.kind == "negative"]),
+                negatives=compile_negatives([k.word for k in own if k.kind == "negative"]),
             )
         )
     _cache = (time.monotonic(), rules)

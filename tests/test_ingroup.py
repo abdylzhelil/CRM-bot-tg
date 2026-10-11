@@ -1,36 +1,17 @@
-"""Бот в группе: сообщение с заявкой -> лид + уведомление владельцу; меню в группах не работает."""
+"""Бот в группе: сообщение с заявкой -> лид + карточка; посторонние в личке регистрируются как пользователи."""
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiogram.types import Chat, Message, User
-from sqlalchemy import pool, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import select
 
-from app.bot import notify
-from app.bot.handlers import ingroup, leads
-from app.bot.setup import OwnerOnly
-from app.models import Base, Group, Lead
-from app.seed import seed
-from app.services import intake, rules
+from app.bot.access import IsAdmin, UserMiddleware
+from app.bot.handlers import ingroup
+from app.models import Group, Lead
+from app.models import User as DbUser
+from tests.conftest import ADMIN_ID
 
 CHAT = Chat(id=-1001234567890, type="supergroup", title="Бизнес Махачкала")
-
-
-@pytest.fixture
-async def db(monkeypatch):
-    engine = create_async_engine("sqlite+aiosqlite://", poolclass=pool.StaticPool)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    for mod in (ingroup, intake, notify, leads):
-        monkeypatch.setattr(mod, "Session", maker)
-    rules.invalidate()
-    sent = AsyncMock()
-    monkeypatch.setattr(notify, "_send", sent)
-    async with maker() as s:
-        await seed(s)
-        yield s, sent
 
 
 def group_msg(text: str, user_id: int = 42) -> Message:
@@ -46,27 +27,38 @@ def fake_bot() -> MagicMock:
     return bot
 
 
-async def test_group_message_becomes_lead(db):
-    s, sent = db
+async def test_group_message_becomes_lead(maker, tgbot):
     await ingroup.group_message(group_msg("Ищу кто сделает лендинг для салона, бюджет 10к"), fake_bot())
-    lead = await s.scalar(select(Lead))
-    assert lead and lead.link == "https://t.me/c/1234567890/7" and lead.group_title == "Бизнес Махачкала"
-    g = await s.scalar(select(Group).where(Group.tg_id == CHAT.id))
+    async with maker() as s:
+        lead = await s.scalar(select(Lead))
+        g = await s.scalar(select(Group).where(Group.tg_id == CHAT.id))
+    assert lead and lead.link == "https://t.me/c/1234567890/7" and lead.city == "Махачкала"
     assert g.status == "joined" and g.account_id is None and g.leads_count == 1
-    card = [c.args[0] for c in sent.call_args_list if "Суть" in c.args[0]]
-    assert card and "🔥" in card[0]
+    cards = [t for t in tgbot.texts(ADMIN_ID) if "Суть" in t]
+    assert cards and "🔥" in cards[0]
 
 
-async def test_group_noise_ignored(db):
-    s, _ = db
+async def test_group_noise_ignored(maker, tgbot):
     await ingroup.group_message(group_msg("Всем привет, как дела?"), fake_bot())
-    assert await s.scalar(select(Lead)) is None
+    async with maker() as s:
+        assert await s.scalar(select(Lead)) is None
 
 
-async def test_owner_middleware_lets_groups_through_blocks_strangers():
+async def test_middleware_registers_users_and_admin_flag(maker):
     handler = AsyncMock(return_value="ok")
-    mw = OwnerOnly()
-    stranger = User(id=999, is_bot=False, first_name="x")
+    mw = UserMiddleware()
+    stranger = User(id=999, is_bot=False, first_name="Гость")
+    # сообщения групп проходят без регистрации
     assert await mw(handler, None, {"event_chat": CHAT, "event_from_user": stranger}) == "ok"
-    private = Chat(id=999, type="private")
-    assert await mw(handler, None, {"event_chat": private, "event_from_user": stranger}) is None
+    data = {"event_chat": Chat(id=999, type="private"), "event_from_user": stranger}
+    assert await mw(handler, None, data) == "ok"
+    assert data["user"].tg_id == 999 and not data["user"].is_admin and not data["user"].onboarded
+    assert not await IsAdmin()(None, user=data["user"])
+    async with maker() as s:
+        assert (await s.get(DbUser, 999)).name == "Гость"
+    owner = {
+        "event_chat": Chat(id=ADMIN_ID, type="private"),
+        "event_from_user": User(id=ADMIN_ID, is_bot=False, first_name="A"),
+    }
+    await mw(handler, None, owner)
+    assert await IsAdmin()(None, user=owner["user"])

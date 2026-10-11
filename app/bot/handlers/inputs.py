@@ -1,9 +1,8 @@
 """Обработка текстового ввода после ask(): action из FSM-data определяет, что делать."""
 from aiogram import F, Router
-from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.bot.common import Ask, esc, split_words
 from app.bot.handlers import clients as clients_h
@@ -15,10 +14,17 @@ from app.services import quiet, rules, settings
 router = Router()
 
 
+# действия, которые доступны только администратору
+ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_")
+
+
 @router.message(Ask.value, F.text)
-async def on_input(m: Message, state: FSMContext) -> None:
+async def on_input(m: Message, state: FSMContext, user=None) -> None:
     data = await state.get_data()
     action, text = data["action"], m.text.strip()
+    if action.startswith(ADMIN_ACTIONS) and not (user and user.is_admin):
+        await state.clear()
+        return
     async with Session() as s:
         ok = await HANDLERS[action](s, m, data, text)
     if ok is not False:
@@ -44,7 +50,11 @@ async def setting(s, m, d, text):
 
 
 async def client_field(s, m, d, text, field):
-    c = await s.get(Client, d["id"])
+    from app.bot.handlers.clients import owned
+
+    c = await owned(s, d["id"], m.from_user.id)
+    if c is None:
+        return await m.answer("Клиент не найден")
     if field == "note":
         c.notes = (c.notes + "\n" if c.notes else "") + text
         s.add(ClientEvent(client_id=c.id, text=f"Заметка: {text[:200]}"))
@@ -69,7 +79,7 @@ async def client_add(s, m, d, text):
             phone = part
         else:
             name.append(part)
-    c = Client(name=" ".join(name), username=username, phone=phone, source="добавлен вручную")
+    c = Client(user_id=m.from_user.id, name=" ".join(name), username=username, phone=phone, source="добавлен вручную")
     s.add(c)
     await s.flush()
     s.add(ClientEvent(client_id=c.id, text="Добавлен вручную"))
@@ -158,7 +168,64 @@ async def acc_field(s, m, d, text, field):
     await m.answer("✔ Сохранено. Нажмите «🔁 Перезапустить» у аккаунта, чтобы применить прокси.")
 
 
+async def neg_add(s, m, d, text):
+    from app.bot.handlers.profile import save_negatives
+
+    n = await save_negatives(s, m.from_user.id, split_words(text), remove=False)
+    await m.answer(f"✔ Добавлено минус-слов: {n}")
+
+
+async def neg_del(s, m, d, text):
+    from app.bot.handlers.profile import save_negatives
+
+    n = await save_negatives(s, m.from_user.id, split_words(text), remove=True)
+    await m.answer(f"✔ Удалено: {n}")
+
+
+async def my_field(s, m, d, text, field):
+    from app.models import User
+
+    u = await s.get(User, m.from_user.id)
+    if field == "quiet_hours":
+        if text in ("-", "0", "выкл"):
+            text = ""
+        elif not quiet.parse_hours(text):
+            return await m.answer("Формат: 23-8 (с 23:00 до 08:00) или «-», чтобы выключить") and False
+    setattr(u, field, text)
+    await s.commit()
+    await m.answer("✔ Сохранено. Посмотреть: 👤 Профиль")
+
+
+async def city_other(s, m, d, text):
+    from app.bot.handlers.profile import set_city
+    from app.models import User
+
+    u = await s.get(User, m.from_user.id)
+    await set_city(m, u, text.strip()[:64])
+
+
+async def us_find(s, m, d, text):
+    from sqlalchemy import select as _select
+
+    from app.bot.handlers.users_admin import user_card
+    from app.models import User
+
+    raw = text.strip().lstrip("@")
+    u = await s.get(User, int(raw)) if raw.lstrip("-").isdigit() else await s.scalar(
+        _select(User).where(User.username.ilike(raw)))
+    if u is None:
+        return await m.answer("Не найден. Пользователь должен хотя бы раз написать боту.")
+    await user_card(m, u.tg_id)
+
+
 HANDLERS = {
+    "us_find": us_find,
+    "neg_add": neg_add,
+    "neg_del": neg_del,
+    "city_other": city_other,
+    "my_quiet": lambda s, m, d, t: my_field(s, m, d, t, "quiet_hours"),
+    "my_tpl": lambda s, m, d, t: my_field(s, m, d, t, "reply_template"),
+    "my_prices": lambda s, m, d, t: my_field(s, m, d, t, "prices"),
     "setting": setting,
     "client_find": client_find,
     "client_add": client_add,
