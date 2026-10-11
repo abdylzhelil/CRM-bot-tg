@@ -7,12 +7,17 @@ services:
       DATABASE_URL: sqlite+aiosqlite:///data/crm.db
     volumes:
       - ./data:/srv/data
-  # Для PostgreSQL: раскомментируйте db, поменяйте DATABASE_URL на
+    networks:
+      default:
+      # общая сеть с ботом модерации: он обращается к CRM по адресу http://crm:8090
+      tgbots:
+        aliases: [crm]
+
+networks:
+  # создаётся один раз командой: docker network create tgbots
+  tgbots:
+    external: true
+    name: tgbots
+
+  # Для PostgreSQL: добавьте сервис db (postgres:16), поменяйте DATABASE_URL на
   # postgresql+asyncpg://crm:crm@db:5432/crm и добавьте depends_on: [db].
-  # db:
-  #   image: postgres:16
-  #   restart: unless-stopped
-  #   environment: {POSTGRES_USER: crm, POSTGRES_PASSWORD: crm, POSTGRES_DB: crm}
-  #   volumes: [pgdata:/var/lib/postgresql/data]
-# volumes:
-#   pgdata:

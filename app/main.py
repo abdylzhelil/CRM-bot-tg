@@ -9,6 +9,7 @@ from app.bot import notify
 from app.bot.handlers.stats import build_report
 from app.bot.setup import build
 from app.db import Session, init_db
+from app.feed import server as feed_server
 from app.bot.handlers.leads import category_name
 from app.models import Client, Lead, Reminder, now
 from app.services import quiet, settings
@@ -88,11 +89,14 @@ async def main() -> None:
         asyncio.create_task(c)
         for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop())
     ]
+    feed = await feed_server.start()
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         for t in tasks:
             t.cancel()
+        if feed:
+            await feed.cleanup()
 
 
 if __name__ == "__main__":

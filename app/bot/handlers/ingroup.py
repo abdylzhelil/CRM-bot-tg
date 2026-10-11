@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app.bot import notify
 from app.bot.common import esc
 from app.db import Session
+from app.feed import links
 from app.models import Group, now
 from app.services import intake
 from app.services.antispam import AuthorInfo
@@ -32,10 +33,7 @@ PRIVACY_HINT = (
 
 
 def message_link(chat: Chat, message_id: int) -> str:
-    if chat.username:
-        return f"https://t.me/{chat.username}/{message_id}"
-    raw = str(chat.id)
-    return f"https://t.me/c/{raw[4:]}/{message_id}" if raw.startswith("-100") else ""
+    return links.message_link(chat.id, chat.username, message_id)
 
 
 async def upsert_group(bot: Bot, chat: Chat, status: str = "joined") -> tuple[Group, bool]:

@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import Group, SearchQuery
+from app.models import FeedChat, Group, SearchQuery
 
 router = Router()
 # Менеджер разведчиков подставляется из main.py
@@ -32,6 +32,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
     await reply(target, text, kb([
         [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=true")],
         [("🤖 Группы бота", "gr:bot"), ("❓ Как это работает", "gr:help")],
+        [("🛡 Бот модерации", "fd:list")],
         [("▶️ Искать сейчас", "gr:search"), ("🔄 Ротация сейчас", "gr:rotate")],
         [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"), (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
         [("🏆 Рейтинг вступивших", "gr:list:joined"), ("🔎 Поисковые запросы", "gq:list")],
@@ -147,3 +148,39 @@ async def query_edit(cb: CallbackQuery) -> None:
 @router.callback_query(F.data == "gq:add")
 async def query_add(cb: CallbackQuery, state: FSMContext) -> None:
     await ask(cb, state, "query_add", "Новые запросы (через запятую или с новой строки):")
+
+
+# ---- группы бота модерации (tg-group-bot работает «разведчиком») ----
+@router.callback_query(F.data == "fd:list")
+async def feed_list(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        chats = (await s.scalars(select(FeedChat).order_by(FeedChat.own.desc(), FeedChat.title))).all()
+    if not chats:
+        return await reply(cb, (
+            "🛡 Бот модерации ещё не подключён к CRM.\n\n"
+            "Нужно задать один и тот же секрет: FEED_TOKEN в .env CRM-бота и CRM_FEED_TOKEN "
+            "(+ CRM_FEED_URL=http://crm:8090) в .env бота модерации, затем перезапустить оба."
+        ), kb([[("◀️ Назад", "gr:menu")]]))
+    rows = [[(("✅ " if c.enabled else "⬜ ") + c.title[:40] + (" · ваша" if c.own else " · клиента"),
+              f"fd:tog:{c.tg_id}")] for c in chats[:40]]
+    rows.append([("◀️ Назад", "gr:menu")])
+    on = sum(c.enabled for c in chats)
+    await reply(cb, (
+        f"🛡 Группы бота модерации: {len(chats)}, передают заявки: {on}.\n"
+        "Нажмите на группу, чтобы включить/выключить. Сообщения уходят в CRM только из ✅ групп.\n\n"
+        "⚠️ Группы <b>клиентов</b> включайте только с согласия их владельцев."
+    ), kb(rows))
+
+
+@router.callback_query(F.data.startswith("fd:tog:"))
+async def feed_toggle(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        c = await s.get(FeedChat, int(cb.data.split(":")[2]))
+        if c is None:
+            return await cb.answer("Группа не найдена")
+        c.enabled = not c.enabled
+        await s.commit()
+        warn = c.enabled and not c.own
+    if warn:
+        await cb.answer("Это группа клиента — убедитесь, что владелец согласен.", show_alert=True)
+    await feed_list(cb)

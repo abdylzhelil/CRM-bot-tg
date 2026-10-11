@@ -56,6 +56,18 @@ class Group(Base):
     last_lead_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class FeedChat(Base):
+    """Группа бота модерации. Сообщения из неё идут в CRM, только если enabled (включает владелец)."""
+
+    __tablename__ = "feed_chats"
+    tg_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    username: Mapped[str] = mapped_column(String(64), default="")
+    own: Mapped[bool] = mapped_column(Boolean, default=False)  # группа владельца CRM, а не клиента
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class SearchQuery(Base):
     __tablename__ = "search_queries"
     id: Mapped[int] = mapped_column(primary_key=True)

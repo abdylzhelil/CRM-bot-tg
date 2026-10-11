@@ -15,3 +15,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/crm.db")
 TZ_NAME = os.getenv("TZ_NAME", "Europe/Moscow")
 TG_API_ID = int(os.getenv("TG_API_ID") or 0)
 TG_API_HASH = os.getenv("TG_API_HASH", "")
+
+# Приём сообщений от бота модерации (tg-group-bot). Пусто — приём выключен.
+FEED_TOKEN = os.getenv("FEED_TOKEN", "")
+FEED_PORT = int(os.getenv("FEED_PORT") or 8090)
