@@ -4,7 +4,8 @@
 так заказчика не заваливают сообщениями, а у исполнителя выше шанс. Платные — первыми и мгновенно,
 бесплатные — с задержкой и дневным лимитом.
 
-Заявки делятся поровну между пользователями (см. recipients): много заявок — у каждого свои, мало — одну получают несколько.
+Заявки делятся поровну между пользователями (см. recipients): много заявок — у каждого свои, мало — одну получают
+несколько, но по очереди с интервалом share_gap_min (первым — у кого за сутки меньше заявок).
 """
 import logging
 import random
@@ -62,8 +63,11 @@ async def niche_flow(s: AsyncSession, root: int) -> int:
         Lead.category_id.in_(ids), Lead.created_at > now() - timedelta(days=1))) or 1
 
 
-async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str]]:
-    """Кому отдать заявку: [(пользователь, когда)]; когда: "now" — сразу, "late" — бесплатный тариф с задержкой.
+async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]:
+    """Кому отдать заявку: [(пользователь, когда, место в очереди)].
+
+    когда: "now" — сразу, "late" — бесплатный тариф с задержкой. Если заявку получают несколько человек, они идут
+    по очереди с интервалом share_gap_min: первым — тот, у кого за сутки меньше всего заявок (место 0).
 
     Заявки делятся поровну: на каждую берём k человек с наименьшим числом заявок за сутки, где
     k = ceil(людей / заявок ниши за сутки). Заявок много — у каждого свои, разные; мало — одну получают несколько.
@@ -97,26 +101,32 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str]]:
     k = min(await settings.get_int(s, "max_recipients"), -(-pool // await niche_flow(s, root)))
     # справедливо: меньше получивших сегодня — раньше; при равенстве — случайно
     order = lambda us: sorted(us, key=lambda u: (load[u.tg_id], random.random()))  # noqa: E731
-    chosen = [(u, "now") for u in admins]
+    chosen = [(u, "now", 0) for u in admins]
+    rank = 0
     if finder is not None:
-        chosen.append((finder, "now"))
+        chosen.append((finder, "now", rank))
+        rank += 1
     for u in order(paid):
         if k <= 0:
             break
-        chosen.append((u, "now"))
+        chosen.append((u, "now", rank))
+        rank += 1
         k -= 1
     for u in order(free):
         if k <= 0:
             break
-        chosen.append((u, "late"))
+        chosen.append((u, "late", rank))
+        rank += 1
         k -= 1
     return chosen
 
 
 async def distribute(s: AsyncSession, lead: Lead) -> list[Delivery]:
     delay = timedelta(minutes=await settings.get_int(s, "free_delay_min"))
-    rows = [Delivery(lead_id=lead.id, user_id=u.tg_id, deliver_after=now() + (delay if when == "late" else timedelta()))
-            for u, when in await recipients(s, lead)]
+    gap = timedelta(minutes=await settings.get_int(s, "share_gap_min"))
+    rows = [Delivery(lead_id=lead.id, user_id=u.tg_id,
+                     deliver_after=now() + (delay if when == "late" else timedelta()) + gap * rank)
+            for u, when, rank in await recipients(s, lead)]
     s.add_all(rows)
     await s.commit()
     return rows

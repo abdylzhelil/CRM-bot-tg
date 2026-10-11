@@ -27,6 +27,7 @@ DEFAULTS: dict[str, str] = {
     "ref_days": "7",
     "ref_percent": "20",
     "pass_daily_limit": "10",
+    "share_gap_min": "2",
 }
 
 LABELS: dict[str, str] = {
@@ -51,6 +52,7 @@ LABELS: dict[str, str] = {
     "ref_days": "Приглашение: дней 💎 обоим",
     "ref_percent": "Приглашение: % от бонусных дней приглашённого",
     "pass_daily_limit": "Передач заявок коллегам в сутки",
+    "share_gap_min": "Одну заявку получают несколько: интервал между ними, мин",
 }
 
 

@@ -119,3 +119,15 @@ async def test_rating_by_city_and_screen(maker, tgbot):
     await ch.top(c, user)
     text = c.answer.call_args.args[0]
     assert "Махачкала" in text and "← вы" in text and "12" in text
+
+
+async def test_shared_lead_goes_in_turns(maker, tgbot):
+    for uid in range(100, 104):
+        await make_user(maker, uid, plan="full")
+    lead = await intake.handle(lead_msg(group=-100999))  # заявка одна — её получают все четверо, но по очереди
+    d = await got(maker, lead.id)
+    times = sorted(d[u].deliver_after for u in range(100, 104))
+    gaps = [(b - a).total_seconds() / 60 for a, b in zip(times, times[1:])]
+    assert times[0] <= now() and all(1.9 < g < 2.1 for g in gaps)  # первому сразу, остальным каждые 2 минуты
+    assert d[ADMIN_ID].deliver_after <= now()  # админ без очереди
+    assert sum(1 for u in range(100, 104) if tgbot.texts(u)) == 1  # сразу получил только первый
