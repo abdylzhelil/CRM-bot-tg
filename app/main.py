@@ -89,7 +89,7 @@ async def main() -> None:
         for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop())
     ]
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         for t in tasks:
             t.cancel()

@@ -9,13 +9,19 @@ from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 from app import config
 from app.bot import notify
 from app.bot.common import MENU
-from app.bot.handlers import accounts, blacklist, categories, clients, groups, inputs, keywords, leads, settings, stats
+from app.bot.handlers import (
+    accounts, blacklist, categories, clients, groups, ingroup, inputs, keywords, leads, settings, stats,
+)
 
 
 class OwnerOnly(BaseMiddleware):
     """Доступ только владельцам (по Telegram ID); остальным бот не отвечает."""
 
     async def __call__(self, handler, event, data):
+        chat = data.get("event_chat")
+        if chat and chat.type != "private":
+            # сообщения групп обрабатывает только ingroup.router; меню там недоступно
+            return await handler(event, data)
         user = data.get("event_from_user")
         if user and user.id in config.OWNER_IDS:
             return await handler(event, data)
@@ -68,8 +74,11 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     dp = Dispatcher(storage=MemoryStorage())
     dp.message.outer_middleware(OwnerOnly())
     dp.callback_query.outer_middleware(OwnerOnly())
-    dp.include_routers(
+    owner = Router()
+    owner.message.filter(F.chat.type == "private")
+    owner.include_routers(
         base, accounts.router, inputs.router, leads.router, clients.router, groups.router,
         categories.router, keywords.router, blacklist.router, stats.router, settings.router,
     )
+    dp.include_routers(ingroup.router, owner)
     return bot, dp

@@ -14,10 +14,11 @@ from telethon.tl.types import User
 
 from app.bot import notify
 from app.db import Session
-from app.models import Category, ScoutAccount
+from app.models import ScoutAccount
 from app.scout.client import make_client
 from app.services.antispam import AuthorInfo
-from app.services.pipeline import Incoming, process
+from app.services import intake
+from app.services.pipeline import Incoming
 
 log = logging.getLogger(__name__)
 DEAD = (AuthKeyUnregisteredError, SessionRevokedError, UserDeactivatedBanError, UserDeactivatedError)
@@ -104,14 +105,7 @@ class ScoutManager:
                 message_id=event.id,
                 link=link,
             )
-            async with Session() as s:
-                lead = await process(s, msg)
-                if lead:
-                    cat = await s.get(Category, lead.category_id)
-                    parent = await s.get(Category, cat.parent_id) if cat and cat.parent_id else None
-                    name = f"{parent.name} → {cat.name}" if parent else (cat.name if cat else "—")
-                    emoji = (parent or cat).emoji if cat else ""
-                    await notify.deliver_lead(lead, f"{emoji} {name}".strip())
+            await intake.handle(msg)
         except Exception:
             log.exception("ошибка обработки сообщения")
 

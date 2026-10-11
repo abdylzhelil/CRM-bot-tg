@@ -18,12 +18,47 @@ STATUS = {"candidate": "кандидаты", "approved": "очередь", "join
 async def groups_menu(target: Message | CallbackQuery) -> None:
     async with Session() as s:
         cnt = dict((await s.execute(select(Group.status, func.count()).group_by(Group.status))).all())
-    text = "🔍 Группы: " + ", ".join(f"{v} {cnt.get(k, 0)}" for k, v in STATUS.items())
+        bot_groups = await s.scalar(select(func.count()).select_from(Group).where(
+            Group.status == "joined", Group.account_id.is_(None)))
+    me = await target.bot.me()
+    privacy = "" if me.can_read_all_group_messages else (
+        "\n⚠️ Privacy mode включён — бот не видит сообщения в группах, где он не админ. "
+        "@BotFather → /setprivacy → Disable."
+    )
+    text = (
+        f"🤖 Бот в группах: {bot_groups}{privacy}\n"
+        "🔍 Разведчик: " + ", ".join(f"{v} {cnt.get(k, 0)}" for k, v in STATUS.items())
+    )
     await reply(target, text, kb([
+        [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=true")],
+        [("🤖 Группы бота", "gr:bot"), ("❓ Как это работает", "gr:help")],
         [("▶️ Искать сейчас", "gr:search"), ("🔄 Ротация сейчас", "gr:rotate")],
         [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"), (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
         [("🏆 Рейтинг вступивших", "gr:list:joined"), ("🔎 Поисковые запросы", "gq:list")],
     ]))
+
+
+@router.callback_query(F.data == "gr:bot")
+async def bot_groups(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        groups = (await s.scalars(select(Group).where(
+            Group.status == "joined", Group.account_id.is_(None)).order_by(Group.leads_count.desc()).limit(30))).all()
+    if not groups:
+        return await cb.answer("Бот пока не добавлен ни в одну группу", show_alert=True)
+    lines = [f"• {esc(g.title)} — {g.members} уч., заявок: {g.leads_count}" for g in groups]
+    await reply(cb, "🤖 Группы, где сидит бот:\n" + "\n".join(lines), kb([[("◀️ Назад", "gr:menu")]]))
+
+
+@router.callback_query(F.data == "gr:help")
+async def bot_help(cb: CallbackQuery) -> None:
+    await reply(cb, (
+        "🤖 <b>Бот в группах</b> — заявки без аккаунта-разведчика.\n\n"
+        "1. @BotFather → /setprivacy → выберите бота → <b>Disable</b> (один раз).\n"
+        "2. Добавьте бота в группу кнопкой «➕ Добавить бота в группу» — нужны права админа группы, "
+        "или попросите админа добавить его.\n"
+        "3. Бот молча читает сообщения и присылает вам заявки. В группе он ничего не пишет.\n\n"
+        "Где взять группы: ваши группы, группы знакомых, а также админы, которым нужен бот-антиспам."
+    ), kb([[("◀️ Назад", "gr:menu")]]))
 
 
 @router.callback_query(F.data.startswith("gr:list:"))
