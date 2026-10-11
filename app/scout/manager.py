@@ -111,7 +111,7 @@ class ScoutManager:
                     parent = await s.get(Category, cat.parent_id) if cat and cat.parent_id else None
                     name = f"{parent.name} → {cat.name}" if parent else (cat.name if cat else "—")
                     emoji = (parent or cat).emoji if cat else ""
-                    await notify.send_lead(lead, f"{emoji} {name}".strip())
+                    await notify.deliver_lead(lead, f"{emoji} {name}".strip())
         except Exception:
             log.exception("ошибка обработки сообщения")
 

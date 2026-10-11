@@ -14,7 +14,7 @@ async def settings_menu(target: Message | CallbackQuery) -> None:
     rows = []
     async with Session() as s:
         for key, label in settings.LABELS.items():
-            rows.append([(f"{label}: {await settings.get(s, key)}", f"st:{key}")])
+            rows.append([(f"{label}: {await settings.get(s, key) or 'выкл'}", f"st:{key}")])
     rows.append([("👤 Аккаунты-разведчики", "acc:list")])
     await reply(target, "⚙️ Настройки (нажмите, чтобы изменить):", kb(rows))
 
@@ -29,5 +29,10 @@ async def edit(cb: CallbackQuery, state: FSMContext) -> None:
     key = cb.data[3:]
     if key not in settings.LABELS:
         return await cb.answer()
-    hint = " (semi — присылать карточки, auto — вступать самому)" if key == "mode" else " (число)"
+    hint = {
+        "mode": " (semi — присылать карточки, auto — вступать самому)",
+        "quiet_hours": ": с какого по какой час копить заявки, напр. 23-8. "
+        "🔥 Горячие придут сразу. «-» — выключить",
+        "report_hour": " (0–23, по времени TZ_NAME из .env)",
+    }.get(key, " (число)")
     await ask(cb, state, "setting", f"{settings.LABELS[key]}{hint}:", key=key)

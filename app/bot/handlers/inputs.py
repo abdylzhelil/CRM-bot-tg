@@ -10,7 +10,7 @@ from app.bot.handlers import clients as clients_h
 from app.db import Session
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Keyword, ScoutAccount, SearchQuery
 from app.scout.client import parse_proxy
-from app.services import rules, settings
+from app.services import quiet, rules, settings
 
 router = Router()
 
@@ -29,10 +29,18 @@ async def setting(s, m, d, text):
     key = d["key"]
     if key == "mode" and text not in ("semi", "auto"):
         return await m.answer("Нужно semi или auto") and False
-    if key != "mode" and not text.isdigit():
+    if key == "quiet_hours":
+        if text in ("-", "0", "выкл"):
+            text = ""
+        elif not quiet.parse_hours(text):
+            return await m.answer("Формат: 23-8 (с 23:00 до 08:00) или «-», чтобы выключить") and False
+    elif key == "report_hour":
+        if not text.isdigit() or int(text) > 23:
+            return await m.answer("Нужен час от 0 до 23") and False
+    elif key != "mode" and not text.isdigit():
         return await m.answer("Нужно число") and False
     await settings.put(s, key, text)
-    await m.answer(f"✔ {settings.LABELS[key]}: {esc(text)}")
+    await m.answer(f"✔ {settings.LABELS[key]}: {esc(text) or 'выключен'}")
 
 
 async def client_field(s, m, d, text, field):
@@ -47,6 +55,24 @@ async def client_field(s, m, d, text, field):
         c.budget = int(digits)
     else:
         c.phone = text
+    await s.commit()
+    await clients_h.card(m, c.id)
+
+
+async def client_add(s, m, d, text):
+    """«Имя @username +79001234567» — части в любом порядке, любые можно опустить."""
+    name, username, phone = [], "", ""
+    for part in text.split():
+        if part.startswith("@"):
+            username = part.lstrip("@")
+        elif sum(ch.isdigit() for ch in part) >= 7:
+            phone = part
+        else:
+            name.append(part)
+    c = Client(name=" ".join(name), username=username, phone=phone, source="добавлен вручную")
+    s.add(c)
+    await s.flush()
+    s.add(ClientEvent(client_id=c.id, text="Добавлен вручную"))
     await s.commit()
     await clients_h.card(m, c.id)
 
@@ -135,6 +161,7 @@ async def acc_field(s, m, d, text, field):
 HANDLERS = {
     "setting": setting,
     "client_find": client_find,
+    "client_add": client_add,
     "query_add": query_add,
     "kw_add": kw_add,
     "kw_del": kw_del,

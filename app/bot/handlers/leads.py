@@ -6,6 +6,7 @@ from app.bot import notify
 from app.bot.common import esc, kb, reply
 from app.db import Session
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Group, Lead
+from app.services import templates
 
 router = Router()
 
@@ -51,6 +52,8 @@ async def lead_action(cb: CallbackQuery) -> None:
         if not lead:
             return await cb.answer("Заявка не найдена")
         note = ""
+        if action == "tpl":
+            return await send_template(cb, s, lead)
         if action == "take":
             client = await s.scalar(select(Client).where(Client.tg_id == lead.author_id))
             if not client:
@@ -83,4 +86,24 @@ async def lead_action(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "noop")
 async def noop(cb: CallbackQuery) -> None:
+    await cb.answer()
+
+
+async def send_template(cb: CallbackQuery, s, lead: Lead) -> None:
+    """Готовый ответ клиенту по шаблону и ценам категории (подкатегория важнее родителя)."""
+    cat = await s.get(Category, lead.category_id) if lead.category_id else None
+    parent = await s.get(Category, cat.parent_id) if cat and cat.parent_id else None
+    tpl = (cat.reply_template if cat else "") or (parent.reply_template if parent else "")
+    prices = (cat.prices if cat else "") or (parent.prices if parent else "")
+    text = templates.render(
+        tpl, name=lead.name, group=lead.group_title,
+        category=(cat.name.lower() if cat else "эта услуга"), prices=prices,
+    )
+    contact = f"https://t.me/{lead.username}" if lead.username else f"tg://user?id={lead.author_id}"
+    await cb.message.answer(
+        f"📋 Ответ клиенту (нажмите на текст — скопируется):\n\n<code>{esc(text)}</code>\n\n"
+        "<i>Свой шаблон: 🗂 Категории → категория → 📋 Шаблон. "
+        "Подстановки: {имя}, {цены}, {группа}, {категория}.</i>",
+        reply_markup=kb([[("✍️ Написать клиенту", f"url:{contact}")]]),
+    )
     await cb.answer()

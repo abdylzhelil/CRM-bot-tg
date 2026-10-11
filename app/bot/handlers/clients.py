@@ -31,7 +31,7 @@ async def show_list(target, stage: str, query: str = "") -> None:
         clients = (await s.scalars(q)).all()
     filters = [(f"{label} {counts.get(k, 0)}", f"cl:list:{k}") for k, label in STAGES]
     rows = [filters[i : i + 3] for i in range(0, len(filters), 3)]
-    rows.append([(f"Все {sum(counts.values())}", "cl:list:all"), ("🔎 Поиск", "cl:find")])
+    rows.append([(f"Все {sum(counts.values())}", "cl:list:all"), ("🔎 Поиск", "cl:find"), ("➕ Добавить", "cl:add")])
     for c in clients:
         who = c.name or c.username or str(c.tg_id)
         rows.append([(f"{STAGE_NAMES[c.stage][:2]} {who}"[:60], f"cl:open:{c.id}")])
@@ -47,6 +47,12 @@ async def cb_list(cb: CallbackQuery) -> None:
 @router.callback_query(F.data == "cl:find")
 async def cb_find(cb: CallbackQuery, state: FSMContext) -> None:
     await ask(cb, state, "client_find", "Имя, @username или телефон для поиска:")
+
+
+@router.callback_query(F.data == "cl:add")
+async def cb_add(cb: CallbackQuery, state: FSMContext) -> None:
+    await ask(cb, state, "client_add", "Новый клиент: имя, @username и/или телефон в одной строке.\n"
+              "Например: Марат @marat_shop +79001234567")
 
 
 async def card(target, client_id: int) -> None:
@@ -76,12 +82,17 @@ async def card(target, client_id: int) -> None:
     if events:
         lines.append("\nИстория:\n" + "\n".join(f"• {e.created_at:%d.%m} {esc(e.text[:120])}" for e in events))
     stage_btns = [(label, f"cl:stage:{c.id}:{k}") for k, label in STAGES if k != c.stage]
-    contact = f"url:https://t.me/{c.username}" if c.username else f"url:tg://user?id={c.tg_id}"
+    if c.username:
+        contact = [("✍️ Написать", f"url:https://t.me/{c.username}")]
+    elif c.tg_id:
+        contact = [("✍️ Написать", f"url:tg://user?id={c.tg_id}")]
+    else:
+        contact = []
     rows = [stage_btns[i : i + 2] for i in range(0, len(stage_btns), 2)]
     rows += [
         [("📝 Заметка", f"cl:note:{c.id}"), ("💰 Бюджет", f"cl:budget:{c.id}"), ("☎️ Телефон", f"cl:phone:{c.id}")],
         [("⏰ 1 дн", f"cl:rem:{c.id}:1"), ("⏰ 3 дн", f"cl:rem:{c.id}:3"), ("⏰ 7 дн", f"cl:rem:{c.id}:7")],
-        [("✍️ Написать", contact), ("◀️ К списку", "cl:list:all")],
+        contact + [("◀️ К списку", "cl:list:all")],
     ]
     await reply(target, "\n".join(lines), kb(rows))
 

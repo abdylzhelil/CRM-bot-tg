@@ -6,7 +6,9 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app import config
+from app.db import Session
 from app.models import Group, Lead
+from app.services import quiet, settings
 
 log = logging.getLogger(__name__)
 _bot: Bot | None = None
@@ -36,7 +38,8 @@ def lead_keyboard(lead: Lead) -> InlineKeyboardMarkup:
     else:
         reply = InlineKeyboardButton(text="✍️ Ответить", url=f"tg://user?id={lead.author_id}")
     rows = [
-        [reply, InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{lead.id}")],
+        [reply, InlineKeyboardButton(text="📋 Шаблон", callback_data=f"lead:tpl:{lead.id}")],
+        [InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{lead.id}")],
         [
             InlineKeyboardButton(text="⏰ Отложить", callback_data=f"lead:later:{lead.id}"),
             InlineKeyboardButton(text="❌ Отказ", callback_data=f"lead:reject:{lead.id}"),
@@ -49,7 +52,10 @@ def lead_keyboard(lead: Lead) -> InlineKeyboardMarkup:
 
 
 def lead_text(lead: Lead, category: str) -> str:
-    head = "⚠️ Подозрительный" if lead.suspicious else "🔥 Новый клиент"
+    if lead.suspicious:
+        head = "⚠️ Подозрительный"
+    else:
+        head = "🔥 Горячий клиент" if quiet.is_hot(lead.text) else "🆕 Новый клиент"
     who = html.escape(lead.name or "—")
     if lead.username:
         who += f" (@{html.escape(lead.username)})"
@@ -66,6 +72,20 @@ def lead_text(lead: Lead, category: str) -> str:
 
 async def send_lead(lead: Lead, category: str) -> None:
     await _send(lead_text(lead, category), lead_keyboard(lead))
+    async with Session() as s:
+        row = await s.get(Lead, lead.id)
+        if row:
+            row.notified = True
+            await s.commit()
+
+
+async def deliver_lead(lead: Lead, category: str) -> None:
+    """В режим тишины обычные заявки копятся (их пришлёт quiet_digest), 🔥 горячие идут сразу."""
+    async with Session() as s:
+        hours = quiet.parse_hours(await settings.get(s, "quiet_hours"))
+    if quiet.in_quiet(quiet.local_now().hour, hours) and not quiet.is_hot(lead.text):
+        return
+    await send_lead(lead, category)
 
 
 def group_text(g: Group) -> str:

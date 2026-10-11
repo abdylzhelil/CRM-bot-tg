@@ -13,6 +13,8 @@ DEFAULTS: dict[str, str] = {
     "spam_block": "60",
     "dedupe_days": "7",
     "rotation_days": "30",
+    "quiet_hours": "",
+    "report_hour": "21",
 }
 
 LABELS: dict[str, str] = {
@@ -25,6 +27,8 @@ LABELS: dict[str, str] = {
     "spam_block": "Порог «спам» (0–100)",
     "dedupe_days": "Окно антидублей, дней",
     "rotation_days": "Выходить из групп без заявок за N дней",
+    "quiet_hours": "Режим тишины (часы, напр. 23-8)",
+    "report_hour": "Час вечернего отчёта",
 }
 
 

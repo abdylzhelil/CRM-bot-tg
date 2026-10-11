@@ -7,3 +7,4 @@ pymorphy3>=2.0
 pymorphy3-dicts-ru
 python-dotenv>=1.0
 python-socks[asyncio]>=2.4
+tzdata
