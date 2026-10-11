@@ -20,6 +20,10 @@ DEFAULTS: dict[str, str] = {
     "free_delay_min": "30",
     "spam_votes_to_ban": "3",
     "scout_paused": "0",
+    "submit_daily_limit": "3",
+    "catalog_min_members": "50",
+    "bonus_leads": "5",
+    "channel_poll_min": "15",
 }
 
 LABELS: dict[str, str] = {
@@ -37,6 +41,10 @@ LABELS: dict[str, str] = {
     "free_daily_limit": "Бесплатный тариф: заявок в день",
     "free_delay_min": "Бесплатный тариф: задержка, мин",
     "spam_votes_to_ban": "Голосов «спам» для общего чёрного списка",
+    "submit_daily_limit": "Групп от одного пользователя в сутки",
+    "catalog_min_members": "Каталог: мин. участников в добавленной группе",
+    "bonus_leads": "Заявок из группы пользователя за +1 день 💎",
+    "channel_poll_min": "Опрос открытых каналов раз в N минут",
 }
 
 

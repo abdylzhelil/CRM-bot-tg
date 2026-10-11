@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import FeedChat, Group, SearchQuery
-from app.services import settings
+from app.services import catalog, settings
 
 router = Router()
 # Менеджер разведчиков подставляется из main.py
@@ -23,7 +23,8 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
     async with Session() as s:
         cnt = dict((await s.execute(select(Group.status, func.count()).group_by(Group.status))).all())
         bot_groups = await s.scalar(select(func.count()).select_from(Group).where(
-            Group.status == "joined", Group.account_id.is_(None)))
+            Group.status == "joined", Group.account_id.is_(None), Group.kind == "group"))
+        pending = await catalog.pending_count(s)
         paused = await settings.get(s, "scout_paused") == "1"
     me = await target.bot.me()
     privacy = "" if me.can_read_all_group_messages else (
@@ -38,7 +39,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
     await reply(target, text, kb([
         [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=true")],
         [("🤖 Группы бота", "gr:bot"), ("❓ Как это работает", "gr:help")],
-        [("🛡 Бот модерации", "fd:list")],
+        [("🛡 Бот модерации", "fd:list"), (f"📝 От пользователей {pending}", "up:list")],
         [("▶️ Искать сейчас", "gr:search"), ("⏹ Остановить поиск", "gr:stop")],
         [("▶️ Возобновить разведчика" if paused else "⏸ Пауза разведчика", "gr:pause"),
          ("🔄 Ротация сейчас", "gr:rotate")],
@@ -51,7 +52,8 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
 async def bot_groups(cb: CallbackQuery) -> None:
     async with Session() as s:
         groups = (await s.scalars(select(Group).where(
-            Group.status == "joined", Group.account_id.is_(None)).order_by(Group.leads_count.desc()).limit(30))).all()
+            Group.status == "joined", Group.account_id.is_(None), Group.kind == "group")
+            .order_by(Group.leads_count.desc()).limit(30))).all()
     if not groups:
         return await cb.answer("Бот пока не добавлен ни в одну группу", show_alert=True)
     lines = [f"• {esc(g.title)} — {g.members} уч., заявок: {g.leads_count}" for g in groups]

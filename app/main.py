@@ -12,6 +12,7 @@ from app.migrate import migrate_data, upgrade_schema
 from app.feed import server as feed_server
 from app.models import Client, Reminder, now
 from app.services import quiet, settings
+from app.scout.channels import channel_loop
 from app.scout.joiner import join_loop, rotation_loop, search_loop
 from app.scout.manager import ScoutManager
 from app.seed import seed
@@ -82,7 +83,7 @@ async def main() -> None:
     await manager.start()
     tasks = [
         asyncio.create_task(c)
-        for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop())
+        for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop())
     ]
     await setup_profile(bot)
     feed = await feed_server.start()

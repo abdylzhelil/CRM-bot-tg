@@ -133,3 +133,13 @@ async def send_group_card(g: Group) -> None:
         ]]
     )
     await _send(group_text(g), kb)
+
+
+async def bonus(user_id: int, days: int) -> None:
+    """Автору группы: из его группы пошли заявки — подарок."""
+    assert _bot, "notify.init(bot) не вызван"
+    try:
+        await _bot.send_message(
+            user_id, f"🎁 Заявки из добавленной вами группы приносят пользу — дарим +{days} дн. 💎 Полного тарифа. Спасибо!")
+    except Exception:
+        log.info("не удалось сообщить о бонусе %s", user_id)

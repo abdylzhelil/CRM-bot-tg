@@ -33,6 +33,13 @@ class FakeBot:
     async def get_chat_member_count(self, chat_id):
         return 1500
 
+    chats: dict = {}
+
+    async def get_chat(self, chat_id):
+        if chat_id not in self.chats:
+            raise LookupError(chat_id)
+        return self.chats[chat_id]
+
     def texts(self, chat_id: int) -> list[str]:
         return [t for c, t in self.sent if c == chat_id]
 

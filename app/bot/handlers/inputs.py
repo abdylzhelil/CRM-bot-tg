@@ -218,7 +218,21 @@ async def us_find(s, m, d, text):
     await user_card(m, u.tg_id)
 
 
+async def grp_link(s, m, d, text):
+    from app.bot.handlers import catalog
+
+    return await catalog.grp_link(s, m, d, text)
+
+
+async def grp_city(s, m, d, text):
+    from app.bot.handlers import catalog
+
+    return await catalog.grp_city(s, m, d, text)
+
+
 HANDLERS = {
+    "grp_link": grp_link,
+    "grp_city": grp_city,
     "us_find": us_find,
     "neg_add": neg_add,
     "neg_del": neg_del,

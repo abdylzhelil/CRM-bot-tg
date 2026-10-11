@@ -55,6 +55,15 @@ class Group(Base):
     leads_count: Mapped[int] = mapped_column(Integer, default=0)
     last_lead_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     city: Mapped[str] = mapped_column(String(64), default="")  # город группы, если известен
+    # group — чат, куда вступает разведчик; channel — открытый канал, читаем через t.me/s/<канал>
+    kind: Mapped[str] = mapped_column(String(8), default="group")
+    # группа, добавленная пользователем: draft -> pending -> approved/joined/... | rejected
+    submitted_by: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    catalog: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # показана в каталоге
+    last_post_id: Mapped[int] = mapped_column(Integer, default=0)  # канал: последний прочитанный пост
+    bonus_rewarded: Mapped[int] = mapped_column(Integer, default=0)  # заявок уже обменяно на бонус автору
 
 
 class FeedChat(Base):

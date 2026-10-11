@@ -16,8 +16,8 @@ from app.bot import notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU
 from app.bot.handlers import (
-    accounts, blacklist, categories, clients, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
-    users_admin,
+    accounts, blacklist, catalog, categories, clients, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
+    submissions, users_admin,
 )
 from app.models import User
 
@@ -33,15 +33,17 @@ HELP = (
     "📋 Шаблон — готовый текст ответа с вашими ценами (нажмите на текст — скопируется)\n"
     "✅ В работу — клиент попадает в 👥 Клиенты, там этапы сделки, заметки и напоминания\n"
     "⏰ Отложить · ❌ Отказ · 🚫 Спам — автор спама вам больше не придёт\n\n"
+    "🌐 <b>Каталог</b> — добавьте свою открытую группу или канал: за заявки из неё дарим дни 💎.\n\n"
     "<b>Настройки</b> — в 👤 Профиль: ниши, город, минус-слова, режим тишины, свой шаблон и цены, пауза.\n"
     "Заявка живёт минуты — отвечайте быстро 🔥\n\n"
-    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /profile — профиль, /cancel — отмена ввода."
+    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /catalog — каталог, /profile — профиль, /cancel — отмена ввода."
 )
 
 USER_COMMANDS = [
     BotCommand(command="menu", description="Главное меню"),
     BotCommand(command="leads", description="Мои заявки"),
     BotCommand(command="clients", description="Мои клиенты (CRM)"),
+    BotCommand(command="catalog", description="Каталог групп и бонусы"),
     BotCommand(command="profile", description="Профиль и настройки"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="cancel", description="Отменить ввод"),
@@ -107,7 +109,7 @@ async def help_cmd(m: Message, state: FSMContext, user: User) -> None:
     await m.answer(HELP, reply_markup=menu_keyboard(user) if user.onboarded else None)
 
 
-SHORTCUTS = {"leads": "📥 Заявки", "clients": "👥 Клиенты", "profile": "👤 Профиль",
+SHORTCUTS = {"leads": "📥 Заявки", "clients": "👥 Клиенты", "profile": "👤 Профиль", "catalog": "🌐 Каталог",
              "users": "👥 Пользователи", "groups": "🔍 Группы", "settings": "⚙️ Настройки"}
 
 
@@ -145,6 +147,7 @@ async def open_section(m: Message, state: FSMContext, user: User, section: str) 
         "🎯 Мои ниши": lambda: profile.niches_menu(m, user),
         "📍 Мой город": lambda: profile.city_menu(m, user),
         "👤 Профиль": lambda: profile.profile_menu(m, user),
+        "🌐 Каталог": lambda: catalog.catalog_menu(m, user),
         "📊 Статистика": lambda: stats.stats(m, user),
         "🔍 Группы": lambda: groups.groups_menu(m),
         "🗂 Категории": lambda: categories.categories_menu(m),
@@ -199,13 +202,13 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     admin.callback_query.filter(IsAdmin())
     admin.include_routers(
         accounts.router, groups.router, categories.router, keywords.router, blacklist.router,
-        settings.router, users_admin.router, admin_nav,
+        settings.router, users_admin.router, submissions.router, admin_nav,
     )
     # личка: всем пользователям
     private = Router(name="private")
     private.message.filter(F.chat.type == "private")
     private.include_routers(
-        base, inputs.router, profile.router, leads.router, clients.router, stats.router, admin, fallback,
+        base, inputs.router, profile.router, catalog.router, leads.router, clients.router, stats.router, admin, fallback,
     )
     dp.include_routers(ingroup.router, private)
     return bot, dp

@@ -48,7 +48,7 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             return False
         g = await s.scalar(
             # IN (NULL, …) в SQL не находит NULL — поэтому явно: ничья группа или уже назначенная этому аккаунту
-            select(Group).where(Group.status == "approved",
+            select(Group).where(Group.status == "approved", Group.kind == "group",
                                 or_(Group.account_id.is_(None), Group.account_id == acc_id))
             .order_by(Group.members.desc())
         )
