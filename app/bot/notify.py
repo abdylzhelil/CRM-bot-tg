@@ -116,6 +116,15 @@ def group_text(g: Group) -> str:
     )
 
 
+async def groups_found(count: int, auto: bool) -> None:
+    if auto:
+        text = f"🔍 Поиск: найдено новых групп — {count}, они в очереди на вступление."
+    else:
+        text = f"🔍 Поиск: найдено новых групп — {count}. Отберите, в какие вступать:"
+    await _send(text, InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❓ Отобрать группы", callback_data="rv:page")]]))
+
+
 async def send_group_card(g: Group) -> None:
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[

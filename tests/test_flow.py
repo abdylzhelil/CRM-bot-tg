@@ -129,9 +129,12 @@ async def test_no_start_needed_unknown_text_shows_menu(app_bot, maker):
     bot, dp, api = app_bot
     await dp.feed_update(bot, text_update(ADMIN_ID, "привет"))
     last = [r for r in api.requests if isinstance(r, SendMessage) and r.chat_id == ADMIN_ID][-1]
-    assert "меню" in last.text and last.reply_markup.is_persistent
+    assert "меню" in last.text and not last.reply_markup.is_persistent  # панель можно свернуть
     labels = [b.text for row in last.reply_markup.keyboard for b in row]
-    assert "👥 Пользователи" in labels and "❓ Помощь" in labels
+    assert "🛠 Управление" in labels and "❓ Помощь" in labels and "👥 Пользователи" not in labels
+    await dp.feed_update(bot, text_update(ADMIN_ID, "🛠 Управление"))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "adm:users"))
+    assert "Пользователей" in api.texts(ADMIN_ID)[-1]
 
     await dp.feed_update(bot, text_update(ADMIN_ID, "/leads"))
     assert "Заявки" in api.texts(ADMIN_ID)[-1]
@@ -152,7 +155,9 @@ async def test_user_menu_has_no_admin_buttons_and_profile_is_set(app_bot, maker)
     await dp.feed_update(bot, text_update(503, "что тут"))
     last = [r for r in api.requests if isinstance(r, SendMessage) and r.chat_id == 503][-1]
     labels = [b.text for row in last.reply_markup.keyboard for b in row]
-    assert "👥 Пользователи" not in labels and "📥 Заявки" in labels
+    assert "🛠 Управление" not in labels and "📥 Заявки" in labels
+    await dp.feed_update(bot, cb_update(503, "adm:users"))  # чужой не откроет управление
+    assert not any("Пользователей" in t for t in api.texts(503))
 
     await setup_profile(bot)
     assert any(isinstance(r, SetMyCommands) for r in api.requests)

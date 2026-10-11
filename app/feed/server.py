@@ -48,6 +48,10 @@ async def sync_chats(request: web.Request) -> web.Response:
             row.username = str(item.get("username") or "")[:64]
             row.own = bool(item.get("own"))
             row.seen_at = now()
+        ids = [int(item["id"]) for item in data.get("chats", [])]
+        if ids:  # общая база: разведчик не пойдёт туда, где уже есть бот модерации
+            await s.execute(Group.__table__.update().where(
+                Group.tg_id.in_(ids), Group.status.in_(["candidate", "approved"])).values(status="covered"))
         await s.commit()
         enabled = [c.tg_id for c in (await s.scalars(select(FeedChat).where(FeedChat.enabled))).all()]
     if new and not first_sync:

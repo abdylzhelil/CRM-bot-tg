@@ -61,10 +61,19 @@ SHORT_DESCRIPTION = "Заявки клиентов из Telegram-групп по
 
 def menu_keyboard(user: User | None = None) -> ReplyKeyboardMarkup:
     labels = ADMIN_MENU if user is not None and user.is_admin else USER_MENU
-    rows = [[KeyboardButton(text=t) for t in labels[i : i + 2]] for i in range(0, len(labels), 2)]
-    # is_persistent — клавиатура видна всегда, /start набирать не нужно
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True,
-                               input_field_placeholder="Выберите раздел")
+    rows = [[KeyboardButton(text=t) for t in labels[i : i + 3]] for i in range(0, len(labels), 3)]
+    # клавиатуру можно свернуть значком ⌨ в поле ввода и открыть снова
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, input_field_placeholder="Выберите раздел")
+
+
+def admin_panel():
+    from app.bot.common import kb
+
+    return kb([
+        [("🔍 Группы", "adm:groups"), ("👥 Пользователи", "adm:users")],
+        [("🗂 Категории", "adm:categories"), ("🔑 Ключевые слова", "adm:keywords")],
+        [("🛡 Чёрный список", "adm:blacklist"), ("⚙️ Настройки", "adm:settings")],
+    ])
 
 
 async def setup_profile(bot: Bot) -> None:
@@ -144,8 +153,24 @@ async def open_section(m: Message, state: FSMContext, user: User, section: str) 
         "👥 Пользователи": lambda: users_admin.users_menu(m),
         "⚙️ Настройки": lambda: settings.settings_menu(m),
         "❓ Помощь": lambda: m.answer(HELP),
+        "🛠 Управление": lambda: m.answer("🛠 <b>Управление ботом</b>", reply_markup=admin_panel()),
     }
     await handlers[section]()
+
+
+admin_nav = Router(name="admin_nav")
+ADMIN_TARGETS = {
+    "groups": groups.groups_menu, "users": users_admin.users_menu, "categories": categories.categories_menu,
+    "keywords": keywords.keywords_menu, "blacklist": blacklist.blacklist_menu, "settings": settings.settings_menu,
+}
+
+
+@admin_nav.callback_query(F.data.startswith("adm:"))
+async def admin_section(cb, state: FSMContext) -> None:
+    await state.clear()
+    target = ADMIN_TARGETS.get(cb.data.split(":")[1])
+    if target:
+        await target(cb)
 
 
 fallback = Router(name="fallback")
@@ -174,7 +199,7 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     admin.callback_query.filter(IsAdmin())
     admin.include_routers(
         accounts.router, groups.router, categories.router, keywords.router, blacklist.router,
-        settings.router, users_admin.router,
+        settings.router, users_admin.router, admin_nav,
     )
     # личка: всем пользователям
     private = Router(name="private")

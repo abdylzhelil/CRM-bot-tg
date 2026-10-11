@@ -3,15 +3,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
 
-from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import FeedChat, Group, SearchQuery
+from app.services import settings
 
 router = Router()
 # Менеджер разведчиков подставляется из main.py
 manager = None
-STATUS = {"candidate": "кандидаты", "approved": "очередь", "joined": "вступили", "skipped": "пропущены", "left": "вышли"}
+STATUS = {
+    "candidate": "кандидаты", "approved": "очередь", "joined": "вступили", "covered": "уже с нашим ботом",
+    "skipped": "пропущены", "left": "вышли",
+}
+REVIEW_PAGE = 8
 
 
 @router.message(F.text == "🔍 Группы")
@@ -20,6 +24,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         cnt = dict((await s.execute(select(Group.status, func.count()).group_by(Group.status))).all())
         bot_groups = await s.scalar(select(func.count()).select_from(Group).where(
             Group.status == "joined", Group.account_id.is_(None)))
+        paused = await settings.get(s, "scout_paused") == "1"
     me = await target.bot.me()
     privacy = "" if me.can_read_all_group_messages else (
         "\n⚠️ Privacy mode включён — бот не видит сообщения в группах, где он не админ. "
@@ -27,13 +32,16 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
     )
     text = (
         f"🤖 Бот в группах: {bot_groups}{privacy}\n"
-        "🔍 Разведчик: " + ", ".join(f"{v} {cnt.get(k, 0)}" for k, v in STATUS.items())
+        f"🔍 Разведчик{' (⏸ на паузе)' if paused else ''}: "
+        + ", ".join(f"{v} {cnt.get(k, 0)}" for k, v in STATUS.items())
     )
     await reply(target, text, kb([
         [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=true")],
         [("🤖 Группы бота", "gr:bot"), ("❓ Как это работает", "gr:help")],
         [("🛡 Бот модерации", "fd:list")],
-        [("▶️ Искать сейчас", "gr:search"), ("🔄 Ротация сейчас", "gr:rotate")],
+        [("▶️ Искать сейчас", "gr:search"), ("⏹ Остановить поиск", "gr:stop")],
+        [("▶️ Возобновить разведчика" if paused else "⏸ Пауза разведчика", "gr:pause"),
+         ("🔄 Ротация сейчас", "gr:rotate")],
         [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"), (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
         [("🏆 Рейтинг вступивших", "gr:list:joined"), ("🔎 Поисковые запросы", "gq:list")],
     ]))
@@ -72,10 +80,7 @@ async def group_list(cb: CallbackQuery) -> None:
     if not groups:
         return await cb.answer("Пусто", show_alert=True)
     if status == "candidate":
-        await cb.answer()
-        for g in groups[:10]:
-            await notify.send_group_card(g)
-        return
+        return await review(cb)
     lines = [f"• {esc(g.title)} — {g.members} уч., заявок: {g.leads_count}" for g in groups]
     await reply(cb, f"{STATUS[status].capitalize()}:\n" + "\n".join(lines), kb([[("◀️ Назад", "gr:menu")]]))
 
@@ -184,3 +189,75 @@ async def feed_toggle(cb: CallbackQuery) -> None:
     if warn:
         await cb.answer("Это группа клиента — убедитесь, что владелец согласен.", show_alert=True)
     await feed_list(cb)
+
+
+# ---------- поиск: остановка и пауза ----------
+@router.callback_query(F.data == "gr:stop")
+async def stop_search(cb: CallbackQuery) -> None:
+    from app.scout.search import request_stop
+
+    request_stop()
+    await cb.answer("Поиск остановится через несколько секунд", show_alert=True)
+
+
+@router.callback_query(F.data == "gr:pause")
+async def toggle_pause(cb: CallbackQuery) -> None:
+    from app.scout.search import request_stop
+
+    async with Session() as s:
+        paused = await settings.get(s, "scout_paused") == "1"
+        await settings.put(s, "scout_paused", "0" if paused else "1")
+    if not paused:
+        request_stop()
+    await cb.answer("Разведчик продолжает работу" if paused else
+                    "Разведчик на паузе: не ищет и не вступает в группы (заявки из групп приходят)", show_alert=True)
+    await groups_menu(cb)
+
+
+# ---------- отбор найденных групп списком ----------
+async def review(target) -> None:
+    async with Session() as s:
+        total = await s.scalar(select(func.count()).select_from(Group).where(Group.status == "candidate"))
+        groups = (await s.scalars(select(Group).where(Group.status == "candidate")
+                                  .order_by(Group.members.desc()).limit(REVIEW_PAGE))).all()
+    if not groups:
+        return await reply(target, "❓ Новых групп для отбора нет.", kb([[("◀️ Назад", "gr:menu")]]))
+    lines = []
+    rows = []
+    for i, g in enumerate(groups, 1):
+        act = "н/д" if g.msgs_per_day < 0 else f"{g.msgs_per_day:.0f}"
+        uname = f" @{esc(g.username)}" if g.username else ""
+        lines.append(f"{i}. <b>{esc(g.title[:50])}</b>{uname} — {g.members} уч., {act} сообщ./сутки")
+        rows.append([(f"✅ {i}. {g.title[:28]}", f"rv:j:{g.id}"), (f"❌ {i}", f"rv:s:{g.id}")])
+    rows.append([("✅ Вступить во все", "rv:all:j"), ("❌ Пропустить все", "rv:all:s")])
+    rows.append([("◀️ Назад", "gr:menu")])
+    await reply(target, f"❓ <b>Отбор групп</b> (осталось {total})\n✅ — разведчик вступит, ❌ — пропустить.\n\n"
+                + "\n".join(lines), kb(rows))
+
+
+@router.callback_query(F.data == "rv:page")
+async def review_page(cb: CallbackQuery) -> None:
+    await review(cb)
+
+
+@router.callback_query(F.data.regexp(r"^rv:(j|s):\d+$"))
+async def review_one(cb: CallbackQuery) -> None:
+    _, action, gid = cb.data.split(":")
+    async with Session() as s:
+        g = await s.get(Group, int(gid))
+        if g and g.status == "candidate":
+            g.status = "approved" if action == "j" else "skipped"
+            await s.commit()
+    await review(cb)
+
+
+@router.callback_query(F.data.regexp(r"^rv:all:(j|s)$"))
+async def review_all(cb: CallbackQuery) -> None:
+    action = cb.data.split(":")[2]
+    async with Session() as s:
+        ids = (await s.scalars(select(Group.id).where(Group.status == "candidate")
+                               .order_by(Group.members.desc()).limit(REVIEW_PAGE))).all()
+        await s.execute(Group.__table__.update().where(Group.id.in_(ids))
+                        .values(status="approved" if action == "j" else "skipped"))
+        await s.commit()
+    await review(cb)

@@ -19,6 +19,7 @@ DEFAULTS: dict[str, str] = {
     "free_daily_limit": "5",
     "free_delay_min": "30",
     "spam_votes_to_ban": "3",
+    "scout_paused": "0",
 }
 
 LABELS: dict[str, str] = {

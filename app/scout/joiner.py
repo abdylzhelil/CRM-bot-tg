@@ -4,7 +4,7 @@ import logging
 import random
 from datetime import date, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from telethon import TelegramClient, functions
 from telethon.errors import (
     ChannelsTooMuchError,
@@ -16,10 +16,20 @@ from telethon.errors import (
 
 from app.bot import notify
 from app.db import Session
-from app.models import Group, ScoutAccount, now
+from app.models import FeedChat, Group, ScoutAccount, now
 from app.services import settings
 
 log = logging.getLogger(__name__)
+
+
+async def is_covered_by_other(s, g: Group) -> bool:
+    other = await s.scalar(select(Group.id).where(Group.tg_id == g.tg_id, Group.id != g.id, Group.status == "joined"))
+    return other is not None
+
+
+async def paused() -> bool:
+    async with Session() as s:
+        return await settings.get(s, "scout_paused") == "1"
 
 
 async def join_one(client: TelegramClient, acc_id: int) -> bool:
@@ -36,10 +46,16 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             await s.commit()
             return False
         g = await s.scalar(
-            select(Group).where(Group.status == "approved", Group.account_id.in_([None, acc_id]))
+            # IN (NULL, …) в SQL не находит NULL — поэтому явно: ничья группа или уже назначенная этому аккаунту
+            select(Group).where(Group.status == "approved",
+                                or_(Group.account_id.is_(None), Group.account_id == acc_id))
             .order_by(Group.members.desc())
         )
         if not g:
+            await s.commit()
+            return False
+        if await s.get(FeedChat, g.tg_id) is not None or await is_covered_by_other(s, g):
+            g.status = "covered"  # там уже есть наш бот — второй не заходит
             await s.commit()
             return False
         try:
@@ -71,6 +87,8 @@ async def join_loop(manager) -> None:
     while True:
         did = False
         for acc_id, client in list(manager.clients.items()):
+            if await paused():
+                break
             try:
                 did |= await join_one(client, acc_id)
             except Exception:
@@ -109,6 +127,8 @@ async def search_loop(manager) -> None:
 
     while True:
         for acc_id, client in list(manager.clients.items()):
+            if await paused():
+                break
             try:
                 await discover(client)
             except Exception:

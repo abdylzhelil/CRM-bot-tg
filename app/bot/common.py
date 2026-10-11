@@ -9,11 +9,11 @@ esc = html.escape
 USER_MENU = [
     "📥 Заявки", "👥 Клиенты", "🎯 Мои ниши", "📍 Мой город", "👤 Профиль", "📊 Статистика", "❓ Помощь",
 ]
-ADMIN_MENU = USER_MENU + [
-    "🔍 Группы", "🗂 Категории", "🔑 Ключевые слова", "🛡 Чёрный список", "👥 Пользователи", "⚙️ Настройки",
-]
-ADMIN_ONLY = set(ADMIN_MENU) - set(USER_MENU)
-MENU = set(ADMIN_MENU)
+# админские разделы спрятаны в «🛠 Управление», чтобы клавиатура была компактной
+ADMIN_SECTIONS = ["🔍 Группы", "🗂 Категории", "🔑 Ключевые слова", "🛡 Чёрный список", "👥 Пользователи", "⚙️ Настройки"]
+ADMIN_MENU = USER_MENU + ["🛠 Управление"]
+ADMIN_ONLY = set(ADMIN_SECTIONS) | {"🛠 Управление"}
+MENU = set(ADMIN_MENU) | set(ADMIN_SECTIONS)
 
 
 class Ask(StatesGroup):
