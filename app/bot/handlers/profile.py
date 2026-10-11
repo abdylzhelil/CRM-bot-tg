@@ -7,7 +7,7 @@ from sqlalchemy import delete, func, select
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import PLANS, Category, Delivery, Lead, User, UserCategory, UserNegative
-from app.services import geo, settings
+from app.services import geo, referrals, settings
 from app.services.distribute import is_paid, preview
 
 router = Router()
@@ -130,6 +130,17 @@ async def finish_onboarding(target, user: User) -> None:
         niches = (await s.scalars(select(Category.name).join(UserCategory, UserCategory.category_id == Category.id)
                                   .where(UserCategory.user_id == user.tg_id))).all()
         shown = await preview(s, user)
+    async with Session() as s:
+        referrer_id = await referrals.reward_signup(s, user)
+        days = await settings.get_int(s, "ref_days")
+    if referrer_id:
+        from app.bot import notify
+
+        await msg.answer(f"🎁 Вы пришли по приглашению — дарим +{days} дн. 💎 Полного тарифа!")
+        try:
+            await notify._bot.send_message(referrer_id, f"🤝 По вашей ссылке пришёл новый пользователь — вам +{days} дн. 💎!")
+        except Exception:
+            pass
     if not user.is_admin:
         from app.bot import notify
 
@@ -187,6 +198,7 @@ async def profile(target, user: User) -> None:
         [("⛔ Минус-слова", "pf:neg"), ("🌙 Тишина", "pf:quiet")],
         [("📋 Мой шаблон ответа", "pf:tpl"), ("💰 Мои цены", "pf:prices")],
         [("▶️ Возобновить" if user.paused else "⏸ Пауза", "pf:pause"), ("💎 Тариф", "pf:plan")],
+        [("🤝 Пригласить друзей", "pf:ref")],
     ]))
 
 
@@ -236,6 +248,22 @@ async def pf_ask(cb: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "pf:back")
 async def pf_back(cb: CallbackQuery, user: User) -> None:
     await profile(cb, user)
+
+
+@router.callback_query(F.data == "pf:ref")
+async def pf_ref(cb: CallbackQuery, user: User) -> None:
+    async with Session() as s:
+        days = await settings.get_int(s, "ref_days")
+        percent = await settings.get_int(s, "ref_percent")
+        total, done = await referrals.stats(s, user.tg_id)
+    link = referrals.link((await cb.bot.me()).username, user.tg_id)
+    await reply(cb, (
+        "🤝 <b>Пригласите друзей</b>\n\n"
+        f"Друг заходит по вашей ссылке и настраивает бота — вы оба получаете <b>+{days} дней 💎</b>. "
+        f"Дальше, когда он зарабатывает бонусные дни за свои группы, вам идёт ещё {percent}% от них.\n\n"
+        f"Ваша ссылка (нажмите — скопируется):\n<code>{link}</code>\n\n"
+        f"Приглашено: {total}, завершили настройку: {done}"
+    ), kb([[("◀️ Профиль", "pf:back")]]))
 
 
 @router.callback_query(F.data == "pf:plan")

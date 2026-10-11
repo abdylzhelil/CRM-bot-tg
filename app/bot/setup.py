@@ -3,7 +3,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 import logging
 
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
@@ -19,7 +19,9 @@ from app.bot.handlers import (
     accounts, blacklist, catalog, categories, clients, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
     submissions, users_admin,
 )
+from app.db import Session
 from app.models import User
+from app.services import referrals
 
 
 log = logging.getLogger(__name__)
@@ -33,6 +35,8 @@ HELP = (
     "📋 Шаблон — готовый текст ответа с вашими ценами (нажмите на текст — скопируется)\n"
     "✅ В работу — клиент попадает в 👥 Клиенты, там этапы сделки, заметки и напоминания\n"
     "⏰ Отложить · ❌ Отказ · 🚫 Спам — автор спама вам больше не придёт\n\n"
+    "🤝 <b>Приглашения</b> — 👤 Профиль → 🤝 Пригласить друзей: по +7 дней 💎 вам и другу.\n"
+    "📨 <b>Коллеге</b> — кнопка на карточке заявки: передать её коллеге в боте.\n\n"
     "🌐 <b>Каталог</b> — добавьте свою открытую группу или канал: за заявки из неё дарим дни 💎.\n\n"
     "<b>Настройки</b> — в 👤 Профиль: ниши, город, минус-слова, режим тишины, свой шаблон и цены, пауза.\n"
     "Заявка живёт минуты — отвечайте быстро 🔥\n\n"
@@ -96,8 +100,12 @@ base = Router()
 
 @base.message(CommandStart())
 @base.message(Command("menu"))
-async def start(m: Message, state: FSMContext, user: User) -> None:
+async def start(m: Message, state: FSMContext, user: User, command: CommandObject) -> None:
     await state.clear()
+    referrer = referrals.parse_payload(command.args)
+    if referrer and not user.onboarded:
+        async with Session() as s:
+            await referrals.attach(s, user, referrer)
     if not user.onboarded:
         return await profile.show_niches(m, user)
     await m.answer("👋 Выберите раздел:", reply_markup=menu_keyboard(user))

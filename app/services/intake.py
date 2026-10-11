@@ -16,14 +16,14 @@ log = logging.getLogger(__name__)
 
 
 async def handle(msg: Incoming) -> Lead | None:
-    bonus = None
+    bonuses = []
     async with Session() as s:
         lead = await process(s, msg)
         if lead:
             await distribute(s, lead)
-            bonus = await catalog.award_bonus(s, lead.group_id)
+            bonuses = await catalog.award_bonus(s, lead.group_id)
     if lead:
         await notify.flush_due()
-    if bonus:
-        await notify.bonus(*bonus)
+    for user_id, delta, kind in bonuses:
+        await notify.bonus(user_id, delta, kind)
     return lead

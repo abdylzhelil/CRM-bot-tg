@@ -42,7 +42,8 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
     d = delivery_id
     rows = [
         [reply, InlineKeyboardButton(text="📋 Шаблон", callback_data=f"lead:tpl:{d}")],
-        [InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{d}")],
+        [InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{d}"),
+         InlineKeyboardButton(text="📨 Коллеге", callback_data=f"lead:pass:{d}")],
         [
             InlineKeyboardButton(text="⏰ Отложить", callback_data=f"lead:later:{d}"),
             InlineKeyboardButton(text="❌ Отказ", callback_data=f"lead:reject:{d}"),
@@ -77,9 +78,14 @@ def lead_text(lead: Lead, category: str) -> str:
 async def send_delivery(d: Delivery, lead: Lead, user: User, category: str) -> bool:
     """Карточка заявки пользователю. False — пользователь недоступен (заблокировал бота)."""
     assert _bot, "notify.init(bot) не вызван"
+    text = lead_text(lead, category)
+    if d.from_user:
+        async with Session() as s:
+            sender = await s.get(User, d.from_user)
+        text = f"📨 Передал(а): {html.escape((sender.name if sender else '') or 'коллега')}\n" + text
     try:
         await _bot.send_message(
-            user.tg_id, lead_text(lead, category), reply_markup=lead_keyboard(lead, d.id, user.is_admin),
+            user.tg_id, text, reply_markup=lead_keyboard(lead, d.id, user.is_admin),
             disable_web_page_preview=True,
         )
         return True
@@ -135,11 +141,20 @@ async def send_group_card(g: Group) -> None:
     await _send(group_text(g), kb)
 
 
-async def bonus(user_id: int, days: int) -> None:
-    """Автору группы: из его группы пошли заявки — подарок."""
+def _span(delta) -> str:
+    hours = round(delta.total_seconds() / 3600)
+    return f"{hours // 24} дн." if hours % 24 == 0 else f"{hours} ч."
+
+
+async def bonus(user_id: int, delta, kind: str = "bonus") -> None:
+    """Бонус автору группы или его пригласившему."""
     assert _bot, "notify.init(bot) не вызван"
+    text = (
+        f"🎁 Заявки из добавленной вами группы приносят пользу — дарим +{_span(delta)} 💎 Полного тарифа. Спасибо!"
+        if kind == "bonus" else
+        f"🤝 Приглашённый вами пользователь получил бонус — вам +{_span(delta)} 💎 Полного тарифа."
+    )
     try:
-        await _bot.send_message(
-            user_id, f"🎁 Заявки из добавленной вами группы приносят пользу — дарим +{days} дн. 💎 Полного тарифа. Спасибо!")
+        await _bot.send_message(user_id, text)
     except Exception:
         log.info("не удалось сообщить о бонусе %s", user_id)

@@ -230,7 +230,14 @@ async def grp_city(s, m, d, text):
     return await catalog.grp_city(s, m, d, text)
 
 
+async def pass_to(s, m, d, text):
+    from app.bot.handlers import leads
+
+    return await leads.pass_to(s, m, d, text)
+
+
 HANDLERS = {
+    "pass_to": pass_to,
     "grp_link": grp_link,
     "grp_city": grp_city,
     "us_find": us_find,

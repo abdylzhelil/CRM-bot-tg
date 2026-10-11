@@ -10,8 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import FeedChat, Group, User, now
-from app.services import geo, settings
-from app.services.distribute import day_start, is_paid, root_category
+from app.services import geo, plans, referrals, settings
+from app.services.distribute import day_start, root_category
 
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 _PREFIX = re.compile(r"^(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/", re.I)
@@ -136,27 +136,28 @@ def bonus_days(g: Group, per: int) -> int:
     return g.bonus_rewarded // per if per > 0 else 0
 
 
-async def award_bonus(s: AsyncSession, group_id: int | None) -> tuple[int, int] | None:
-    """За каждые N заявок из группы пользователя — +1 день полного тарифа ему.
+async def award_bonus(s: AsyncSession, group_id: int | None) -> list[tuple[int, timedelta, str]]:
+    """За каждые N заявок из группы пользователя — +1 день полного тарифа ему (и % пригласившему).
 
-    Возвращает (id пользователя, дней) если бонус выдан.
+    Возвращает [(кому, сколько, "bonus"|"ref")] для уведомлений.
     """
     if not group_id:
-        return None
+        return []
     g = await s.get(Group, group_id)
     if g is None or not g.submitted_by or not g.catalog:
-        return None
+        return []
     per = await settings.get_int(s, "bonus_leads")
     days = (g.leads_count - g.bonus_rewarded) // per if per > 0 else 0
     if days <= 0:
-        return None
+        return []
     g.bonus_rewarded += days * per
     u = await s.get(User, g.submitted_by)
-    forever = u is not None and u.plan == "full" and u.plan_until is None
-    if u is None or u.is_admin or forever:
-        await s.commit()
-        return None
-    start = u.plan_until if is_paid(u) else now()
-    u.plan, u.plan_until = "full", start + timedelta(days=days)
+    out = []
+    earned = timedelta(days=days)
+    if u is not None and plans.extend(u, earned):
+        out.append((u.tg_id, earned, "bonus"))
+        shared = await referrals.share_of_bonus(s, u, earned)
+        if shared:
+            out.append((shared[0], shared[1], "ref"))
     await s.commit()
-    return g.submitted_by, days
+    return out

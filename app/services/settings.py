@@ -24,6 +24,9 @@ DEFAULTS: dict[str, str] = {
     "catalog_min_members": "50",
     "bonus_leads": "5",
     "channel_poll_min": "15",
+    "ref_days": "7",
+    "ref_percent": "20",
+    "pass_daily_limit": "10",
 }
 
 LABELS: dict[str, str] = {
@@ -45,6 +48,9 @@ LABELS: dict[str, str] = {
     "catalog_min_members": "Каталог: мин. участников в добавленной группе",
     "bonus_leads": "Заявок из группы пользователя за +1 день 💎",
     "channel_poll_min": "Опрос открытых каналов раз в N минут",
+    "ref_days": "Приглашение: дней 💎 обоим",
+    "ref_percent": "Приглашение: % от бонусных дней приглашённого",
+    "pass_daily_limit": "Передач заявок коллегам в сутки",
 }
 
 

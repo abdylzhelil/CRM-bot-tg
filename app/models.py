@@ -222,6 +222,8 @@ class User(Base):
     reply_template: Mapped[str] = mapped_column(Text, default="")  # свой шаблон ответа клиенту
     prices: Mapped[str] = mapped_column(Text, default="")
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)  # заблокировал бота или забанен
+    referred_by: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # кто пригласил
+    ref_rewarded: Mapped[bool] = mapped_column(Boolean, default=False)  # награда за приглашение выдана
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -255,6 +257,7 @@ class Delivery(Base):
     deliver_after: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    from_user: Mapped[int] = mapped_column(BigInteger, default=0)  # кто передал заявку коллеге
 
 
 class SpamVote(Base):
