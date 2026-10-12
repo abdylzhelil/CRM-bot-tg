@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy import select
 
-from app.bot.common import Ask, esc, split_words
+from app.bot.common import Ask, esc, kb, split_words
 from app.bot.handlers import clients as clients_h
 from app.db import Session
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Keyword, ScoutAccount, SearchQuery
@@ -46,7 +46,7 @@ async def setting(s, m, d, text):
     elif key != "mode" and not text.isdigit():
         return await m.answer("Нужно число") and False
     await settings.put(s, key, text)
-    await m.answer(f"✔ {settings.LABELS[key]}: {esc(text) or 'выключен'}")
+    await m.answer(f"✔ {settings.LABELS[key]}: {esc(text) or 'выключен'}", reply_markup=kb([[("⚙️ К настройкам", "st:menu")]]))
 
 
 async def client_field(s, m, d, text, field):

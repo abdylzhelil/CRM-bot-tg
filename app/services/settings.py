@@ -86,3 +86,36 @@ async def put(session: AsyncSession, key: str, value: str) -> None:
     else:
         session.add(Setting(key=key, value=value))
     await session.commit()
+
+
+# Разделы меню «⚙️ Настройки»: (значок, название, [ключи])
+SECTIONS: list[tuple[str, str, list[str]]] = [
+    ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "free_daily_limit", "free_delay_min"]),
+    ("📥", "Раздача заявок", ["max_recipients", "share_gap_min", "pass_daily_limit"]),
+    ("🎁", "Бонусы и приглашения", ["bonus_leads", "bonus_max_days", "ref_days", "ref_percent", "ref_limit"]),
+    ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
+                               "channel_poll_min", "channel_hour"]),
+    ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
+                        "rotation_days"]),
+    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban"]),
+    ("📊", "Отчёты", ["report_hour"]),
+]
+
+# Короткие подписи для кнопок (полные — в LABELS, их видно при редактировании)
+SHORT: dict[str, str] = {
+    "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽",
+    "free_daily_limit": "Бесплатный: заявок/день", "free_delay_min": "Бесплатный: задержка, мин",
+    "max_recipients": "Получателей на заявку", "share_gap_min": "Интервал очереди, мин",
+    "pass_daily_limit": "Передач коллегам/день",
+    "bonus_leads": "Заявок за +1 день", "bonus_max_days": "Потолок бонуса, дней",
+    "ref_days": "За друга, дней", "ref_percent": "% от бонусов друга", "ref_limit": "Макс. приглашений",
+    "submit_daily_limit": "Групп от человека/день", "catalog_min_members": "Мин. участников в группе",
+    "niche_daily_limit": "Своих ниш/день", "channel_poll_min": "Опрос каналов, мин",
+    "channel_hour": "Статистика в канал, час",
+    "mode": "Режим вступления", "min_members": "Мин. участников", "min_msgs_per_day": "Мин. сообщений/сутки",
+    "default_join_limit": "Вступлений/сутки", "search_interval_h": "Поиск раз в, ч",
+    "rotation_days": "Выход из тихих групп, дн",
+    "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
+    "dedupe_days": "Окно дублей, дн", "spam_votes_to_ban": "Голосов «спам» для бана",
+    "report_hour": "Час вечернего отчёта",
+}
