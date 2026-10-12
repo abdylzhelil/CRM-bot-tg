@@ -271,10 +271,12 @@ async def pf_plan(cb: CallbackQuery, user: User) -> None:
     async with Session() as s:
         line = await plan_line(s, user)
         admin = await s.scalar(select(User).where(User.is_admin, User.username != "").limit(1))
-        offers = await payments.packages(s) if payments.enabled() else []
+        offers = await payments.packages(s)  # цены видны и до подключения оплаты: их проверяет ЮKassa по скриншотам
     contact = f"@{admin.username}" if admin else "администратору бота"
     how = ("Выберите пакет — оплата прямо в Telegram, тариф продлится сразу." if offers
            else f"Подключить: напишите {contact}.")
+    if offers and not payments.enabled():
+        how += f"\n⏳ Онлайн-оплату подключаем. Пока можно оплатить, написав {contact}."
     rows = [[(f"💳 {d} дн. — {price} ₽", f"pay:{d}")] for d, price in offers]
     await reply(cb, (
         f"💎 <b>Тариф</b>\nСейчас: {line}\n\n"

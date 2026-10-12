@@ -99,3 +99,16 @@ async def test_public_stats_has_no_personal_data(maker, tgbot, monkeypatch):
     assert tgbot.texts("@my_stats")
     monkeypatch.setattr(config, "STATS_CHANNEL", "")
     assert not await public_stats.publish(tgbot)
+
+
+async def test_prices_visible_before_payments_connected(maker, tgbot, monkeypatch):
+    from app.bot.handlers import profile
+
+    await set_price(maker, 30, 990)
+    monkeypatch.setattr(config, "PAYMENT_PROVIDER_TOKEN", "")
+    cb = MagicMock()
+    cb.answer, cb.message.edit_text, cb.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    await profile.pf_plan(cb, SimpleNamespace(tg_id=50, plan="free", plan_until=None, is_admin=False))
+    shown = cb.answer.call_args
+    text, markup = shown.args[0], shown.kwargs["reply_markup"]
+    assert "990" in str(markup) and "подключаем" in text
