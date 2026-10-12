@@ -19,3 +19,9 @@ TG_API_HASH = os.getenv("TG_API_HASH", "")
 # Приём сообщений от бота модерации (tg-group-bot). Пусто — приём выключен.
 FEED_TOKEN = os.getenv("FEED_TOKEN", "")
 FEED_PORT = int(os.getenv("FEED_PORT") or 8090)
+
+# Онлайн-оплата через Telegram Payments (токен провайдера из @BotFather -> Payments). Пусто — оплата выключена.
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
+PAYMENT_CURRENCY = os.getenv("PAYMENT_CURRENCY", "RUB")
+# Публичный канал со статистикой (@имя или -100…); бот должен быть его администратором. Пусто — выключено.
+STATS_CHANNEL = os.getenv("STATS_CHANNEL", "")

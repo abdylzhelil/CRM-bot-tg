@@ -261,6 +261,19 @@ class Delivery(Base):
     from_user: Mapped[int] = mapped_column(BigInteger, default=0)  # кто передал заявку коллеге
 
 
+class Payment(Base):
+    """Оплата тарифа через Telegram Payments (сумма в копейках)."""
+
+    __tablename__ = "payments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    days: Mapped[int] = mapped_column(Integer)
+    amount: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(8), default="RUB")
+    charge_id: Mapped[str] = mapped_column(String(128), unique=True)  # id платежа Telegram — защита от повторов
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class SpamVote(Base):
     """Голоса «это спам» от пользователей; несколько голосов — автор в общий чёрный список."""
 

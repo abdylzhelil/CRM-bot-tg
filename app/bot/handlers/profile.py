@@ -7,7 +7,7 @@ from sqlalchemy import delete, func, select
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import PLANS, Category, Delivery, Lead, User, UserCategory, UserNegative
-from app.services import geo, referrals, settings
+from app.services import geo, payments, referrals, settings
 from app.services.distribute import is_paid, preview
 
 router = Router()
@@ -271,12 +271,17 @@ async def pf_plan(cb: CallbackQuery, user: User) -> None:
     async with Session() as s:
         line = await plan_line(s, user)
         admin = await s.scalar(select(User).where(User.is_admin, User.username != "").limit(1))
+        offers = await payments.packages(s) if payments.enabled() else []
     contact = f"@{admin.username}" if admin else "администратору бота"
+    how = ("Выберите пакет — оплата прямо в Telegram, тариф продлится сразу." if offers
+           else f"Подключить: напишите {contact}.")
+    rows = [[(f"💳 {d} дн. — {price} ₽", f"pay:{d}")] for d, price in offers]
     await reply(cb, (
         f"💎 <b>Тариф</b>\nСейчас: {line}\n\n"
         f"{PLANS['full']}: заявки приходят сразу (а заявка живёт минуты!), без дневного лимита, "
-        f"вы — среди первых получателей.\n\nПодключить: напишите {contact}."
-    ), kb([[("◀️ Профиль", "pf:back")]]))
+        f"вы — среди первых получателей.\n\n{how}\n"
+        "Бонусные дни можно заработать: 🌐 Каталог и 🤝 Приглашения."
+    ), kb(rows + [[("◀️ Профиль", "pf:back")]]))
 
 
 # ---------- ввод (вызывается из inputs.py) ----------

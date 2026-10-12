@@ -16,7 +16,7 @@ from app.bot import notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU
 from app.bot.handlers import (
-    accounts, blacklist, catalog, categories, clients, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
+    accounts, blacklist, catalog, categories, clients, payments, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
     submissions, users_admin,
 )
 from app.db import Session
@@ -216,7 +216,7 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     private = Router(name="private")
     private.message.filter(F.chat.type == "private")
     private.include_routers(
-        base, inputs.router, profile.router, catalog.router, leads.router, clients.router, stats.router, admin, fallback,
+        base, inputs.router, profile.router, catalog.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
     )
-    dp.include_routers(ingroup.router, private)
+    dp.include_routers(ingroup.router, payments.checkout, private)
     return bot, dp

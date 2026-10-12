@@ -15,7 +15,7 @@ async def settings_menu(target: Message | CallbackQuery) -> None:
     async with Session() as s:
         for key, label in settings.LABELS.items():
             rows.append([(f"{label}: {await settings.get(s, key) or 'выкл'}", f"st:{key}")])
-    rows.append([("👤 Аккаунты-разведчики", "acc:list")])
+    rows.append([("👤 Аккаунты-разведчики", "acc:list"), ("📢 Статистику в канал", "pub:now")])
     await reply(target, "⚙️ Настройки (нажмите, чтобы изменить):", kb(rows))
 
 
@@ -36,3 +36,12 @@ async def edit(cb: CallbackQuery, state: FSMContext) -> None:
         "report_hour": " (0–23, по времени TZ_NAME из .env)",
     }.get(key, " (число)")
     await ask(cb, state, "setting", f"{settings.LABELS[key]}{hint}:", key=key)
+
+
+@router.callback_query(F.data == "pub:now")
+async def publish_now(cb: CallbackQuery) -> None:
+    from app.services import public_stats
+
+    ok = await public_stats.publish(cb.bot)
+    await cb.answer("Опубликовано в канале" if ok else
+                    "Не вышло: задайте STATS_CHANNEL в .env и сделайте бота администратором канала", show_alert=True)
