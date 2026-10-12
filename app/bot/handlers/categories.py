@@ -5,8 +5,8 @@ from sqlalchemy import delete, select
 
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import Category, Keyword
-from app.services import rules
+from app.models import Category, Keyword, User
+from app.services import niches, rules
 
 router = Router()
 
@@ -14,8 +14,11 @@ router = Router()
 @router.message(F.text == "🗂 Категории")
 async def categories_menu(target: Message | CallbackQuery) -> None:
     async with Session() as s:
-        roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None)).order_by(Category.id))).all()
+        roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), ~Category.pending)
+                                 .order_by(Category.id))).all()
+        waiting = (await s.scalars(select(Category).where(Category.pending).order_by(Category.id))).all()
     rows = [[(("" if c.enabled else "⏸ ") + f"{c.emoji} {c.name}", f"cat:open:{c.id}")] for c in roots]
+    rows += [[(f"📌 На проверке: {c.name}", f"nc:open:{c.id}")] for c in waiting]
     rows.append([("➕ Новая категория", "cat:add:0")])
     await reply(target, "🗂 Категории:", kb(rows))
 
@@ -85,3 +88,37 @@ async def edit(cb: CallbackQuery, state: FSMContext) -> None:
         "city": "Город-фильтр (например, Махачкала) или «-», чтобы убрать:",
     }
     await ask(cb, state, f"cat_{field}", prompts[field], id=int(cid))
+
+
+# ---------- ниши от пользователей ----------
+async def proposal_card(s, cat: Category, user: User) -> tuple[str, object]:
+    words = (await s.scalars(select(Keyword.word).where(Keyword.category_id == cat.id))).all()
+    who = esc(user.name or str(user.tg_id)) + (f" (@{esc(user.username)})" if user.username else "")
+    text = f"<b>{esc(cat.name)}</b>\nСлова: {esc(', '.join(words))}\nПредложил(а): {who}"
+    return text, kb([[("✅ Добавить нишу", f"nc:ok:{cat.id}"), ("❌ Отклонить", f"nc:no:{cat.id}")]])
+
+
+@router.callback_query(F.data.regexp(r"^nc:(open|ok|no):\d+$"))
+async def decide_niche(cb: CallbackQuery) -> None:
+    _, action, cid = cb.data.split(":")
+    async with Session() as s:
+        cat = await s.get(Category, int(cid))
+        if cat is None or not cat.pending:
+            return await cb.answer("Уже обработано", show_alert=True)
+        author = await s.get(User, cat.proposed_by)
+        if action == "open":
+            text, markup = await proposal_card(s, cat, author or User(tg_id=cat.proposed_by))
+            return await reply(cb, text, markup)
+        name, owner = cat.name, cat.proposed_by
+        if action == "ok":
+            await niches.approve(s, cat)
+        else:
+            await niches.reject(s, cat)
+    await cb.message.edit_reply_markup(reply_markup=kb([[("✔ Добавлена" if action == "ok" else "✔ Отклонена", "noop")]]))
+    await cb.answer()
+    text = (f"✅ Ниша «{esc(name)}» добавлена и подключена вам: 🎯 Мои ниши." if action == "ok"
+            else f"❌ Ниша «{esc(name)}» не прошла проверку.")
+    try:
+        await cb.bot.send_message(owner, text)
+    except Exception:
+        pass

@@ -25,6 +25,7 @@ async def niches_keyboard(user_id: int, onboarding: bool):
         )).all()
         mine = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == user_id))).all())
     rows = [[(("✅ " if c.id in mine else "⬜ ") + f"{c.emoji} {c.name}", f"ob:cat:{c.id}")] for c in roots]
+    rows.append([("➕ Предложить свою нишу", "ob:propose")])
     rows.append([("Далее ➡️" if onboarding else "✔ Готово", "ob:done")])
     return kb(rows), len(mine)
 
@@ -72,6 +73,14 @@ async def toggle_niche(cb: CallbackQuery, user: User) -> None:
             s.add(UserCategory(user_id=user.tg_id, category_id=cid))
         await s.commit()
     await show_niches(cb, user)
+
+
+@router.callback_query(F.data == "ob:propose")
+async def propose_niche(cb: CallbackQuery, state: FSMContext) -> None:
+    await ask(cb, state, "niche_propose", (
+        "➕ <b>Своя ниша</b>\nНапишите название и через двоеточие слова, по которым искать заявки (минимум 3):\n\n"
+        "<code>Ремонт квартир: ремонт, отделка, плитка, натяжные потолки</code>\n\n"
+        "Администратор проверит, и ниша появится в списке (вам подключится сразу)."))
 
 
 @router.callback_query(F.data == "ob:done")

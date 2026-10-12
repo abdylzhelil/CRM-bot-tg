@@ -32,6 +32,7 @@ DEFAULTS: dict[str, str] = {
     "price_90": "0",
     "price_365": "0",
     "channel_hour": "12",
+    "niche_daily_limit": "3",
 }
 
 LABELS: dict[str, str] = {
@@ -61,6 +62,7 @@ LABELS: dict[str, str] = {
     "price_90": "Цена 💎 на 90 дней, ₽ (0 — не продавать)",
     "price_365": "Цена 💎 на 365 дней, ₽ (0 — не продавать)",
     "channel_hour": "Час публикации статистики в канале",
+    "niche_daily_limit": "Предложений новых ниш от пользователя в сутки",
 }
 
 

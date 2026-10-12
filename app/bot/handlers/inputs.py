@@ -236,7 +236,27 @@ async def pass_to(s, m, d, text):
     return await leads.pass_to(s, m, d, text)
 
 
+async def niche_propose(s, m, d, text):
+    from app.bot import notify
+    from app.bot.handlers.categories import proposal_card
+    from app.models import User
+    from app.services import niches
+
+    user = await s.get(User, m.from_user.id)
+    try:
+        cat = await niches.propose(s, user, text)
+    except niches.NicheError as e:
+        return await m.answer(f"⚠️ {esc(str(e))}") and False
+    if user.is_admin:
+        return await m.answer(f"✔ Ниша «{esc(cat.name)}» добавлена и подключена вам. "
+                              "Слова можно уточнить: 🛠 Управление → 🗂 Категории.")
+    await m.answer("✅ Отправлено администратору. Как только ниша появится в списке — напишу.")
+    body, markup = await proposal_card(s, cat, user)
+    await notify._send("📌 Новая ниша от пользователя:\n\n" + body, markup)
+
+
 HANDLERS = {
+    "niche_propose": niche_propose,
     "pass_to": pass_to,
     "grp_link": grp_link,
     "grp_city": grp_city,
