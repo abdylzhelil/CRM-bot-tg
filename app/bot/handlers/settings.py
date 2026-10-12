@@ -60,5 +60,13 @@ async def publish_now(cb: CallbackQuery) -> None:
     from app.services import public_stats
 
     ok = await public_stats.publish(cb.bot)
-    await cb.answer("Опубликовано в канале" if ok else
-                    "Не вышло: задайте STATS_CHANNEL в .env и сделайте бота администратором канала", show_alert=True)
+    from app import config
+
+    if ok:
+        return await cb.answer("Опубликовано в канале", show_alert=True)
+    if not config.STATS_CHANNEL:
+        return await cb.answer(
+            "Канал для статистики пока не подключён — это необязательная функция. "
+            "Чтобы включить: создайте канал, добавьте бота администратором и впишите STATS_CHANNEL=@имя_канала в файл .env.",
+            show_alert=True)
+    await cb.answer("Не получилось написать в канал. Проверьте, что бот добавлен в него администратором.", show_alert=True)

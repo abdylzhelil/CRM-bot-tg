@@ -92,7 +92,7 @@ async def put(session: AsyncSession, key: str, value: str) -> None:
 SECTIONS: list[tuple[str, str, list[str]]] = [
     ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "free_daily_limit", "free_delay_min"]),
     ("📥", "Раздача заявок", ["max_recipients", "share_gap_min", "pass_daily_limit"]),
-    ("🎁", "Бонусы и приглашения", ["bonus_leads", "bonus_max_days", "ref_days", "ref_percent", "ref_limit"]),
+    ("🎁", "Бонусы", ["bonus_leads", "bonus_max_days", "ref_days", "ref_percent", "ref_limit"]),
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
                                "channel_poll_min", "channel_hour"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
