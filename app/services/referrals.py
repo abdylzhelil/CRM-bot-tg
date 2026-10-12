@@ -40,11 +40,20 @@ async def reward_signup(s: AsyncSession, user: User) -> int | None:
     if referrer is None:
         await s.commit()
         return None
+    if await _rewarded_count(s, referrer.tg_id) > await settings.get_int(s, "ref_limit"):
+        await s.commit()  # лимит приглашений исчерпан — награды нет ни у кого (защита от фермы аккаунтов)
+        return None
     delta = timedelta(days=await settings.get_int(s, "ref_days"))
-    plans.extend(row, delta)
-    plans.extend(referrer, delta)
+    cap = timedelta(days=await settings.get_int(s, "bonus_max_days"))
+    plans.extend(row, delta, cap)
+    plans.extend(referrer, delta, cap)
     await s.commit()
     return referrer.tg_id
+
+
+async def _rewarded_count(s: AsyncSession, referrer_id: int) -> int:
+    return await s.scalar(select(func.count()).select_from(User).where(
+        User.referred_by == referrer_id, User.ref_rewarded)) or 0
 
 
 async def share_of_bonus(s: AsyncSession, user: User, earned: timedelta) -> tuple[int, timedelta] | None:
@@ -54,7 +63,8 @@ async def share_of_bonus(s: AsyncSession, user: User, earned: timedelta) -> tupl
     referrer = await s.get(User, user.referred_by)
     percent = await settings.get_int(s, "ref_percent")
     share = earned * percent / 100
-    if referrer is None or share <= timedelta(0) or not plans.extend(referrer, share):
+    cap = timedelta(days=await settings.get_int(s, "bonus_max_days"))
+    if referrer is None or share <= timedelta(0) or not plans.extend(referrer, share, cap):
         return None
     return referrer.tg_id, share
 

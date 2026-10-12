@@ -2,6 +2,7 @@
 import logging
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy import select
 
@@ -58,3 +59,33 @@ async def paid(m: Message, user: User) -> None:
     await notify._send(f"💰 Оплата: {esc(user.name or str(user.tg_id))} — {p.total_amount / 100:.0f} {p.currency}, +{days} дн.")
     if share:
         await notify.bonus(share[0], share[1], "ref")
+
+
+async def _contact(s) -> str:
+    admin = await s.scalar(select(User).where(User.is_admin, User.username != "").limit(1))
+    return f"@{admin.username}" if admin else "администратору бота"
+
+
+@router.message(Command("terms"))
+async def terms(m: Message) -> None:
+    async with Session() as s:
+        offers = await payments.packages(s)
+        contact = await _contact(s)
+    prices = "\n".join(f"• {d} дн. — {p} ₽" for d, p in offers) or "• цены уточняйте у администратора"
+    await m.answer(
+        "📄 <b>Условия</b>\n\n"
+        "Услуга: 💎 Полный тариф Telegram-бота «КлиентРадар» — заявки приходят сразу и без дневного лимита. "
+        "Это цифровая услуга: доступ включается автоматически сразу после оплаты на выбранный срок.\n\n"
+        f"Стоимость:\n{prices}\n\n"
+        "Бот присылает сообщения людей из открытых Telegram-групп; мы не гарантируем количество заявок и сделок.\n"
+        f"Вопросы по оплате и возврату: /paysupport или {contact}.")
+
+
+@router.message(Command("paysupport"))
+async def paysupport(m: Message) -> None:
+    async with Session() as s:
+        contact = await _contact(s)
+    await m.answer(
+        "💬 <b>Вопросы по оплате</b>\n\n"
+        f"Напишите {contact} и укажите свой ID: <code>{m.from_user.id}</code>, дату оплаты и суть вопроса. "
+        "Ответим как можно быстрее; возврат рассматривается по обращению.")

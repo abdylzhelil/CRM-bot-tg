@@ -33,6 +33,8 @@ DEFAULTS: dict[str, str] = {
     "price_365": "0",
     "channel_hour": "12",
     "niche_daily_limit": "3",
+    "ref_limit": "10",
+    "bonus_max_days": "180",
 }
 
 LABELS: dict[str, str] = {
@@ -63,6 +65,8 @@ LABELS: dict[str, str] = {
     "price_365": "Цена 💎 на 365 дней, ₽ (0 — не продавать)",
     "channel_hour": "Час публикации статистики в канале",
     "niche_daily_limit": "Предложений новых ниш от пользователя в сутки",
+    "ref_limit": "Сколько приглашений на человека награждается (всего)",
+    "bonus_max_days": "Потолок бонусных дней вперёд (бонусы и приглашения)",
 }
 
 

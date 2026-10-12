@@ -229,6 +229,7 @@ class User(Base):
     referred_by: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # кто пригласил
     ref_rewarded: Mapped[bool] = mapped_column(Boolean, default=False)  # награда за приглашение выдана
     level: Mapped[int] = mapped_column(Integer, default=0)  # уровень автора групп (services/levels.py)
+    expiry_notice: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, о котором уже напомнили
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
 

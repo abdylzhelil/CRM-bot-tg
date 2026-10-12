@@ -154,7 +154,7 @@ async def award_bonus(s: AsyncSession, group_id: int | None) -> list[tuple[int, 
     u = await s.get(User, g.submitted_by)
     out = []
     earned = timedelta(days=days)
-    if u is not None and plans.extend(u, earned):
+    if u is not None and plans.extend(u, earned, timedelta(days=await settings.get_int(s, "bonus_max_days"))):
         out.append((u.tg_id, earned, "bonus"))
         shared = await referrals.share_of_bonus(s, u, earned)
         if shared:

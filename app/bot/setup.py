@@ -49,6 +49,8 @@ USER_COMMANDS = [
     BotCommand(command="clients", description="Мои клиенты (CRM)"),
     BotCommand(command="catalog", description="Каталог групп и бонусы"),
     BotCommand(command="profile", description="Профиль и настройки"),
+    BotCommand(command="terms", description="Условия оплаты"),
+    BotCommand(command="paysupport", description="Вопросы по оплате"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="cancel", description="Отменить ввод"),
 ]

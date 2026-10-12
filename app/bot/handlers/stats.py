@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from app.bot.common import esc
 from app.bot.handlers.leads import category_name
 from app.db import Session
-from app.models import STAGE_NAMES, Client, Delivery, Group, Lead, User, now
+from app.models import STAGE_NAMES, Client, Delivery, Group, Lead, Payment, User, now
 
 router = Router()
 
@@ -66,7 +66,10 @@ async def users_line() -> str:
         total = await s.scalar(select(func.count()).select_from(User))
         active = await s.scalar(select(func.count()).select_from(User).where(User.last_seen > now() - timedelta(days=7)))
         paid = await s.scalar(select(func.count()).select_from(User).where(User.plan == "full"))
-    return f"👥 Пользователей: {total}, активных за неделю: {active}, на полном тарифе: {paid}"
+        pay = (await s.execute(select(func.count(), func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.created_at > now() - timedelta(days=30)))).one()
+    money = f"\n💰 Оплаты за 30 дней: {pay[0]} шт. на {pay[1] / 100:.0f} ₽" if pay[0] else ""
+    return f"👥 Пользователей: {total}, активных за неделю: {active}, на полном тарифе: {paid}{money}"
 
 
 @router.message(F.text == "📊 Статистика")

@@ -11,7 +11,7 @@ from app.db import Session, engine, init_db
 from app.migrate import migrate_data, upgrade_schema
 from app.feed import server as feed_server
 from app.models import Client, Reminder, now
-from app.services import public_stats, quiet, settings
+from app.services import backup, public_stats, quiet, settings
 from app.scout.channels import channel_loop
 from app.scout.joiner import join_loop, rotation_loop, search_loop
 from app.scout.manager import ScoutManager
@@ -69,6 +69,39 @@ async def delivery_loop() -> None:
         await asyncio.sleep(20)
 
 
+async def expiry_once() -> int:
+    """За 3 дня до конца 💎 напоминаем один раз (на каждый срок окончания). Возвращает число напоминаний."""
+    from datetime import timedelta
+
+    from app.models import User
+
+    sent = 0
+    async with Session() as s:
+        soon = (await s.scalars(select(User).where(
+            User.plan == "full", User.plan_until.is_not(None), ~User.blocked,
+            User.plan_until > now(), User.plan_until < now() + timedelta(days=3)))).all()
+        for u in soon:
+            if u.expiry_notice == u.plan_until:
+                continue
+            u.expiry_notice = u.plan_until
+            sent += 1
+            await send_to(u.tg_id, f"⏳ 💎 Полный тариф заканчивается {u.plan_until:%d.%m}. "
+                          "Продлите, чтобы заявки приходили сразу и без лимита.",
+                          notify.InlineKeyboardMarkup(inline_keyboard=[[
+                              notify.InlineKeyboardButton(text="💎 Продлить", callback_data="pf:plan")]]))
+        await s.commit()
+    return sent
+
+
+async def expiry_loop() -> None:
+    while True:
+        try:
+            await expiry_once()
+        except Exception:
+            log.exception("expiry_loop")
+        await asyncio.sleep(3600)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     if not config.BOT_TOKEN or not config.OWNER_IDS:
@@ -83,7 +116,8 @@ async def main() -> None:
     await manager.start()
     tasks = [
         asyncio.create_task(c)
-        for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot))
+        for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
+          backup.backup_loop(), expiry_loop())
     ]
     await setup_profile(bot)
     feed = await feed_server.start()
