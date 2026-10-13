@@ -3,8 +3,11 @@ from aiohttp import web
 from sqlalchemy import select
 
 from app.db import Session
-from app.models import STAGE_NAMES, Delivery, Lead, User
-from app.services import autosetup, crm, lead_actions, profile_edit, quiet, referrals, settings
+from app.models import STAGE_NAMES, Delivery, Group, Lead, User, UserCategory
+from app.services import (
+    ads, autosetup, catalog, crm, lead_actions, levels, payments, profile_edit, quiet, referrals, settings,
+)
+from app.services.distribute import is_paid
 from app.bot.handlers.leads import category_name
 from app.web.keys import USER_KEY
 
@@ -248,3 +251,126 @@ async def referrals_get(request: web.Request) -> web.Response:
         days, percent = await settings.get_int(s, "ref_days"), await settings.get_int(s, "ref_percent")
     share = f"https://t.me/share/url?url={quote(link, safe='')}&text={quote('КлиентРадар — заявки от клиентов из Telegram-групп. Заходи:')}"
     return web.json_response({"link": link, "share": share, "days": days, "percent": percent, "invited": total, "done": done})
+
+
+# ---------- каталог ----------
+def group_item(g, ad_active: bool) -> dict:
+    return {"title": g.title, "username": g.username, "kind": g.kind, "members": g.members, "city": g.city,
+            "leads": g.leads_count, "ad": ad_active, "link": f"https://t.me/{g.username}" if g.username else ""}
+
+
+async def catalog_get(request: web.Request) -> web.Response:
+    user: User = request[USER_KEY]
+    scope = request.query.get("scope", "mine")
+    if scope not in ("mine", "all"):
+        return err("bad_scope", "Неизвестный раздел каталога")
+    async with Session() as s:
+        roots = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == user.tg_id))).all())
+        groups = await catalog.browse(s, user, roots, scope == "all")
+        groups_n, leads_n = await levels.stats(s, user.tg_id)
+        per = await settings.get_int(s, "bonus_leads")
+    level = levels.level_of(groups_n, leads_n)
+    return web.json_response({
+        "groups": [group_item(g, ads.active(g)) for g in groups],
+        "level": {"name": levels.name(level), "leads": leads_n, "next": levels.next_step(level, leads_n)},
+        "bonus_leads": per,
+    })
+
+
+async def catalog_my(request: web.Request) -> web.Response:
+    user: User = request[USER_KEY]
+    async with Session() as s:
+        groups = (await s.scalars(select(Group).where(Group.submitted_by == user.tg_id, Group.status != "draft")
+                                  .order_by(Group.submitted_at.desc()).limit(30))).all()
+        per = await settings.get_int(s, "bonus_leads")
+        cost = await settings.get_int(s, "ad_leads")
+    items = [{
+        "id": g.id, "title": g.title, "kind": g.kind, "status": catalog_status(g.status), "in_catalog": bool(g.catalog),
+        "leads": g.leads_count, "bonus_days": catalog.bonus_days(g, per), "ad_active": ads.active(g),
+        "ad_until": g.ad_until.isoformat() if g.ad_until else None, "ad_pending": g.ad_pending,
+        "ad_available": ads.available(g),
+    } for g in groups]
+    return web.json_response({
+        "items": items, "bonus_days": sum(i["bonus_days"] for i in items), "level": levels.name(user.level),
+        "ad_cost": cost,
+    })
+
+
+def catalog_status(status: str) -> str:
+    from app.bot.handlers.catalog import STATUS
+
+    return STATUS.get(status, status)
+
+
+async def ad_order(request: web.Request) -> web.Response:
+    from app.bot import notify
+    from app.bot.handlers.submissions import ad_card
+
+    user: User = request[USER_KEY]
+    gid = _int(request.match_info["id"])
+    async with Session() as s:
+        try:
+            g = await ads.request(s, user.tg_id, gid)
+        except ads.AdError as e:
+            return err("invalid", str(e), 422)
+    text, markup = await ad_card(g, user)
+    await notify._send("📢 Заказ рекламы:\n\n" + text, markup)
+    return web.json_response({"ok": True, "message": "Заявка отправлена администратору"})
+
+
+async def rating_get(request: web.Request) -> web.Response:
+    user: User = request[USER_KEY]
+    everything = request.query.get("scope", "all") == "all" or not user.city
+    async with Session() as s:
+        board = await levels.rating(s, "" if everything else user.city, limit=0)
+    place = next((i for i, (u, _) in enumerate(board, 1) if u.tg_id == user.tg_id), None)
+    top = [{"place": i, "name": (u.name or "Аноним").split()[0][:20], "level": levels.name(levels.level_of(1, pts)),
+            "leads": pts, "me": u.tg_id == user.tg_id} for i, (u, pts) in enumerate(board[:10], 1)]
+    return web.json_response({"top": top, "place": place, "scope": "all" if everything else "city", "city": user.city})
+
+
+# ---------- тариф и оплата ----------
+async def plans_get(request: web.Request) -> web.Response:
+    from app.bot.handlers.payments import refund_line
+
+    user: User = request[USER_KEY]
+    async with Session() as s:
+        offers = await payments.packages(s)
+        refund_days = await settings.get_int(s, "refund_days")
+        row = await s.get(User, user.tg_id)
+        line = await autosetup.user_intro(s, row)
+    return web.json_response({
+        "intro": line, "paid": is_paid(row), "until": row.plan_until.isoformat() if row.plan_until else None,
+        "packages": [{"days": d, "price": p} for d, p in offers],
+        "can_pay": payments.links_enabled() and bool(offers) and not row.is_admin,
+        "refund": refund_line(refund_days),
+    })
+
+
+async def pay_create(request: web.Request) -> web.Response:
+    """Создаёт платёж ЮKassa (СБП или карта) и возвращает ссылку; тариф включится сам после оплаты (как в боте)."""
+    user: User = request[USER_KEY]
+    data = await read_json(request)
+    days = _int((data or {}).get("days"), 0)
+    if not payments.links_enabled():
+        return err("unavailable", "Оплата пока не подключена", 503)
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+        if row.is_admin:
+            return err("forbidden", "Администратору оплата не нужна", 403)
+        if days not in dict(await payments.packages(s)):
+            return err("invalid", "Этот пакет сейчас недоступен", 422)
+        try:
+            url = await payments.create_link(s, user.tg_id, days, f"https://t.me/{await bot_username()}")
+        except payments.RefundError as e:
+            return err("payment_failed", str(e), 502)
+    return web.json_response({"url": url})
+
+
+async def stats_get(request: web.Request) -> web.Response:
+    from app.bot.handlers.stats import user_stats
+
+    user: User = request[USER_KEY]
+    st = await user_stats(user.tg_id)
+    st["stages"] = [{"id": k, "title": STAGE_NAMES[k], "count": v} for k, v in st["stages"].items() if k in STAGE_NAMES]
+    return web.json_response(st)

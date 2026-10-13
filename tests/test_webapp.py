@@ -278,3 +278,100 @@ async def test_referrals_api(client, maker, monkeypatch):
     data = await (await client.get("/api/referrals", headers=tma(33))).json()
     assert data["link"].startswith("https://t.me/klientradarbot?start=") and data["invited"] == 2 and data["done"] == 1
     assert data["share"].startswith("https://t.me/share/url?url=") and data["days"] == 7
+
+
+# ---------- каталог, тариф, статистика ----------
+async def add_group(maker, tg_id, **kw):
+    from app.models import Group, now
+
+    async with maker() as s:
+        g = Group(tg_id=tg_id, title=kw.pop("title", f"Группа {tg_id}"), username=kw.pop("username", f"g{tg_id}"),
+                  members=kw.pop("members", 500), status=kw.pop("status", "joined"), catalog=kw.pop("catalog", True),
+                  submitted_at=now(), **kw)
+        s.add(g)
+        await s.commit()
+        return g.id
+
+
+async def test_catalog_browse_my_groups_and_rating(client, maker):
+    await make_user(maker, 40, city="")
+    await make_user(maker, 41)
+    await add_group(maker, 5001, title="Сайты Москва", leads_count=12, submitted_by=41)
+    await add_group(maker, 5002, title="Скрытая", catalog=False, submitted_by=41)
+    mine = await add_group(maker, 5003, title="Моя группа", leads_count=25, bonus_rewarded=25, submitted_by=40)
+    await add_group(maker, 5004, title="Черновик", status="draft", catalog=False, submitted_by=40)
+    data = await (await client.get("/api/catalog?scope=all", headers=tma(40))).json()
+    titles = [g["title"] for g in data["groups"]]
+    assert "Сайты Москва" in titles and "Моя группа" in titles and "Скрытая" not in titles
+    assert data["groups"][0]["link"].startswith("https://t.me/") and data["bonus_leads"] == 5
+    assert (await client.get("/api/catalog?scope=?", headers=tma(40))).status == 400
+    my = await (await client.get("/api/catalog/my", headers=tma(40))).json()
+    assert [g["title"] for g in my["items"]] == ["Моя группа"] and my["items"][0]["bonus_days"] == 5 and my["bonus_days"] == 5
+    assert my["items"][0]["id"] == mine
+    top = await (await client.get("/api/rating", headers=tma(40))).json()
+    assert top["top"][0]["leads"] == 25 and top["top"][0]["me"] and top["place"] == 1
+
+
+async def test_ad_order_checks_leads_and_notifies_admin(client, maker, tgbot):
+    from app.services import settings
+
+    await make_user(maker, 42)
+    await make_user(maker, 43)
+    poor = await add_group(maker, 5010, leads_count=3, submitted_by=42)
+    rich = await add_group(maker, 5011, leads_count=30, submitted_by=42)
+    r = await client.post(f"/api/catalog/ads/{poor}", headers=tma(42))
+    assert r.status == 422 and "Нужно" in (await r.json())["message"]
+    assert (await client.post(f"/api/catalog/ads/{rich}", headers=tma(43))).status == 422  # чужая группа
+    assert (await client.post(f"/api/catalog/ads/{rich}", headers=tma(42))).status == 200
+    assert any("Заказ рекламы" in t for t in tgbot.texts(ADMIN_ID))
+    assert (await client.post(f"/api/catalog/ads/{rich}", headers=tma(42))).status == 422  # уже отправлена
+    my = await (await client.get("/api/catalog/my", headers=tma(42))).json()
+    assert next(i for i in my["items"] if i["id"] == rich)["ad_pending"] is True
+
+
+async def test_plans_and_payment_link(client, maker, monkeypatch):
+    from sqlalchemy import select
+
+    from app.bot import notify
+    from app.models import PendingLink
+    from app.services import payments, settings
+    from types import SimpleNamespace
+
+    async def me():
+        return SimpleNamespace(username="klientradarbot")
+
+    monkeypatch.setattr(notify, "_bot", SimpleNamespace(me=me))
+    await make_user(maker, 44)
+    plans = await (await client.get("/api/plans", headers=tma(44))).json()
+    assert plans["packages"] == [] and plans["can_pay"] is False and "Бесплатный тариф" in plans["intro"]
+    async with maker() as s:
+        await settings.put(s, "price_30", "490")
+        await settings.put(s, "price_90", "1290")
+    assert (await client.post("/api/pay", json={"days": 30}, headers=tma(44))).status == 503  # ключей ЮKassa нет
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    sent = {}
+
+    async def fake_api(method, path, body=None, key=""):
+        sent.update(body=body)
+        return {"id": "yk-1", "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/1"}}
+
+    monkeypatch.setattr(payments, "_api", fake_api)
+    plans = await (await client.get("/api/plans", headers=tma(44))).json()
+    assert plans["packages"] == [{"days": 30, "price": 490}, {"days": 90, "price": 1290}] and plans["can_pay"] is True
+    assert (await client.post("/api/pay", json={"days": 365}, headers=tma(44))).status == 422  # пакет не продаётся
+    assert (await client.post("/api/pay", json={"days": "хак"}, headers=tma(44))).status == 422
+    r = await client.post("/api/pay", json={"days": 30}, headers=tma(44))
+    assert r.status == 200 and (await r.json())["url"] == "https://yoomoney.ru/pay/1"
+    assert sent["body"]["amount"]["value"] == "490.00" and sent["body"]["metadata"]["user_id"] == "44"  # цена и человек — с сервера
+    async with maker() as s:
+        assert (await s.scalar(select(PendingLink).where(PendingLink.yk_id == "yk-1"))).days == 30
+    assert (await client.post("/api/pay", json={"days": 30}, headers=tma(ADMIN_ID))).status == 403
+
+
+async def test_stats_api(client, maker):
+    await make_user(maker, 45)
+    await add_lead(maker, 45, status="taken", author=950)
+    await add_lead(maker, 45, author=951)
+    st = await (await client.get("/api/stats", headers=tma(45))).json()
+    assert st["total"] == 2 and st["taken"] == 1 and st["conversion"] == 50 and st["today"] == 2

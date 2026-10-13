@@ -40,7 +40,8 @@ async def build_report() -> str:
     return "\n".join(lines)
 
 
-async def user_report(user_id: int) -> str:
+async def user_stats(user_id: int) -> dict:
+    """Личные цифры пользователя (для бота и кабинета)."""
     async with Session() as s:
         day, week = now() - timedelta(days=1), now() - timedelta(days=7)
         mine = Delivery.user_id == user_id
@@ -52,12 +53,18 @@ async def user_report(user_id: int) -> str:
         )).all())
         done_sum = await s.scalar(select(func.coalesce(func.sum(Client.budget), 0)).where(
             Client.user_id == user_id, Client.stage == "done"))
-    conv = f"{taken / total * 100:.0f}%" if total else "—"
+    return {"today": today, "week": wk, "total": total, "taken": taken, "stages": stages, "done_sum": int(done_sum or 0),
+            "conversion": round(taken / total * 100) if total else None}
+
+
+async def user_report(user_id: int) -> str:
+    st = await user_stats(user_id)
+    conv = f"{st['conversion']}%" if st["conversion"] is not None else "—"
     return "\n".join([
-        f"📊 Ваши заявки: за сутки {today}, за неделю {wk}, всего {total}",
-        f"Взято в работу: {taken} (конверсия {conv})",
-        "Клиенты: " + (", ".join(f"{STAGE_NAMES[k]} {v}" for k, v in stages.items()) or "пока нет"),
-        f"💰 Сумма выполненных сделок: {done_sum}",
+        f"📊 Ваши заявки: за сутки {st['today']}, за неделю {st['week']}, всего {st['total']}",
+        f"Взято в работу: {st['taken']} (конверсия {conv})",
+        "Клиенты: " + (", ".join(f"{STAGE_NAMES[k]} {v}" for k, v in st["stages"].items()) or "пока нет"),
+        f"💰 Сумма выполненных сделок: {st['done_sum']}",
     ])
 
 

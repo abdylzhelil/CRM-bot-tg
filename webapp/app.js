@@ -24,6 +24,9 @@
     return n;
   }
 
+  // показать экран: пустые элементы (null/false) пропускаются, а не выводятся словом «null»
+  function show() { view.replaceChildren.apply(view, Array.prototype.slice.call(arguments).filter(Boolean)); }
+
   function api(method, path, body) {
     var opts = { method: method, headers: { Authorization: "tma " + (tg ? tg.initData : "") } };
     if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
@@ -72,7 +75,7 @@
     var children = [el("p", { text: e.message || "Не удалось загрузить" })];
     if (e.code === "unauthorized" || e.code === "not_registered") children.push(el("button", { class: "btn", text: "Закрыть и открыть бота", onclick: closeApp }));
     else children.push(el("button", { class: "btn ghost", text: "Повторить", onclick: load }));
-    view.replaceChildren(el("div", { class: "error" }, children));
+    show(el("div", { class: "error" }, children));
   }
 
   // ---------- Главная ----------
@@ -90,7 +93,7 @@
   }
   function renderHome() {
     var me = state.me;
-    view.replaceChildren(
+    show(
       el("h1", { text: "Привет, " + (me.name || "друг") + "!" }),
       el("div", {}, [roleBadge(me)]),
       el("p", { class: "muted", text: planLine(me) }),
@@ -102,7 +105,13 @@
         stat(me.stats.taken, "в работе", function () { state.leadsStatus = "taken"; go("leads"); }),
         stat(me.stats.clients, "клиентов")
       ]),
-      el("button", { class: "btn ghost", text: "🤝 Пригласить друзей (+дни 💎)", onclick: renderFriends }),
+      el("h2", { text: "Ещё" }),
+      el("div", { class: "grid" }, [
+        el("button", { class: "btn ghost", text: "🌐 Каталог", onclick: renderCatalog }),
+        el("button", { class: "btn ghost", text: "💎 Тариф", onclick: renderPlans }),
+        el("button", { class: "btn ghost", text: "📊 Статистика", onclick: renderStats }),
+        el("button", { class: "btn ghost", text: "🤝 Друзья (+дни)", onclick: renderFriends })
+      ]),
       el("button", { class: "btn ghost", text: "Вернуться в чат", onclick: closeApp })
     );
   }
@@ -116,7 +125,7 @@
     var tabs = el("div", { class: "tabs" }, TABS.map(function (t) {
       return el("button", { class: "chip" + (t[0] === state.leadsStatus ? " on" : ""), text: t[1], onclick: function () { state.leadsStatus = t[0]; renderLeads(); } });
     }));
-    view.replaceChildren(el("h1", { text: "Заявки" }), tabs, list, more);
+    show(el("h1", { text: "Заявки" }), tabs, list, more);
     var lastId = 0;
     function fetchPage() {
       var q = "/api/leads?status=" + state.leadsStatus + (lastId ? "&before=" + lastId : "");
@@ -189,7 +198,7 @@
   }
 
   function renderProfile() {
-    view.replaceChildren(el("h1", { text: "Профиль" }), el("p", { class: "muted center-block", text: "Загрузка…" }));
+    show(el("h1", { text: "Профиль" }), el("p", { class: "muted center-block", text: "Загрузка…" }));
     Promise.all([api("GET", "/api/profile"), api("GET", "/api/autosetup")]).then(function (res) {
       buildProfile(res[0], res[1]);
     }).catch(showError);
@@ -239,7 +248,7 @@
       autoBox = el("div", { class: "card" }, body);
     }
 
-    view.replaceChildren(
+    show(
       el("h1", { text: "Профиль" }),
       autoBox,
       el("h2", { text: "Ниши" }), chips,
@@ -269,11 +278,11 @@
   function renderClients() {
     var list = el("div", {});
     var more = el("button", { class: "btn ghost", text: "Показать ещё", hidden: "" });
-    var chipsBox = el("div", { class: "tabs" });
+    var chipsBox = el("div", { class: "tabs scroll" });
     var search = el("input", { type: "text", value: crmState.q, placeholder: "🔎 Имя, @username или телефон", maxlength: "64" });
     search.addEventListener("keydown", function (e) { if (e.key === "Enter") { crmState.q = search.value.trim(); renderClients(); } });
     var addBtn = el("button", { class: "btn small", text: "➕ Добавить клиента", onclick: renderClientForm });
-    view.replaceChildren(el("h1", { text: "Клиенты" }), search, chipsBox, list, more, el("div", { class: "row" }, [addBtn]));
+    show(el("h1", { text: "Клиенты" }), search, chipsBox, list, more, el("div", { class: "row" }, [addBtn]));
     var offset = 0;
     function page() {
       more.disabled = true;
@@ -311,12 +320,12 @@
         .then(function (c) { toast("Клиент добавлен"); renderClient(c.id); })
         .catch(function (e) { toast(e.message, true); ok.disabled = false; });
     } });
-    view.replaceChildren(el("h1", { text: "Новый клиент" }), field("Имя", name), field("@username", user), field("Телефон", phone), ok,
+    show(el("h1", { text: "Новый клиент" }), field("Имя", name), field("@username", user), field("Телефон", phone), ok,
       el("button", { class: "btn ghost", text: "Назад", onclick: renderClients }));
   }
 
   function renderClient(id) {
-    view.replaceChildren(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    show(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/clients/" + id).then(function (c) { buildClient(c); }).catch(function (e) { toast(e.message, true); renderClients(); });
   }
 
@@ -332,7 +341,7 @@
     var phone = el("input", { type: "text", maxlength: "32", value: c.phone, placeholder: "Телефон" });
     var note = el("textarea", { rows: "2", maxlength: "1000", placeholder: "Новая заметка" });
     var rem = [1, 3, 7].map(function (d) { return el("button", { class: "btn small ghost", text: "⏰ " + d + " дн", onclick: function () { patch({ remind_days: d }, "Напоминание поставлено"); } }); });
-    view.replaceChildren(
+    show(
       el("h1", { text: c.name || (c.username ? "@" + c.username : "Клиент") }),
       el("div", { class: "muted", text: [c.username ? "@" + c.username : "", c.source, c.category].filter(Boolean).join(" · ") }),
       el("h2", { text: "Этап" }), stageChips,
@@ -356,11 +365,118 @@
     );
   }
 
+  // ---------- Каталог ----------
+  var catTab = "mine";
+
+  function openLink(url) {
+    if (tg && url.indexOf("https://t.me/") === 0) tg.openTelegramLink(url);
+    else if (tg && tg.openLink) tg.openLink(url);
+    else window.open(url, "_blank");
+  }
+
+  function groupCard(g) {
+    var kind = g.kind === "channel" ? "📢 канал" : "👥 группа";
+    var sub = [kind, g.members + " уч.", g.city, g.leads ? "заявок: " + g.leads : ""].filter(Boolean).join(" · ");
+    return el("div", { class: "card" + (g.link ? " tap" : ""), onclick: g.link ? function () { openLink(g.link); } : null }, [
+      el("b", { text: (g.ad ? "📢 " : "") + g.title }), el("div", { class: "muted", text: sub })
+    ]);
+  }
+
+  function renderCatalog() {
+    var body = el("div", {});
+    var tabs = el("div", { class: "tabs" }, [["mine", "По моим нишам"], ["all", "Весь каталог"], ["my", "Мои группы"], ["top", "🏆 Рейтинг"]].map(function (x) {
+      return el("button", { class: "chip" + (x[0] === catTab ? " on" : ""), text: x[1], onclick: function () { catTab = x[0]; renderCatalog(); } });
+    }));
+    show(el("h1", { text: "🌐 Каталог" }), tabs, body, backHome());
+    if (catTab === "mine" || catTab === "all") {
+      api("GET", "/api/catalog?scope=" + catTab).then(function (r) {
+        body.appendChild(el("div", { class: "card" }, [
+          el("p", { text: "Ваш уровень: " + r.level.name + " (заявок из ваших групп: " + r.level.leads + ")" }),
+          el("p", { class: "muted", text: r.level.next }),
+          el("p", { class: "muted", text: "🎁 За каждые " + r.bonus_leads + " заявок из вашей группы — +1 день 💎." })
+        ]));
+        if (!r.groups.length) body.appendChild(el("p", { class: "muted center-block", text: "Пока пусто. Станьте первым — добавьте группу в боте." }));
+        r.groups.forEach(function (g) { body.appendChild(groupCard(g)); });
+        body.appendChild(el("button", { class: "btn ghost", text: "➕ Добавить группу (в боте)", onclick: closeApp }));
+      }).catch(function (e) { toast(e.message, true); });
+    } else if (catTab === "my") {
+      api("GET", "/api/catalog/my").then(function (r) {
+        body.appendChild(el("div", { class: "muted", text: "🎁 Получено бонусных дней: " + r.bonus_days + " · Уровень: " + r.level }));
+        if (!r.items.length) body.appendChild(el("p", { class: "muted center-block", text: "Вы пока не добавляли группы. Добавить: в боте 🌐 Каталог → ➕." }));
+        r.items.forEach(function (g) {
+          var parts = [el("b", { text: g.title }), el("div", { class: "muted", text: g.status + (g.in_catalog ? " · заявок: " + g.leads : "") + (g.bonus_days ? " · бонус: +" + g.bonus_days + " дн." : "") })];
+          if (g.ad_active) parts.push(el("div", { class: "muted", text: "📢 Реклама идёт до " + new Date(g.ad_until).toLocaleDateString("ru-RU") }));
+          if (g.in_catalog && r.ad_cost > 0) {
+            parts.push(g.ad_pending ? el("div", { class: "muted", text: "⏳ Заявка на рекламу ждёт ответа" })
+              : el("button", { class: "btn small", text: "📢 Реклама (" + r.ad_cost + " заявок, доступно " + g.ad_available + ")", onclick: function () {
+                api("POST", "/api/catalog/ads/" + g.id).then(function (x) { toast(x.message); renderCatalog(); }).catch(function (e) { toast(e.message, true); });
+              } }));
+          }
+          body.appendChild(el("div", { class: "card" }, parts));
+        });
+      }).catch(function (e) { toast(e.message, true); });
+    } else {
+      api("GET", "/api/rating?scope=all").then(function (r) {
+        if (!r.top.length) body.appendChild(el("p", { class: "muted center-block", text: "Пока никого — станьте первым!" }));
+        var medals = ["🥇", "🥈", "🥉"];
+        r.top.forEach(function (x) {
+          body.appendChild(el("div", { class: "card" + (x.me ? " me" : "") }, [
+            el("b", { text: (medals[x.place - 1] || x.place + ".") + " " + x.name + (x.me ? " ← вы" : "") }),
+            el("div", { class: "muted", text: x.level + " · заявок: " + x.leads })
+          ]));
+        });
+        if (r.place && r.place > 10) body.appendChild(el("p", { class: "muted", text: "Ваше место: " + r.place }));
+      }).catch(function (e) { toast(e.message, true); });
+    }
+  }
+
+  function backHome() { return el("button", { class: "btn ghost", text: "◀️ Назад", onclick: function () { go("home"); } }); }
+
+  // ---------- Тариф и оплата ----------
+  function renderPlans() {
+    show(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/plans").then(function (r) {
+      var parts = [el("h1", { text: "💎 Тариф" }), el("div", { class: "card" }, [
+        el("p", { text: r.intro }),
+        r.paid ? el("p", { class: "muted", text: r.until ? "Действует до " + new Date(r.until).toLocaleDateString("ru-RU") : "Бессрочно" }) : null
+      ])];
+      if (r.packages.length && r.can_pay) {
+        parts.push(el("h2", { text: "Продлить или купить" }));
+        r.packages.forEach(function (p) {
+          parts.push(el("button", { class: "btn", text: p.days + " дней — " + p.price.toLocaleString("ru-RU") + " ₽", onclick: function () {
+            api("POST", "/api/pay", { days: p.days }).then(function (x) { openLink(x.url); toast("Откроется страница оплаты (СБП или карта). Тариф включится сам в течение минуты."); })
+              .catch(function (e) { toast(e.message, true); });
+          } }));
+        });
+      } else if (!r.paid) {
+        parts.push(el("p", { class: "muted", text: "Оплата пока не подключена. Больше заявок можно получить за приглашения друзей и добавленные группы." }));
+      }
+      parts.push(el("p", { class: "muted", text: r.refund }), backHome());
+      show.apply(null, parts);
+    }).catch(function (e) { toast(e.message, true); go("home"); });
+  }
+
+  // ---------- Статистика ----------
+  function renderStats() {
+    show(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/stats").then(function (r) {
+      show(
+        el("h1", { text: "📊 Статистика" }),
+        el("div", { class: "grid" }, [stat(r.today, "за сутки"), stat(r.week, "за неделю"), stat(r.total, "всего"), stat(r.taken, "в работу")]),
+        el("p", { class: "muted", text: "Конверсия в работу: " + (r.conversion === null ? "—" : r.conversion + "%") }),
+        el("h2", { text: "Клиенты по этапам" }),
+        r.stages.length ? el("div", {}, r.stages.map(function (x) { return el("div", { class: "card" }, [el("b", { text: String(x.count) + " · " }), el("span", { text: x.title })]); })) : el("p", { class: "muted", text: "Пока нет." }),
+        el("p", { text: "💰 Сумма выполненных сделок: " + r.done_sum.toLocaleString("ru-RU") + " ₽" }),
+        backHome()
+      );
+    }).catch(function (e) { toast(e.message, true); go("home"); });
+  }
+
   // ---------- Друзья ----------
   function renderFriends() {
-    view.replaceChildren(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    show(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/referrals").then(function (r) {
-      view.replaceChildren(
+      show(
         el("h1", { text: "🤝 Пригласить друзей" }),
         el("div", { class: "card" }, [
           el("p", { text: "Друг заходит по вашей ссылке и настраивает бота — вы оба получаете +" + r.days + " дней 💎." }),
@@ -378,7 +494,7 @@
 
   // ---------- каркас ----------
   function renderSoon(title) {
-    view.replaceChildren(
+    show(
       el("h1", { text: title }),
       el("div", { class: "card" }, [
         el("p", { text: "Этот раздел кабинета появится в ближайших обновлениях." }),
@@ -407,7 +523,7 @@
   }
 
   function load() {
-    view.replaceChildren(el("p", { class: "muted center", text: "Загрузка…" }));
+    show(el("p", { class: "muted center", text: "Загрузка…" }));
     api("GET", "/api/me").then(function (me) { state.me = me; render(); }).catch(showError);
   }
   load();
