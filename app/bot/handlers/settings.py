@@ -10,7 +10,7 @@ from app import config
 from app.bot.common import Ask, ask, esc, kb, reply
 from app.db import Session
 from app.models import Delivery, Lead, Payment, ScoutAccount, User, now
-from app.services import settings
+from app.services import autosetup, settings
 
 router = Router()
 
@@ -19,7 +19,7 @@ router = Router()
 async def settings_menu(target: Message | CallbackQuery) -> None:
     """Главная страница: разделы по два в ряд, чтобы не было длинной простыни."""
     buttons = [(f"{icon} {title}", f"st:sec:{i}") for i, (icon, title, _) in enumerate(settings.SECTIONS)]
-    rows = [[("📋 Состояние бота", "st:status")], [("🎛 Пресеты", "st:presets"), ("🔎 Найти настройку", "st:find")]]
+    rows = [[("⚡ Автонастройка бота", "st:auto")], [("📋 Состояние бота", "st:status")], [("🎛 Пресеты", "st:presets"), ("🔎 Найти настройку", "st:find")]]
     rows += [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
     rows.append([("👤 Аккаунты-разведчики", "acc:list")])
     rows.append([("📢 Статистику в канал", "pub:now")])
@@ -89,6 +89,24 @@ async def status_text() -> str:
 @router.callback_query(F.data == "st:status")
 async def status(cb: CallbackQuery) -> None:
     await reply(cb, await status_text(), kb([[("🔄 Обновить", "st:status")], [("◀️ Все настройки", "st:menu")]]))
+
+
+@router.callback_query(F.data == "st:auto")
+async def auto(cb: CallbackQuery) -> None:
+    """Автонастройка бота: проверка готовности + быстрый путь к пресету «Запуск»; ничего не меняется без вашего подтверждения."""
+    async with Session() as s:
+        ok, bad = await autosetup.admin_checklist(s)
+        diff = await settings.preset_diff(s, "launch")
+    text = "⚡ <b>Автонастройка бота</b>\n"
+    if bad:
+        text += "\n<b>Исправить:</b>\n" + "\n".join(f"⚠️ {esc(x)}" for x in bad)
+    text += "\n\n<b>В порядке:</b>\n" + "\n".join(f"✅ {esc(x)}" for x in ok)
+    rows = []
+    if diff:
+        text += f"\n\n🚀 Рекомендуемые значения для запуска отличаются в {len(diff)} настройках — посмотрите и примените."
+        rows.append([("🚀 Показать пресет «Запуск»", "st:pre:launch")])
+    rows += [[("🙋 Моя автонастройка", "pf:auto")], [("◀️ Все настройки", "st:menu")]]
+    await reply(cb, text, kb(rows))
 
 
 @router.callback_query(F.data == "st:presets")

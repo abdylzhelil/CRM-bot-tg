@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import PLANS, Category, Delivery, Lead, User, UserCategory, UserNegative
-from app.services import geo, payments, referrals, settings
+from app.services import autosetup, geo, payments, referrals, settings
 from app.services.distribute import is_paid, preview
 
 router = Router()
@@ -229,8 +229,38 @@ async def profile(target, user: User) -> None:
         [("⛔ Минус-слова", "pf:neg"), ("🌙 Тишина", "pf:quiet")],
         [("📋 Мой шаблон ответа", "pf:tpl"), ("💰 Мои цены", "pf:prices")],
         [("▶️ Возобновить" if user.paused else "⏸ Пауза", "pf:pause"), ("💎 Тариф", "pf:plan")],
-        [("🤝 Пригласить друзей", "pf:ref")],
+        [("⚡ Автонастройка", "pf:auto"), ("🤝 Пригласить друзей", "pf:ref")],
     ]))
+
+
+@router.callback_query(F.data == "pf:auto")
+async def pf_auto(cb: CallbackQuery, user: User) -> None:
+    """Автонастройка: показываем, что будет заполнено (только пустое) и что надо выбрать самому."""
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+        intro = await autosetup.user_intro(s, row)
+        plan = await autosetup.user_plan(s, row)
+        missing = await autosetup.user_missing(s, row)
+    text = f"⚡ <b>Автонастройка</b>\n{intro}\n\n"
+    if plan:
+        text += "Заполню то, что у вас пусто:\n" + "\n".join(f"• {esc(k)}: {esc(v)}" for k, v in plan)
+    else:
+        text += "Всё основное уже настроено 👍"
+    if missing:
+        text += "\n\nОсталось сделать самому:\n" + "\n".join(f"• {esc(m)}" for m in missing)
+    rows = [[("✅ Применить", "pf:autook")]] if plan else []
+    if user.is_admin:
+        rows.append([("🛠 Автонастройка бота", "st:auto")])
+    rows.append([("◀️ Профиль", "pf:back")])
+    await reply(cb, text, kb(rows))
+
+
+@router.callback_query(F.data == "pf:autook")
+async def pf_auto_apply(cb: CallbackQuery, user: User) -> None:
+    async with Session() as s:
+        n = await autosetup.user_apply(s, user)
+    await cb.answer(f"Готово, настроено пунктов: {n}", show_alert=True)
+    await profile(cb, user)
 
 
 @router.callback_query(F.data == "pf:niches")

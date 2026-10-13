@@ -26,7 +26,7 @@ async def test_main_and_section_pages(maker):
     c = cb("st:menu")
     await sh.back(c)
     main = buttons(c)
-    assert len(main) <= 13 and "💎 Тарифы и цены" in main  # раньше было ~28 кнопок в столбик
+    assert len(main) <= 14 and "💎 Тарифы и цены" in main  # раньше было ~28 кнопок в столбик
     c = cb("st:sec:0")
     await sh.section(c)
     page = buttons(c)

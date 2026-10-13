@@ -228,3 +228,33 @@ async def test_settings_status_presets_and_search(app_bot, maker):
     await dp.feed_update(bot, text_update(ADMIN_ID, "возврат"))
     assert "Нашлось" in api.texts(ADMIN_ID)[-1]
     assert st.search("возврат") == ["refund_days"] or "refund_days" in st.search("возврат")
+
+
+async def test_autosetup_for_user_and_admin(app_bot, maker):
+    from sqlalchemy import select
+
+    from app.models import UserNegative
+    from app.services import autosetup
+
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(504, "/start"))
+    await pass_captcha(bot, dp, 504)
+    async with maker() as s:
+        u = await s.get(DbUser, 504)
+        u.onboarded, u.paused = True, True
+        await s.commit()
+    await dp.feed_update(bot, cb_update(504, "pf:auto"))
+    assert "Бесплатный тариф" in api.texts(504)[-1] and "23-8" in api.texts(504)[-1]
+    await dp.feed_update(bot, cb_update(504, "pf:autook"))
+    async with maker() as s:
+        u = await s.get(DbUser, 504)
+        assert u.quiet_hours == "23-8" and not u.paused
+        assert len((await s.scalars(select(UserNegative).where(UserNegative.user_id == 504))).all()) == 4
+    await dp.feed_update(bot, cb_update(504, "pf:autook"))  # повтор ничего не дублирует
+    async with maker() as s:
+        assert len((await s.scalars(select(UserNegative).where(UserNegative.user_id == 504))).all()) == 4
+        assert await autosetup.user_plan(s, await s.get(DbUser, 504)) == []
+    await dp.feed_update(bot, cb_update(504, "st:auto"))  # чужой не открывает автонастройку бота
+    assert not any("Автонастройка бота" in t for t in api.texts(504))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:auto"))
+    assert "Автонастройка бота" in api.texts(ADMIN_ID)[-1]
