@@ -29,7 +29,7 @@
   группы в папках «🔍 Разведка», звук выключен; ротация.
 - Меню: сворачиваемая клавиатура, админские разделы в «🛠 Управление», команды в кнопке «Меню», фолбэк на меню.
 - Обновление базы без потери данных: `app/migrate.py` (добавляет новые колонки сам).
-- Тесты: `pytest` (135), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
+- Тесты: `pytest` (143), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
 
 - Этап 2 сделан: 🌐 Каталог (`handlers/catalog.py`, `submissions.py`, `services/catalog.py`): ссылка → проверка через Bot API →
   ниша → город → одобрение админом (🔍 Группы → 📝 От пользователей) → каталог. Бонус +1 день 💎 за каждые N (`bonus_leads`)
@@ -89,10 +89,11 @@
 
 - `/deleteme` (`services/erase.py`), «сторож» (`services/heartbeat.py`, `HEARTBEAT_URL`), воронка в 📊 Статистике (`stats.funnel_text`), памятка после регистрации (`profile.finish_onboarding`).
 
-- ИИ: `services/ai.py` (Claude через `anthropic` SDK, `AsyncAnthropic`, `client.beta.messages.create` с `fallbacks="default"` для opus/sonnet), кнопка `lead:ai:<id>`
-  (`leads.send_ai_draft`), таблица `ai_calls`, настройки `ai_*`. Без `ANTHROPIC_API_KEY` кнопки нет. В запрос не передаём данные автора заявки.
+- Черновик ответа: по умолчанию БЕСПЛАТНЫЙ по правилам (`services/draft.py`), кнопка `lead:ai:<id>` всегда (`leads.send_ai_draft`). Claude (`services/ai.py`, `anthropic` SDK,
+  `AsyncAnthropic`, `fallbacks="default"` для opus/sonnet, таблица `ai_calls`, настройки `ai_*`) ВЫКЛЮЧЕН по умолчанию (`ai_enabled`=0): владелец боится расходов; включается
+  ключом `ANTHROPIC_API_KEY` + `ai_enabled=1`. В запрос не передаём данные автора заявки.
 
 ## Дальше по плану
-1. ИИ на Claude (классификация, температура, черновики ответов) — в конце, нужен ключ Claude API.
+1. Claude для черновиков/классификации заявок — код есть, выключен; включать, когда владелец решит тратить деньги (нужен ключ API).
 2. Админам групп: сначала оплата не деньгами (лицензия модерации, реклама, дни), потом внутренний баланс,
    деньги — только самозанятым, когда будет оборот.

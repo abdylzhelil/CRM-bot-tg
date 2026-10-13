@@ -7,8 +7,8 @@ from app.bot import notify
 from app.bot.common import ask, esc, kb
 from app.db import Session
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Delivery, Group, Lead, SpamVote, User, now
-from app.services import ai, referrals, settings, templates
-from app.services.distribute import day_start
+from app.services import ai, draft, referrals, settings, templates
+from app.services.distribute import day_start, root_category
 
 router = Router()
 STATUS_NOTES = {"later": ("postponed", "Отложено"), "reject": ("rejected", "Отказ")}
@@ -172,16 +172,21 @@ async def pass_to(s, m: Message, d, text):
 
 
 async def send_ai_draft(cb: CallbackQuery, s, lead: Lead, user: User, delivery_id: int, client=None) -> None:
-    """✨ Черновик ответа от ИИ (в лимитах суточной квоты)."""
-    if not ai.enabled():
-        return await cb.answer("ИИ пока не подключён", show_alert=True)
-    await cb.answer("✨ Пишу черновик…")
-    try:
-        text = await ai.draft_reply(s, user, lead, await category_name(s, lead.category_id),
-                                    user.reply_template, user.prices, client=client)
-    except ai.AiError as e:
-        return await cb.message.answer(f"✨ {esc(str(e))}")
+    """✨ Черновик ответа: простой по правилам (бесплатно) или от Claude, если владелец включил (ai_enabled=1 и ключ в .env)."""
     contact = f"https://t.me/{lead.username}" if lead.username else f"tg://user?id={lead.author_id}"
+    use_claude = ai.enabled() and await settings.get(s, "ai_enabled") == "1"
+    if use_claude:
+        await cb.answer("✨ Пишу черновик…")
+        try:
+            text = await ai.draft_reply(s, user, lead, await category_name(s, lead.category_id),
+                                        user.reply_template, user.prices, client=client)
+        except ai.AiError as e:
+            return await cb.message.answer(f"✨ {esc(str(e))}")
+    else:
+        root_id = await root_category(s, lead.category_id)
+        root = (await s.get(Category, root_id)).name if root_id else ""
+        text = draft.build(lead.text, lead.name, root, user.reply_template, user.prices)
+        await cb.answer()
     await cb.message.answer(
         f"✨ <b>Черновик ответа</b> (нажмите на текст — скопируется, поправьте под себя):\n\n<code>{esc(text)}</code>",
         reply_markup=kb([[("🔄 Другой вариант", f"lead:ai:{delivery_id}"), ("✍️ Написать клиенту", f"url:{contact}")]]))

@@ -32,8 +32,11 @@ class FakeClaude:
 
 
 @pytest.fixture
-def key(monkeypatch):
+async def key(monkeypatch, maker):
+    """Ключ Claude задан и Claude включён (по умолчанию он выключен, работает простой черновик по правилам)."""
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    async with maker() as s:
+        await settings.put(s, "ai_enabled", "1")
 
 
 async def make_lead(maker):
@@ -121,31 +124,42 @@ async def test_refusal_and_empty_and_no_key(maker, tgbot, monkeypatch):
         with pytest.raises(ai.AiError, match="не подключён"):
             await ai.draft_reply(s, user, lead, "Сайты", "", "")  # ключа нет
         monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk")
+        await settings.put(s, "ai_enabled", "1")
         with pytest.raises(ai.AiError, match="не смог"):
             await ai.draft_reply(s, user, lead, "Сайты", "", "", client=FakeClaude(stop="refusal"))
         with pytest.raises(ai.AiError, match="пустой"):
             await ai.draft_reply(s, user, lead, "Сайты", "", "", client=FakeClaude(text="  "))
 
 
-async def test_button_and_handler(maker, tgbot, key):
+async def test_claude_path_when_enabled(maker, tgbot, key):
     await make_user(maker, 56, plan="full")
     lead = await make_lead(maker)
     from app.bot import notify
 
-    assert "lead:ai:" in str(notify.lead_keyboard(lead, 7))  # кнопка есть, только когда задан ключ
+    assert "lead:ai:" in str(notify.lead_keyboard(lead, 7))
     async with maker() as s:
         user = await s.get(User, 56)
         c = MagicMock()
         c.answer, c.message.answer = AsyncMock(), AsyncMock()
         await lh.send_ai_draft(c, s, lead, user, 7, client=FakeClaude())
     text = c.message.answer.call_args.args[0]
-    assert "Черновик ответа" in text and "<code>" in text
+    assert "Черновик ответа" in text and "бюджет" in text  # ответ пришёл от (подменённого) Claude
     assert "lead:ai:7" in str(c.message.answer.call_args.kwargs["reply_markup"])  # «Другой вариант»
 
 
-async def test_no_button_without_key(maker, tgbot, monkeypatch):
+async def test_default_is_free_rules_draft_without_claude(maker, tgbot, monkeypatch):
+    """Ключа нет и Claude выключен: черновик собирается по правилам, никаких запросов наружу и расходов."""
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
-    from app.bot import notify
-
-    lead = SimpleNamespace(username="x", author_id=1, suspicious=False)
-    assert "lead:ai" not in str(notify.lead_keyboard(lead, 7))
+    await make_user(maker, 57, prices="лендинг от 15 000 ₽")
+    lead = await make_lead(maker)
+    claude = FakeClaude()
+    async with maker() as s:
+        user = await s.get(User, 57)
+        c = MagicMock()
+        c.answer, c.message.answer = AsyncMock(), AsyncMock()
+        await lh.send_ai_draft(c, s, lead, user, 8, client=claude)
+        assert await ai.used_today(s, 57) == 0  # ничего не потрачено и не посчитано
+    assert claude.calls == []
+    text = c.message.answer.call_args.args[0]
+    assert "по сайту" in text and "лендинг от 15 000" in text and "30 тыс. ₽" in text
+    assert "secret_client" not in text
