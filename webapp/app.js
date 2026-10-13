@@ -102,6 +102,7 @@
         stat(me.stats.taken, "в работе", function () { state.leadsStatus = "taken"; go("leads"); }),
         stat(me.stats.clients, "клиентов")
       ]),
+      el("button", { class: "btn ghost", text: "🤝 Пригласить друзей (+дни 💎)", onclick: renderFriends }),
       el("button", { class: "btn ghost", text: "Вернуться в чат", onclick: closeApp })
     );
   }
@@ -256,6 +257,125 @@
     );
   }
 
+  // ---------- Клиенты (CRM) ----------
+  var crmState = { stage: "all", q: "" };
+
+  function fmtDate(iso) {
+    // сервер отдаёт время в UTC без пояса
+    var d = new Date(iso.indexOf("Z") === -1 && iso.indexOf("+") === -1 ? iso + "Z" : iso);
+    return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function renderClients() {
+    var list = el("div", {});
+    var more = el("button", { class: "btn ghost", text: "Показать ещё", hidden: "" });
+    var chipsBox = el("div", { class: "tabs" });
+    var search = el("input", { type: "text", value: crmState.q, placeholder: "🔎 Имя, @username или телефон", maxlength: "64" });
+    search.addEventListener("keydown", function (e) { if (e.key === "Enter") { crmState.q = search.value.trim(); renderClients(); } });
+    var addBtn = el("button", { class: "btn small", text: "➕ Добавить клиента", onclick: renderClientForm });
+    view.replaceChildren(el("h1", { text: "Клиенты" }), search, chipsBox, list, more, el("div", { class: "row" }, [addBtn]));
+    var offset = 0;
+    function page() {
+      more.disabled = true;
+      api("GET", "/api/clients?stage=" + crmState.stage + "&q=" + encodeURIComponent(crmState.q) + "&offset=" + offset).then(function (res) {
+        if (!offset) {
+          var total = Object.keys(res.counts).reduce(function (a, k) { return a + res.counts[k]; }, 0);
+          var chips = [["all", "Все " + total]].concat(res.stages.map(function (s) { return [s.id, s.title + " " + (res.counts[s.id] || 0)]; }));
+          chipsBox.replaceChildren.apply(chipsBox, chips.map(function (c) {
+            return el("button", { class: "chip" + (c[0] === crmState.stage ? " on" : ""), text: c[1], onclick: function () { crmState.stage = c[0]; renderClients(); } });
+          }));
+          if (!res.items.length) list.appendChild(el("p", { class: "muted center-block", text: crmState.q ? "Ничего не найдено." : "Клиентов пока нет. Нажмите «✅ В работу» под заявкой или добавьте вручную." }));
+        }
+        var names = {}; res.stages.forEach(function (s) { names[s.id] = s.title; });
+        res.items.forEach(function (c) { list.appendChild(clientRow(c, names)); offset += 1; });
+        more.hidden = !res.has_more; more.disabled = false;
+      }).catch(function (e) { toast(e.message, true); more.disabled = false; });
+    }
+    more.onclick = page;
+    page();
+  }
+
+  function clientRow(c, names) {
+    var who = c.name || (c.username ? "@" + c.username : "Без имени");
+    var sub = [names[c.stage] || c.stage, c.budget ? c.budget.toLocaleString("ru-RU") + " ₽" : "", c.source].filter(Boolean).join(" · ");
+    return el("div", { class: "card tap", onclick: function () { renderClient(c.id); } }, [el("b", { text: who }), el("div", { class: "muted", text: sub })]);
+  }
+
+  function renderClientForm() {
+    var name = el("input", { type: "text", maxlength: "255", placeholder: "Имя" });
+    var user = el("input", { type: "text", maxlength: "64", placeholder: "@username" });
+    var phone = el("input", { type: "text", maxlength: "32", placeholder: "Телефон" });
+    var ok = el("button", { class: "btn", text: "Добавить", onclick: function () {
+      ok.disabled = true;
+      api("POST", "/api/clients", { name: name.value, username: user.value, phone: phone.value })
+        .then(function (c) { toast("Клиент добавлен"); renderClient(c.id); })
+        .catch(function (e) { toast(e.message, true); ok.disabled = false; });
+    } });
+    view.replaceChildren(el("h1", { text: "Новый клиент" }), field("Имя", name), field("@username", user), field("Телефон", phone), ok,
+      el("button", { class: "btn ghost", text: "Назад", onclick: renderClients }));
+  }
+
+  function renderClient(id) {
+    view.replaceChildren(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/clients/" + id).then(function (c) { buildClient(c); }).catch(function (e) { toast(e.message, true); renderClients(); });
+  }
+
+  function buildClient(c) {
+    var STAGES = [["new", "🆕 Новый"], ["talk", "💬 В переговорах"], ["thinking", "🤔 Думает"], ["payment", "💳 Оплата"], ["done", "✅ Выполнено"], ["lost", "❌ Отказ"]];
+    function patch(body, msg) {
+      api("PATCH", "/api/clients/" + c.id, body).then(function (n) { toast(msg || "Сохранено"); buildClient(n); }).catch(function (e) { toast(e.message, true); });
+    }
+    var stageChips = el("div", { class: "chips" }, STAGES.map(function (s) {
+      return el("button", { class: "chip" + (s[0] === c.stage ? " on" : ""), type: "button", text: s[1], onclick: function () { if (s[0] !== c.stage) patch({ stage: s[0] }, "Этап изменён"); } });
+    }));
+    var budget = el("input", { type: "text", inputmode: "numeric", value: c.budget ? String(c.budget) : "", placeholder: "Бюджет, ₽" });
+    var phone = el("input", { type: "text", maxlength: "32", value: c.phone, placeholder: "Телефон" });
+    var note = el("textarea", { rows: "2", maxlength: "1000", placeholder: "Новая заметка" });
+    var rem = [1, 3, 7].map(function (d) { return el("button", { class: "btn small ghost", text: "⏰ " + d + " дн", onclick: function () { patch({ remind_days: d }, "Напоминание поставлено"); } }); });
+    view.replaceChildren(
+      el("h1", { text: c.name || (c.username ? "@" + c.username : "Клиент") }),
+      el("div", { class: "muted", text: [c.username ? "@" + c.username : "", c.source, c.category].filter(Boolean).join(" · ") }),
+      el("h2", { text: "Этап" }), stageChips,
+      c.contact ? el("div", { class: "row" }, [el("button", { class: "btn small", text: "✍️ Написать", onclick: function () { openContact(c.contact); } })]) : null,
+      el("h2", { text: "Данные" }),
+      field("Бюджет", budget), field("Телефон", phone),
+      el("button", { class: "btn small", text: "Сохранить данные", onclick: function () {
+        var body = {}; if (budget.value.trim()) body.budget = budget.value; if (phone.value.trim()) body.phone = phone.value;
+        patch(body);
+      } }),
+      el("h2", { text: "Напоминание" }),
+      c.reminder ? el("div", { class: "muted", text: "Ближайшее: " + fmtDate(c.reminder) }) : el("div", { class: "muted", text: "Не поставлено" }),
+      el("div", { class: "row" }, rem),
+      el("h2", { text: "Заметки" }),
+      c.notes ? el("pre", { class: "replytext", text: c.notes }) : el("div", { class: "muted", text: "Пока пусто" }),
+      note,
+      el("button", { class: "btn small", text: "Добавить заметку", onclick: function () { if (note.value.trim()) patch({ note: note.value }, "Заметка добавлена"); } }),
+      el("h2", { text: "История" }),
+      el("div", {}, c.events.map(function (e) { return el("div", { class: "muted", text: fmtDate(e.at) + " · " + e.text }); })),
+      el("button", { class: "btn ghost", text: "◀️ К списку", onclick: renderClients })
+    );
+  }
+
+  // ---------- Друзья ----------
+  function renderFriends() {
+    view.replaceChildren(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/referrals").then(function (r) {
+      view.replaceChildren(
+        el("h1", { text: "🤝 Пригласить друзей" }),
+        el("div", { class: "card" }, [
+          el("p", { text: "Друг заходит по вашей ссылке и настраивает бота — вы оба получаете +" + r.days + " дней 💎." }),
+          el("p", { class: "muted", text: "Дальше, когда он зарабатывает бонусные дни за свои группы, вам идёт ещё " + r.percent + "% от них." })
+        ]),
+        el("div", { class: "grid" }, [stat(r.invited, "приглашено"), stat(r.done, "настроили бота")]),
+        el("h2", { text: "Ваша ссылка" }),
+        el("pre", { class: "replytext", text: r.link }),
+        el("button", { class: "btn", text: "📤 Отправить друзьям", onclick: function () { openContact(r.share); } }),
+        el("button", { class: "btn ghost", text: "📋 Скопировать ссылку", onclick: function () { copyText(r.link); } }),
+        el("button", { class: "btn ghost", text: "◀️ Назад", onclick: function () { go("home"); } })
+      );
+    }).catch(function (e) { toast(e.message, true); go("home"); });
+  }
+
   // ---------- каркас ----------
   function renderSoon(title) {
     view.replaceChildren(
@@ -276,6 +396,7 @@
     if (state.tab === "home") renderHome();
     else if (state.tab === "leads") renderLeads();
     else if (state.tab === "profile") renderProfile();
+    else if (state.tab === "clients") renderClients();
     else renderSoon(s.title);
     nav.replaceChildren.apply(nav, state.me.sections.map(function (x) {
       return el("button", { "aria-current": String(x.id === state.tab), onclick: function () { go(x.id); if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); } },

@@ -53,3 +53,7 @@ input[type=text], textarea { width: 100%; border: 1px solid color-mix(in srgb, v
 #toast.bad { background: #b3261e; }
 .card .btn.ghost { background: var(--bg); }
 .btn.small { flex: 1 1 42%; }
+.card.tap { cursor: pointer; }
+.tabs { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+.tabs .chip { white-space: nowrap; flex: 0 0 auto; }
+[hidden] { display: none !important; }

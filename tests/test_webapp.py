@@ -218,3 +218,63 @@ async def test_autosetup_api(client, maker):
     prof = await (await client.get("/api/profile", headers=tma(27))).json()
     assert prof["quiet_hours"] == "23-8" and len(prof["negatives"]) == 4
     assert (await (await client.get("/api/autosetup", headers=tma(27))).json())["plan"] == []
+
+
+# ---------- М2: CRM и друзья ----------
+async def test_crm_create_list_and_privacy(client, maker):
+    await make_user(maker, 30)
+    await make_user(maker, 31)
+    r = await client.post("/api/clients", json={"name": "Марат", "username": "@marat_shop", "phone": "+79001234567"}, headers=tma(30))
+    card = await r.json()
+    assert r.status == 201 and card["username"] == "marat_shop" and card["stage"] == "new" and card["events"][0]["text"] == "Добавлен вручную"
+    assert (await client.post("/api/clients", json={"name": "  "}, headers=tma(30))).status == 422
+    assert (await client.post("/api/clients", data="не json", headers=tma(30))).status == 400
+    for i in range(22):
+        await client.post("/api/clients", json={"name": f"Клиент {i}"}, headers=tma(30))
+    await client.post("/api/clients", json={"name": "Чужой"}, headers=tma(31))
+    page1 = await (await client.get("/api/clients", headers=tma(30))).json()
+    assert len(page1["items"]) == 20 and page1["has_more"] and page1["counts"] == {"new": 23}
+    page2 = await (await client.get("/api/clients?offset=20", headers=tma(30))).json()
+    assert len(page2["items"]) == 3 and not page2["has_more"]
+    found = await (await client.get("/api/clients?q=marat", headers=tma(30))).json()
+    assert [c["name"] for c in found["items"]] == ["Марат"]
+    assert (await client.get("/api/clients?stage=плохой", headers=tma(30))).status == 400
+    assert (await client.get(f"/api/clients/{card['id']}", headers=tma(31))).status == 404  # чужой клиент
+    assert (await client.patch(f"/api/clients/{card['id']}", json={"stage": "done"}, headers=tma(31))).status == 404
+
+
+async def test_crm_patch_stage_fields_note_and_reminder(client, maker):
+    await make_user(maker, 32)
+    cid = (await (await client.post("/api/clients", json={"name": "Олег"}, headers=tma(32))).json())["id"]
+    url = f"/api/clients/{cid}"
+    card = await (await client.patch(url, json={"stage": "thinking"}, headers=tma(32))).json()
+    assert card["stage"] == "thinking" and card["reminder"]  # «думает» — напоминание через 2 дня само
+    card = await (await client.patch(url, json={"budget": "30 000 ₽", "phone": "+7900", "note": "Позвонить вечером"}, headers=tma(32))).json()
+    assert card["budget"] == 30000 and card["phone"] == "+7900" and "Позвонить вечером" in card["notes"]
+    card = await (await client.patch(url, json={"note": "Второй звонок"}, headers=tma(32))).json()
+    assert card["notes"] == "Позвонить вечером\nВторой звонок"
+    assert card["events"][0]["text"].startswith("Заметка")
+    assert (await client.patch(url, json={"stage": "взлом"}, headers=tma(32))).status == 422
+    assert (await client.patch(url, json={"budget": "много"}, headers=tma(32))).status == 422
+    assert (await client.patch(url, json={"remind_days": 0}, headers=tma(32))).status == 422
+    assert (await client.patch(url, json={"remind_days": 91}, headers=tma(32))).status == 422
+    assert (await client.patch(url, json={"note": "я" * 1001}, headers=tma(32))).status == 422
+    card = await (await client.patch(url, json={"remind_days": 3}, headers=tma(32))).json()
+    assert card["reminder"]
+
+
+async def test_referrals_api(client, maker, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.bot import notify
+
+    async def me():
+        return SimpleNamespace(username="klientradarbot")
+
+    monkeypatch.setattr(notify, "_bot", SimpleNamespace(me=me))
+    await make_user(maker, 33)
+    await make_user(maker, 34, referred_by=33, ref_rewarded=True)
+    await make_user(maker, 35, referred_by=33)
+    data = await (await client.get("/api/referrals", headers=tma(33))).json()
+    assert data["link"].startswith("https://t.me/klientradarbot?start=") and data["invited"] == 2 and data["done"] == 1
+    assert data["share"].startswith("https://t.me/share/url?url=") and data["days"] == 7

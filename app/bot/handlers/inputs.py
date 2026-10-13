@@ -9,7 +9,7 @@ from app.bot.handlers import clients as clients_h
 from app.db import Session
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Keyword, ScoutAccount, SearchQuery
 from app.scout.client import parse_proxy
-from app.services import quiet, rules, settings
+from app.services import crm, quiet, rules, settings
 
 router = Router()
 
@@ -70,17 +70,10 @@ async def client_field(s, m, d, text, field):
     c = await owned(s, d["id"], m.from_user.id)
     if c is None:
         return await m.answer("Клиент не найден")
-    if field == "note":
-        c.notes = (c.notes + "\n" if c.notes else "") + text
-        s.add(ClientEvent(client_id=c.id, text=f"Заметка: {text[:200]}"))
-    elif field == "budget":
-        digits = "".join(ch for ch in text if ch.isdigit())
-        if not digits:
-            return await m.answer("Нужно число") and False
-        c.budget = int(digits)
-    else:
-        c.phone = text
-    await s.commit()
+    try:
+        await crm.update_field(s, c, field, text)
+    except crm.CrmError as e:
+        return await m.answer("Нужно число" if field == "budget" else str(e)) and False
     await clients_h.card(m, c.id)
 
 
@@ -94,11 +87,10 @@ async def client_add(s, m, d, text):
             phone = part
         else:
             name.append(part)
-    c = Client(user_id=m.from_user.id, name=" ".join(name), username=username, phone=phone, source="добавлен вручную")
-    s.add(c)
-    await s.flush()
-    s.add(ClientEvent(client_id=c.id, text="Добавлен вручную"))
-    await s.commit()
+    try:
+        c = await crm.create_client(s, m.from_user.id, " ".join(name), username, phone)
+    except crm.CrmError as e:
+        return await m.answer(str(e)) and False
     await clients_h.card(m, c.id)
 
 

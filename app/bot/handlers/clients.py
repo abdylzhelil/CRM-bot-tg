@@ -8,16 +8,14 @@ from sqlalchemy import func, or_, select
 from app.bot.common import ask, esc, kb, reply
 from app.bot.handlers.leads import category_name
 from app.db import Session
-from app.models import STAGE_NAMES, STAGES, Client, ClientEvent, Reminder, now
+from app.models import STAGE_NAMES, STAGES, Client, ClientEvent, Reminder
+from app.services import crm
 
 router = Router()
 PAGE = 20
 
 
-async def owned(s, client_id: int, user_id: int) -> Client | None:
-    """У каждого пользователя своя CRM: чужих клиентов не видно."""
-    c = await s.get(Client, client_id)
-    return c if c is not None and c.user_id == user_id else None
+owned = crm.owned
 
 
 @router.message(F.text == "👥 Клиенты")
@@ -116,11 +114,7 @@ async def cb_stage(cb: CallbackQuery) -> None:
         c = await owned(s, int(cid), cb.from_user.id)
         if not c or stage not in STAGE_NAMES:
             return await cb.answer("Клиент не найден")
-        c.stage = stage
-        s.add(ClientEvent(client_id=c.id, text=f"Этап → {STAGE_NAMES[stage]}"))
-        if stage == "thinking":  # «дожать» через 2 дня, если клиент думает
-            s.add(Reminder(client_id=c.id, due_at=now() + timedelta(days=2), text="Клиент думает — дожать"))
-        await s.commit()
+        await crm.set_stage(s, c, stage)
     await card(cb, int(cid))
 
 
@@ -128,11 +122,10 @@ async def cb_stage(cb: CallbackQuery) -> None:
 async def cb_rem(cb: CallbackQuery) -> None:
     _, _, cid, days = cb.data.split(":")
     async with Session() as s:
-        if not await owned(s, int(cid), cb.from_user.id):
+        c = await owned(s, int(cid), cb.from_user.id)
+        if not c:
             return await cb.answer("Клиент не найден")
-        s.add(Reminder(client_id=int(cid), due_at=now() + timedelta(days=int(days))))
-        s.add(ClientEvent(client_id=int(cid), text=f"Напоминание через {days} дн."))
-        await s.commit()
+        await crm.add_reminder(s, c, int(days))
     await card(cb, int(cid))
 
 
