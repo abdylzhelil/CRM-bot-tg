@@ -10,7 +10,7 @@ from app import config
 from app.bot.common import Ask, ask, esc, kb, reply
 from app.db import Session
 from app.models import Delivery, Lead, Payment, ScoutAccount, User, now
-from app.services import autosetup, settings
+from app.services import admin_status, autosetup, settings
 
 router = Router()
 
@@ -54,35 +54,22 @@ def _flag(ok: bool) -> str:
 async def status_text() -> str:
     """Сводка «что включено и как идёт»: чтобы за один экран понять, в каком состоянии бот."""
     async with Session() as s:
-        get = lambda k: settings.get(s, k)  # noqa: E731
-        day = now() - timedelta(days=1)
-        users = await s.scalar(select(func.count()).select_from(User).where(User.onboarded)) or 0
-        paid = await s.scalar(select(func.count()).select_from(User).where(User.plan == "full", User.is_admin == False)) or 0  # noqa: E712
-        leads = await s.scalar(select(func.count()).select_from(Lead).where(Lead.created_at > day)) or 0
-        sent = await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.created_at > day)) or 0
-        pays = await s.scalar(select(func.count()).select_from(Payment).where(Payment.created_at > now() - timedelta(days=30))) or 0
-        accs = (await s.execute(select(ScoutAccount.status, func.count()).where(ScoutAccount.enabled).group_by(ScoutAccount.status))).all()
-        paused, mode = await get("scout_paused") == "1", await get("mode")
-        prices = [await get(k) for k in ("price_30", "price_90", "price_365")]
-        on = {k: await get(k) == "1" for k in ("ai_enabled", "autorenew", "license_enabled")}
-        ad_on = await get("ad_leads") != "0"
-        refund = await get("refund_days")
-    selling = any(p != "0" for p in prices)
-    pay_ready = bool(config.PAYMENT_PROVIDER_TOKEN or (config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY))
-    accounts = ", ".join(f"{st} {n}" for st, n in accs) or "нет"
+        d = await admin_status.collect(s)
+    accounts = ", ".join(f"{st} {n}" for st, n in d["accounts"].items()) or "нет"
+    refund = d["refund_days"]
     return "\n".join([
         "📋 <b>Состояние бота</b>",
-        f"👥 Зарегистрировано: {users}, на 💎: {paid}",
-        f"📥 За сутки: заявок {leads}, рассылок {sent}; оплат за 30 дней: {pays}",
+        f"👥 Зарегистрировано: {d['users']}, на 💎: {d['paid']}",
+        f"📥 За сутки: заявок {d['leads_day']}, рассылок {d['sent_day']}; оплат за 30 дней: {d['payments_30d']}",
         "",
-        f"🔍 Разведчик: {'⏸ на паузе' if paused else '▶️ работает'}, режим {esc(mode)}; аккаунты: {esc(accounts)}",
-        f"{_flag(selling)} Продажа 💎: " + (" / ".join(f"{p}₽" for p in prices) if selling else "не продаётся (цены 0)"),
-        f"{_flag(pay_ready)} Ключи оплаты в .env: {'есть' if pay_ready else 'нет'}",
+        f"🔍 Разведчик: {'⏸ на паузе' if d['scout_paused'] else '▶️ работает'}, режим {esc(d['mode'])}; аккаунты: {esc(accounts)}",
+        f"{_flag(d['selling'])} Продажа 💎: " + (" / ".join(f"{p}₽" for p in d["prices"]) if d["selling"] else "не продаётся (цены 0)"),
+        f"{_flag(d['pay_ready'])} Ключи оплаты в .env: {'есть' if d['pay_ready'] else 'нет'}",
         f"{_flag(refund != '0')} Возврат: {refund} дн." if refund != "0" else f"{_flag(False)} Возврат выключен",
-        f"{_flag(on['autorenew'])} Автопродление   {_flag(on['license_enabled'])} Лицензия   {_flag(ad_on)} Реклама групп",
-        f"{_flag(on['ai_enabled'])} Claude (платно)"
-        + ("" if config.ANTHROPIC_API_KEY or not on["ai_enabled"] else " — ⚠️ нет ANTHROPIC_API_KEY"),
-        f"{_flag(bool(config.STATS_CHANNEL))} Канал статистики: {esc(config.STATS_CHANNEL) or 'не подключён'}",
+        f"{_flag(d['autorenew'])} Автопродление   {_flag(d['license'])} Лицензия   {_flag(d['ads'])} Реклама групп",
+        f"{_flag(d['ai'])} Claude (платно)"
+        + ("" if d["ai_key"] or not d["ai"] else " — ⚠️ нет ANTHROPIC_API_KEY"),
+        f"{_flag(bool(d['stats_channel']))} Канал статистики: {esc(d['stats_channel']) or 'не подключён'}",
     ])
 
 

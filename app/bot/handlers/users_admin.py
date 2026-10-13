@@ -8,7 +8,8 @@ from sqlalchemy import func, select
 
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import PLANS, Category, Client, Delivery, User, UserCategory, now
+from app.models import PLANS, Category, Client, Delivery, User, UserCategory
+from app.services import users_admin as users_svc
 from app.services.distribute import delivered_today, is_paid
 
 router = Router()
@@ -76,15 +77,7 @@ async def set_plan(cb: CallbackQuery) -> None:
         u = await s.get(User, int(raw_id))
         if u is None:
             return await cb.answer("Не найден")
-        if value == "free":
-            u.plan, u.plan_until = "free", None
-            notice = "Ваш тариф изменён на 🆓 Бесплатный."
-        else:
-            days = int(value)
-            start = u.plan_until if is_paid(u) and u.plan_until and u.plan_until > now() else now()
-            u.plan, u.plan_until = "full", (start + timedelta(days=days)) if days else None
-            notice = "🎉 Подключён 💎 Полный тариф" + (f" до {u.plan_until:%d.%m.%Y}" if u.plan_until else " бессрочно") \
-                + ": заявки приходят сразу и без лимита."
+        notice = users_svc.set_plan(u, value)
         await s.commit()
     try:
         await cb.bot.send_message(int(raw_id), notice)

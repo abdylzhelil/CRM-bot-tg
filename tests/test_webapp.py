@@ -375,3 +375,76 @@ async def test_stats_api(client, maker):
     await add_lead(maker, 45, author=951)
     st = await (await client.get("/api/stats", headers=tma(45))).json()
     assert st["total"] == 2 and st["taken"] == 1 and st["conversion"] == 50 and st["today"] == 2
+
+
+# ---------- М4: админка ----------
+async def ensure_admin(maker):
+    from app.models import User
+
+    async with maker() as s:
+        if await s.get(User, ADMIN_ID) is None:
+            s.add(User(tg_id=ADMIN_ID, name="Админ", is_admin=True, onboarded=True, plan="full"))
+            await s.commit()
+
+
+async def test_admin_api_is_closed_to_regular_users(client, maker):
+    await make_user(maker, 50)
+    await make_user(maker, 51, plan="full")
+    for uid in (50, 51):
+        for method, path in [("get", "/api/admin/status"), ("get", "/api/admin/settings"), ("get", "/api/admin/users"),
+                             ("get", "/api/admin/users/50"), ("put", "/api/admin/settings/mode"), ("put", "/api/admin/scout"),
+                             ("post", "/api/admin/presets/launch"), ("post", "/api/admin/users/50/plan")]:
+            r = await getattr(client, method)(path, headers=tma(uid))
+            assert r.status == 403, (uid, method, path)
+    assert (await client.get("/api/admin/status")).status == 401
+
+
+async def test_admin_status_settings_presets_and_scout(client, maker):
+    from app.services import settings as st
+
+    await ensure_admin(maker)
+    stat = await (await client.get("/api/admin/status", headers=tma(ADMIN_ID))).json()
+    assert {"users", "paid", "scout_paused", "selling"} <= set(stat["status"]) and stat["ok"] is not None
+    assert {p["id"] for p in stat["presets"]} == {"launch", "careful"} and stat["presets"][0]["changes"]
+    cfg = await (await client.get("/api/admin/settings", headers=tma(ADMIN_ID))).json()
+    assert len(cfg["sections"]) == len(st.SECTIONS) and all(i["hint"] for sec in cfg["sections"] for i in sec["items"])
+    h = tma(ADMIN_ID)
+    assert (await (await client.put("/api/admin/settings/free_daily_limit", json={"value": "8"}, headers=h)).json())["value"] == "8"
+    async with maker() as s:
+        assert await st.get(s, "free_daily_limit") == "8"
+    for key, bad in [("mode", "x"), ("report_hour", "30"), ("price_30", "много"), ("ai_model", "gpt"), ("channel_hour", "24"), ("нет_такой", "1")]:
+        assert (await client.put(f"/api/admin/settings/{key}", json={"value": bad}, headers=h)).status == 422, key
+    assert (await client.put("/api/admin/settings/mode", json={}, headers=h)).status == 400
+    r = await client.put("/api/admin/settings/free_daily_limit", json={"value": st.DEFAULTS["free_daily_limit"]}, headers=h)
+    assert (await r.json())["value"] == "5"  # сброс по умолчанию
+    assert (await client.post("/api/admin/presets/взлом", headers=h)).status == 404
+    assert (await (await client.post("/api/admin/presets/careful", headers=h)).json())["changed"] > 0
+    async with maker() as s:
+        assert await st.get(s, "default_join_limit") == "5"
+    assert (await client.put("/api/admin/scout", json={"paused": "да"}, headers=h)).status == 400
+    await client.put("/api/admin/scout", json={"paused": True}, headers=h)
+    async with maker() as s:
+        assert await st.get(s, "scout_paused") == "1"
+
+
+async def test_admin_users_search_card_and_plan(client, maker, tgbot):
+    await ensure_admin(maker)
+    await make_user(maker, 52, city="Казань")
+    await make_user(maker, 53, city="Москва")
+    h = tma(ADMIN_ID)
+    lst = await (await client.get("/api/admin/users", headers=h)).json()
+    assert lst["total"] >= 3 and {i["id"] for i in lst["items"]} >= {52, 53}
+    assert [i["id"] for i in (await (await client.get("/api/admin/users?q=52", headers=h)).json())["items"]] == [52]
+    assert [i["id"] for i in (await (await client.get("/api/admin/users?q=user53", headers=h)).json())["items"]] == [53]
+    card = await (await client.get("/api/admin/users/52", headers=h)).json()
+    assert card["city"] == "Казань" and card["niches"] and card["paid"] is False
+    assert (await client.get("/api/admin/users/999999", headers=h)).status == 404
+    r = await client.post("/api/admin/users/52/plan", json={"value": "30"}, headers=h)
+    paid = await r.json()
+    assert r.status == 200 and paid["paid"] and paid["until"]
+    assert any("Полный тариф" in t for t in tgbot.texts(52))  # человеку ушло уведомление
+    assert (await (await client.post("/api/admin/users/52/plan", json={"value": "0"}, headers=h)).json())["until"] is None  # бессрочно
+    assert (await (await client.post("/api/admin/users/52/plan", json={"value": "free"}, headers=h)).json())["paid"] is False
+    for bad in ("много", "-5", "99999"):
+        assert (await client.post("/api/admin/users/52/plan", json={"value": bad}, headers=h)).status == 422
+    assert (await client.post("/api/admin/users/999999/plan", json={"value": "30"}, headers=h)).status == 404

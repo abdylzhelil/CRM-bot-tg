@@ -238,3 +238,35 @@ def search(query: str) -> list[str]:
         if all(w in hay for w in words):
             found.append(key)
     return found[:10]
+
+
+class SettingError(ValueError):
+    """Понятная причина, почему значение настройки не подходит."""
+
+
+def validate(key: str, text: str) -> str:
+    """Проверяет и нормализует значение настройки (одни правила для бота и кабинета). Возвращает строку для записи."""
+    from app.services import quiet
+
+    text = str(text).strip()
+    if key not in LABELS:
+        raise SettingError("Такой настройки нет")
+    if key == "mode":
+        if text not in ("semi", "auto"):
+            raise SettingError("Нужно semi или auto")
+    elif key == "quiet_hours":
+        if text in ("-", "0", "выкл"):
+            return ""
+        if not quiet.parse_hours(text):
+            raise SettingError("Формат: 23-8 (с 23:00 до 08:00) или «-», чтобы выключить")
+    elif key in ("report_hour", "channel_hour"):
+        if not text.isdigit() or int(text) > 23:
+            raise SettingError("Нужен час от 0 до 23")
+    elif key == "ai_model":
+        from app.services.ai import MODELS
+
+        if text not in MODELS:
+            raise SettingError("Допустимо: " + ", ".join(MODELS))
+    elif not text.isdigit() or len(text) > 9:
+        raise SettingError("Нужно число")
+    return text

@@ -492,6 +492,165 @@
     }).catch(function (e) { toast(e.message, true); go("home"); });
   }
 
+  // ---------- Управление (только админ) ----------
+  var adminTab = "status";
+
+  function renderAdmin() {
+    var body = el("div", {});
+    var tabs = el("div", { class: "tabs" }, [["status", "Состояние"], ["settings", "Настройки"], ["users", "Пользователи"]].map(function (x) {
+      return el("button", { class: "chip" + (x[0] === adminTab ? " on" : ""), text: x[1], onclick: function () { adminTab = x[0]; renderAdmin(); } });
+    }));
+    show(el("h1", { text: "🛠 Управление" }), tabs, body);
+    if (adminTab === "status") adminStatus(body);
+    else if (adminTab === "settings") adminSettings(body);
+    else adminUsers(body);
+  }
+
+  function flag(ok) { return ok ? "✅" : "⬜"; }
+
+  function adminStatus(body) {
+    body.appendChild(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/admin/status").then(function (r) {
+      var d = r.status;
+      var accs = Object.keys(d.accounts).map(function (k) { return k + " " + d.accounts[k]; }).join(", ") || "нет";
+      var nodes = [
+        el("div", { class: "grid" }, [stat(d.users, "зарегистрировано"), stat(d.paid, "на 💎"), stat(d.leads_day, "заявок за сутки"), stat(d.sent_day, "рассылок за сутки")]),
+        el("div", { class: "card" }, [
+          el("b", { text: "🔍 Разведчик: " + (d.scout_paused ? "⏸ на паузе" : "▶️ работает") }),
+          el("div", { class: "muted", text: "режим " + d.mode + "; аккаунты: " + accs }),
+          el("button", { class: "btn small", text: d.scout_paused ? "▶️ Возобновить" : "⏸ Поставить на паузу", onclick: function () {
+            confirmAsk(d.scout_paused ? "Возобновить разведчика?" : "Поставить разведчика на паузу?", function () {
+              api("PUT", "/api/admin/scout", { paused: !d.scout_paused }).then(function () { toast("Готово"); renderAdmin(); }).catch(function (e) { toast(e.message, true); });
+            });
+          } })
+        ]),
+        el("div", { class: "card" }, [
+          el("div", { text: flag(d.selling) + " Продажа 💎: " + (d.selling ? d.prices.join(" / ") + " ₽" : "не продаётся (цены 0)") }),
+          el("div", { text: flag(d.pay_ready) + " Ключи оплаты: " + (d.pay_ready ? "есть" : "нет") }),
+          el("div", { text: flag(d.refund_days !== "0") + " Возврат: " + (d.refund_days !== "0" ? d.refund_days + " дн." : "выключен") }),
+          el("div", { text: flag(d.autorenew) + " Автопродление  " + flag(d.license) + " Лицензия  " + flag(d.ads) + " Реклама" }),
+          el("div", { text: flag(d.ai) + " Claude (платно)" + (d.ai && !d.ai_key ? " — ⚠️ нет ключа" : "") }),
+          el("div", { text: flag(!!d.stats_channel) + " Канал статистики: " + (d.stats_channel || "не подключён") })
+        ])
+      ];
+      if (r.bad.length) nodes.push(el("h2", { text: "Исправить" }), el("div", { class: "card" }, r.bad.map(function (x) { return el("div", { text: "⚠️ " + x }); })));
+      nodes.push(el("h2", { text: "В порядке" }), el("div", { class: "card" }, r.ok.map(function (x) { return el("div", { class: "muted", text: "✅ " + x }); })));
+      nodes.push(el("h2", { text: "Пресеты" }));
+      r.presets.forEach(function (pr) {
+        var parts = [el("b", { text: pr.icon + " " + pr.title }), el("div", { class: "muted", text: pr.desc })];
+        if (!pr.changes.length) parts.push(el("div", { class: "muted", text: "Уже выставлено так." }));
+        else {
+          pr.changes.forEach(function (c) { parts.push(el("div", { class: "muted", text: "• " + c.label + ": " + (c.old || "—") + " → " + c.new })); });
+          parts.push(el("button", { class: "btn small", text: "Применить (" + pr.changes.length + ")", onclick: function () {
+            confirmAsk("Пресет «" + pr.title + "» изменит настроек: " + pr.changes.length + ". Применить?", function () {
+              api("POST", "/api/admin/presets/" + pr.id).then(function (x) { toast("Изменено настроек: " + x.changed); renderAdmin(); }).catch(function (e) { toast(e.message, true); });
+            });
+          } }));
+        }
+        nodes.push(el("div", { class: "card" }, parts));
+      });
+      body.replaceChildren.apply(body, nodes);
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
+  function adminSettings(body) {
+    body.appendChild(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/admin/settings").then(function (r) {
+      var nodes = [];
+      r.sections.forEach(function (sec) {
+        nodes.push(el("h2", { text: sec.icon + " " + sec.title }));
+        sec.items.forEach(function (it) { nodes.push(settingRow(it)); });
+      });
+      body.replaceChildren.apply(body, nodes);
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
+  function settingRow(it) {
+    var valueEl = el("b", { text: it.value === "" ? "выкл" : it.value });
+    var editor = null;
+    var head = el("div", { class: "lead-head tap", onclick: function () {
+      if (editor) { editor.remove(); editor = null; return; }
+      var input = el("input", { type: "text", value: it.value, maxlength: "64" });
+      function save(v) {
+        api("PUT", "/api/admin/settings/" + it.key, { value: v }).then(function (x) {
+          it.value = x.value; valueEl.textContent = x.value === "" ? "выкл" : x.value; toast("Сохранено");
+          if (editor) { editor.remove(); editor = null; }
+        }).catch(function (e) { toast(e.message, true); });
+      }
+      editor = el("div", { class: "reply" }, [
+        el("div", { text: it.label }), el("div", { class: "muted", text: it.hint }),
+        el("div", { class: "muted", text: "По умолчанию: " + (it.default === "" ? "выкл" : it.default) }), input,
+        el("div", { class: "row" }, [
+          el("button", { class: "btn small", text: "Сохранить", onclick: function () { save(input.value); } }),
+          el("button", { class: "btn small ghost", text: "↩️ По умолчанию", onclick: function () { save(it.default); } })
+        ])
+      ]);
+      row.appendChild(editor);
+    } }, [el("span", { text: it.short }), valueEl]);
+    var row = el("div", { class: "card" }, [head]);
+    return row;
+  }
+
+  var adminQuery = "";
+
+  function adminUsers(body) {
+    var list = el("div", {});
+    var more = el("button", { class: "btn ghost", text: "Показать ещё", hidden: "" });
+    var search = el("input", { type: "text", value: adminQuery, placeholder: "🔎 ID, @ник или имя", maxlength: "64" });
+    search.addEventListener("keydown", function (e) { if (e.key === "Enter") { adminQuery = search.value.trim(); renderAdmin(); } });
+    body.replaceChildren(search, list, more);
+    var offset = 0;
+    function page() {
+      more.disabled = true;
+      api("GET", "/api/admin/users?q=" + encodeURIComponent(adminQuery) + "&offset=" + offset).then(function (r) {
+        if (!offset) list.appendChild(el("p", { class: "muted", text: "Всего пользователей: " + r.total }));
+        if (!offset && !r.items.length) list.appendChild(el("p", { class: "muted center-block", text: "Никого не найдено." }));
+        r.items.forEach(function (u) {
+          var title = (u.paid ? "💎 " : "") + (u.blocked ? "⛔ " : "") + (u.onboarded ? "" : "⚪ ") + (u.name || u.id);
+          list.appendChild(el("div", { class: "card tap", onclick: function () { adminUser(u.id); } }, [el("b", { text: title }), el("div", { class: "muted", text: [u.username ? "@" + u.username : "", u.city].filter(Boolean).join(" · ") })]));
+          offset += 1;
+        });
+        more.hidden = !r.has_more; more.disabled = false;
+      }).catch(function (e) { toast(e.message, true); more.disabled = false; });
+    }
+    more.onclick = page;
+    page();
+  }
+
+  function adminUser(id) {
+    show(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/admin/users/" + id).then(buildAdminUser).catch(function (e) { toast(e.message, true); renderAdmin(); });
+  }
+
+  function buildAdminUser(u) {
+    function plan(value, text) {
+      confirmAsk(text + " Пользователю " + (u.name || u.id) + "?", function () {
+        api("POST", "/api/admin/users/" + u.id + "/plan", { value: value }).then(function (n) { toast("Тариф обновлён"); buildAdminUser(n); }).catch(function (e) { toast(e.message, true); });
+      });
+    }
+    var tariff = u.paid ? "💎 Полный" + (u.until ? " до " + new Date(u.until).toLocaleDateString("ru-RU") : " бессрочно") : "🆓 Бесплатный";
+    show(
+      el("h1", { text: u.name || String(u.id) }),
+      el("div", { class: "muted", text: [u.username ? "@" + u.username : "", "ID " + u.id, u.admin ? "администратор" : ""].filter(Boolean).join(" · ") }),
+      el("div", { class: "card" }, [
+        el("div", { text: "Тариф: " + tariff }), el("div", { text: "Город: " + (u.city || "вся Россия") }),
+        el("div", { text: "Ниши: " + (u.niches.join(", ") || "—") }),
+        el("div", { text: "Заявок: сегодня " + u.today + ", всего " + u.total + " · клиентов: " + u.clients }),
+        el("div", { class: "muted", text: "С нами с " + new Date(u.since).toLocaleDateString("ru-RU") + (u.blocked ? " · ⛔ заблокировал бота" : "") })
+      ]),
+      el("h2", { text: "Тариф" }),
+      el("div", { class: "row" }, [
+        el("button", { class: "btn small", text: "💎 +30 дней", onclick: function () { plan("30", "Добавить 30 дней 💎."); } }),
+        el("button", { class: "btn small", text: "💎 +365 дней", onclick: function () { plan("365", "Добавить 365 дней 💎."); } })
+      ]),
+      el("div", { class: "row" }, [
+        el("button", { class: "btn small ghost", text: "💎 Бессрочно", onclick: function () { plan("0", "Сделать 💎 бессрочным."); } }),
+        el("button", { class: "btn small ghost", text: "🆓 Бесплатный", onclick: function () { plan("free", "Перевести на бесплатный тариф."); } })
+      ]),
+      el("button", { class: "btn ghost", text: "◀️ К списку", onclick: renderAdmin })
+    );
+  }
+
   // ---------- каркас ----------
   function renderSoon(title) {
     show(
@@ -513,6 +672,7 @@
     else if (state.tab === "leads") renderLeads();
     else if (state.tab === "profile") renderProfile();
     else if (state.tab === "clients") renderClients();
+    else if (state.tab === "admin") renderAdmin();
     else renderSoon(s.title);
     nav.replaceChildren.apply(nav, state.me.sections.map(function (x) {
       return el("button", { "aria-current": String(x.id === state.tab), onclick: function () { go(x.id); if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); } },

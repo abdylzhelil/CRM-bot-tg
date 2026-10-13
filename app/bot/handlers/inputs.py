@@ -33,23 +33,10 @@ async def on_input(m: Message, state: FSMContext, user=None) -> None:
 
 async def setting(s, m, d, text):
     key = d["key"]
-    if key == "mode" and text not in ("semi", "auto"):
-        return await m.answer("Нужно semi или auto") and False
-    if key == "quiet_hours":
-        if text in ("-", "0", "выкл"):
-            text = ""
-        elif not quiet.parse_hours(text):
-            return await m.answer("Формат: 23-8 (с 23:00 до 08:00) или «-», чтобы выключить") and False
-    elif key == "report_hour":
-        if not text.isdigit() or int(text) > 23:
-            return await m.answer("Нужен час от 0 до 23") and False
-    elif key == "ai_model":
-        from app.services.ai import MODELS
-
-        if text not in MODELS:
-            return await m.answer("Допустимо: " + ", ".join(MODELS)) and False
-    elif key != "mode" and not text.isdigit():
-        return await m.answer("Нужно число") and False
+    try:
+        text = settings.validate(key, text)
+    except settings.SettingError as e:
+        return await m.answer(str(e)) and False
     await settings.put(s, key, text)
     await m.answer(f"✔ {settings.LABELS[key]}: {esc(text) or 'выключен'}", reply_markup=kb([[("⚙️ К настройкам", "st:menu")]]))
 

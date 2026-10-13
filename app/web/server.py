@@ -17,7 +17,7 @@ from app.db import Session
 from app.models import Client, Delivery, User, now
 from app.services import settings
 from app.services.distribute import is_paid
-from app.web import api
+from app.web import admin_api, api
 from app.web.auth import verify_init_data
 from app.web.keys import USER_KEY
 
@@ -78,6 +78,8 @@ async def auth(request: web.Request, handler):
         return web.json_response({"error": "not_registered", "message": "Сначала настройте бота: нажмите /start в чате"}, status=403)
     if user.blocked and not user.is_admin:
         return web.json_response({"error": "blocked", "message": "Доступ закрыт"}, status=403)
+    if request.path.startswith("/api/admin/") and not user.is_admin:
+        return web.json_response({"error": "forbidden", "message": "Только для администратора"}, status=403)
     if _limited(user.tg_id):
         return web.json_response({"error": "rate_limited", "message": "Слишком часто, подождите минуту"}, status=429)
     request[USER_KEY] = user
@@ -144,6 +146,14 @@ def make_app() -> web.Application:
     app.router.add_get("/api/plans", api.plans_get)
     app.router.add_post("/api/pay", api.pay_create)
     app.router.add_get("/api/stats", api.stats_get)
+    app.router.add_get("/api/admin/status", admin_api.status_get)
+    app.router.add_put("/api/admin/scout", admin_api.scout_put)
+    app.router.add_get("/api/admin/settings", admin_api.settings_get)
+    app.router.add_put("/api/admin/settings/{key}", admin_api.setting_put)
+    app.router.add_post("/api/admin/presets/{name}", admin_api.preset_apply)
+    app.router.add_get("/api/admin/users", admin_api.users_list)
+    app.router.add_get("/api/admin/users/{id}", admin_api.user_get)
+    app.router.add_post("/api/admin/users/{id}/plan", admin_api.user_plan)
     app.router.add_get("/api/autosetup", api.autosetup_get)
     app.router.add_post("/api/autosetup", api.autosetup_post)
     app.router.add_get("/", index)
