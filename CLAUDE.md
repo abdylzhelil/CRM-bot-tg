@@ -29,7 +29,7 @@
   группы в папках «🔍 Разведка», звук выключен; ротация.
 - Меню: сворачиваемая клавиатура, админские разделы в «🛠 Управление», команды в кнопке «Меню», фолбэк на меню.
 - Обновление базы без потери данных: `app/migrate.py` (добавляет новые колонки сам).
-- Тесты: `pytest` (122), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
+- Тесты: `pytest` (126), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
 
 - Этап 2 сделан: 🌐 Каталог (`handlers/catalog.py`, `submissions.py`, `services/catalog.py`): ссылка → проверка через Bot API →
   ниша → город → одобрение админом (🔍 Группы → 📝 От пользователей) → каталог. Бонус +1 день 💎 за каждые N (`bonus_leads`)
@@ -86,6 +86,8 @@
 - Конец тарифа: `main.expiry_once` (напоминание, «закончился» → plan=free). Автопродление: `payments.renew_due` (`users.renew_method/renew_days/renew_for`,
   `pending_links.auto`, настройка `autorenew`=0 пока ЮKassa не разрешит сохранение способа оплаты; при возврате отключается). Лицензия: `services/licenses.py`
   (`groups.license_until/off/rewarded`, настройка `license_enabled`=0), админ-раздел 🪪 Лицензии, `GET /feed/license`. ВАЖНО: бот модерации этот запрос НЕ делает — менять его только с разрешения владельца.
+
+- `/deleteme` (`services/erase.py`), «сторож» (`services/heartbeat.py`, `HEARTBEAT_URL`), воронка в 📊 Статистике (`stats.funnel_text`), памятка после регистрации (`profile.finish_onboarding`).
 
 ## Дальше по плану
 1. ИИ на Claude (классификация, температура, черновики ответов) — в конце, нужен ключ Claude API.

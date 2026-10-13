@@ -76,9 +76,30 @@ async def users_line() -> str:
     return f"👥 Пользователей: {ready} (зарегистрированы), активных за неделю: {active}, на полном тарифе: {paid}{extra}{money}"
 
 
+async def funnel_text() -> str:
+    """Откуда теряются люди: зашли → прошли проверку → выбрали ниши → завершили регистрацию → оплатили."""
+    from app.models import Payment, UserCategory
+
+    async with Session() as s:
+        count = lambda *w: s.scalar(select(func.count()).select_from(User).where(User.is_admin == False, *w))  # noqa: E711,E731
+        entered = await count()
+        verified = await count(User.verified)
+        chose = await s.scalar(select(func.count(func.distinct(UserCategory.user_id))).select_from(UserCategory)
+                               .join(User, User.tg_id == UserCategory.user_id).where(User.is_admin == False))  # noqa: E712
+        done = await count(User.onboarded)
+        referred = await count(User.onboarded, User.referred_by != 0)
+        buyers = await s.scalar(select(func.count(func.distinct(Payment.user_id))).where(~Payment.refunded)) or 0
+    if not entered:
+        return ""
+    return ("\n\n<b>Воронка</b>\n"
+            f"Зашли: {entered} → прошли проверку: {verified} → выбрали ниши: {chose or 0} → "
+            f"завершили регистрацию: {done} → оплатили: {buyers}\n"
+            f"Из завершивших по приглашению: {referred}")
+
+
 @router.message(F.text == "📊 Статистика")
 async def stats(m: Message, user: User) -> None:
     text = await user_report(user.tg_id)
     if user.is_admin:
-        text += "\n\n<b>Весь бот</b>\n" + await users_line() + "\n" + await build_report()
+        text += "\n\n<b>Весь бот</b>\n" + await users_line() + "\n" + await build_report() + await funnel_text()
     await m.answer(text)

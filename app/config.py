@@ -26,5 +26,7 @@ PAYMENT_CURRENCY = os.getenv("PAYMENT_CURRENCY", "RUB")
 # Публичный канал со статистикой (@имя или -100…); бот должен быть его администратором. Пусто — выключено.
 STATS_CHANNEL = os.getenv("STATS_CHANNEL", "")
 # Возврат денег из бота (необязательно): shopId и секретный ключ из кабинета ЮKassa -> Интеграция -> Ключи API.
+# «Сторож»: адрес отметки во внешнем сервисе (healthchecks.io и т. п.). Пусто — выключено.
+HEARTBEAT_URL = os.getenv("HEARTBEAT_URL", "")
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")

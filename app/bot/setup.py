@@ -7,20 +7,20 @@ from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
-    BotCommand, BotCommandScopeChat, BotCommandScopeDefault, KeyboardButton, MenuButtonCommands, Message,
+    BotCommand, BotCommandScopeChat, BotCommandScopeDefault, CallbackQuery, KeyboardButton, MenuButtonCommands, Message,
     ReplyKeyboardMarkup,
 )
 
 from app import config
 from app.bot import captcha, notify
 from app.bot.access import IsAdmin, UserMiddleware
-from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU
+from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU, kb
 from app.bot.handlers import (
     accounts, blacklist, broadcast, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
     submissions, users_admin,
 )
 from app.db import Session
-from app.models import User
+from app.models import User, now
 from app.services import referrals
 
 
@@ -40,7 +40,7 @@ HELP = (
     "🌐 <b>Каталог</b> — добавьте свою открытую группу или канал: за заявки из неё дарим дни 💎.\n\n"
     "<b>Настройки</b> — в 👤 Профиль: ниши, город, минус-слова, режим тишины, свой шаблон и цены, пауза.\n"
     "Заявка живёт минуты — отвечайте быстро 🔥\n\n"
-    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /catalog — каталог, /profile — профиль, /terms — условия оплаты, /privacy — политика конфиденциальности, /cancel — отмена ввода."
+    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /catalog — каталог, /profile — профиль, /terms — условия оплаты, /privacy — политика конфиденциальности, /deleteme — удалить мои данные, /cancel — отмена ввода."
 )
 
 USER_COMMANDS = [
@@ -51,6 +51,7 @@ USER_COMMANDS = [
     BotCommand(command="profile", description="Профиль и настройки"),
     BotCommand(command="terms", description="Условия оплаты"),
     BotCommand(command="privacy", description="Политика конфиденциальности"),
+    BotCommand(command="deleteme", description="Удалить мои данные"),
     BotCommand(command="paysupport", description="Вопросы по оплате"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="cancel", description="Отменить ввод"),
@@ -136,6 +137,35 @@ PRIVACY_URL = "https://telegra.ph/Politika-konfidencialnosti-KlientRadar-10-13-2
 @base.message(Command("privacy"))
 async def privacy(m: Message) -> None:
     await m.answer(f'🔒 <a href="{PRIVACY_URL}">Политика конфиденциальности</a>: какие данные мы храним и как их удалить.')
+
+
+@base.message(Command("deleteme"))
+async def deleteme(m: Message, user: User) -> None:
+    if user.is_admin:
+        return await m.answer("Администратора удалить нельзя.")
+    paid = user.plan == "full" and user.plan_until is not None and user.plan_until > now()
+    warn = "\n⚠️ У вас оплаченный 💎 тариф — он тоже пропадёт без возврата." if paid else ""
+    await m.answer(
+        "🗑 <b>Удалить мои данные?</b>\nБудут удалены профиль, настройки, полученные заявки и ваши клиенты в CRM. "
+        f"Вернуть их будет нельзя.{warn}\nПотом можно зарегистрироваться заново.",
+        reply_markup=kb([[("🗑 Да, удалить всё", "del:yes"), ("Отмена", "del:no")]]))
+
+
+@base.callback_query(F.data == "del:no")
+async def delete_no(cb: CallbackQuery) -> None:
+    await cb.message.edit_text("Хорошо, ничего не удалено.")
+    await cb.answer()
+
+
+@base.callback_query(F.data == "del:yes")
+async def delete_yes(cb: CallbackQuery) -> None:
+    from app.services import erase
+
+    async with Session() as s:
+        ok = await erase.erase_user(s, cb.from_user.id)
+    await cb.message.edit_text("✅ Ваши данные удалены. Если захотите вернуться — отправьте /start."
+                               if ok else "Этот аккаунт удалить нельзя.")
+    await cb.answer()
 
 
 @base.message(Command("cancel"))
