@@ -192,3 +192,12 @@ async def test_registration_screen_mentions_deletion_period(maker, tgbot):
     m.answer = AsyncMock()
     await profile.show_niches(m, SimpleNamespace(tg_id=300, onboarded=False))
     assert "удалится" in m.answer.call_args.args[0] and "7 дн" in m.answer.call_args.args[0]
+
+
+async def test_privacy_command(maker):
+    from app.bot.setup import privacy
+
+    m = MagicMock()
+    m.answer = AsyncMock()
+    await privacy(m)
+    assert "telegra.ph" in m.answer.call_args.args[0]

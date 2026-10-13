@@ -40,7 +40,7 @@ HELP = (
     "🌐 <b>Каталог</b> — добавьте свою открытую группу или канал: за заявки из неё дарим дни 💎.\n\n"
     "<b>Настройки</b> — в 👤 Профиль: ниши, город, минус-слова, режим тишины, свой шаблон и цены, пауза.\n"
     "Заявка живёт минуты — отвечайте быстро 🔥\n\n"
-    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /catalog — каталог, /profile — профиль, /cancel — отмена ввода."
+    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /catalog — каталог, /profile — профиль, /terms — условия оплаты, /privacy — политика конфиденциальности, /cancel — отмена ввода."
 )
 
 USER_COMMANDS = [
@@ -50,6 +50,7 @@ USER_COMMANDS = [
     BotCommand(command="catalog", description="Каталог групп и бонусы"),
     BotCommand(command="profile", description="Профиль и настройки"),
     BotCommand(command="terms", description="Условия оплаты"),
+    BotCommand(command="privacy", description="Политика конфиденциальности"),
     BotCommand(command="paysupport", description="Вопросы по оплате"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="cancel", description="Отменить ввод"),
@@ -127,6 +128,14 @@ SHORTCUTS = {"leads": "📥 Заявки", "clients": "👥 Клиенты", "pr
 @base.message(Command(*SHORTCUTS))
 async def shortcut(m: Message, state: FSMContext, user: User) -> None:
     await open_section(m, state, user, SHORTCUTS[m.text.split()[0].lstrip("/").split("@")[0]])
+
+
+PRIVACY_URL = "https://telegra.ph/Politika-konfidencialnosti-KlientRadar-10-13-2"
+
+
+@base.message(Command("privacy"))
+async def privacy(m: Message) -> None:
+    await m.answer(f'🔒 <a href="{PRIVACY_URL}">Политика конфиденциальности</a>: какие данные мы храним и как их удалить.')
 
 
 @base.message(Command("cancel"))
