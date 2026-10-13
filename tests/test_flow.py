@@ -199,3 +199,28 @@ async def test_about_command_and_profile_texts(app_bot):
     await setup.setup_profile(bot)
     assert any(isinstance(r, SetMyName) for r in api.requests)
     assert any(c.command == "about" for c in setup.USER_COMMANDS)
+
+
+async def test_settings_status_presets_and_search(app_bot, maker):
+    from app.services import settings as st
+
+    for k in st.LABELS:
+        assert k in st.HINTS
+    for _, _, _, vals in st.PRESETS.values():
+        assert all(k in st.DEFAULTS and v.isdigit() for k, v in vals.items())
+
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:status"))
+    assert any("Состояние бота" in t for t in api.texts(ADMIN_ID))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:pre:careful"))
+    assert "изменит" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:preok:careful"))
+    async with maker() as s:
+        assert await st.get(s, "default_join_limit") == "5"
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:def:default_join_limit"))
+    async with maker() as s:
+        assert await st.get(s, "default_join_limit") == "10"
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:find"))
+    await dp.feed_update(bot, text_update(ADMIN_ID, "возврат"))
+    assert "Нашлось" in api.texts(ADMIN_ID)[-1]
+    assert st.search("возврат") == ["refund_days"] or "refund_days" in st.search("возврат")

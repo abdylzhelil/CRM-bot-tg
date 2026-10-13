@@ -54,6 +54,16 @@ async def setting(s, m, d, text):
     await m.answer(f"✔ {settings.LABELS[key]}: {esc(text) or 'выключен'}", reply_markup=kb([[("⚙️ К настройкам", "st:menu")]]))
 
 
+async def setting_find(s, m, d, text):
+    keys = settings.search(text)
+    if not keys:
+        return await m.answer("Ничего не нашлось. Попробуйте другое слово или откройте раздел в ⚙️ Настройках.",
+                              reply_markup=kb([[("⚙️ К настройкам", "st:menu")]]))
+    rows = [[(settings.SHORT.get(k, settings.LABELS[k]), f"st:{k}")] for k in keys]
+    rows.append([("⚙️ К настройкам", "st:menu")])
+    await m.answer(f"🔎 Нашлось: {len(keys)}", reply_markup=kb(rows))
+
+
 async def client_field(s, m, d, text, field):
     from app.bot.handlers.clients import owned
 
@@ -280,6 +290,7 @@ HANDLERS = {
     "my_tpl": lambda s, m, d, t: my_field(s, m, d, t, "reply_template"),
     "my_prices": lambda s, m, d, t: my_field(s, m, d, t, "prices"),
     "setting": setting,
+    "setting_find": setting_find,
     "client_find": client_find,
     "client_add": client_add,
     "query_add": query_add,

@@ -100,3 +100,6 @@
 
 - Внешность бота (этап А): `setup.BOT_NAME/DESCRIPTION/SHORT_DESCRIPTION/ABOUT`, `/about`, имя ставится `set_my_name`; картинки `docs/brand/`, инструкция `docs/BOT_APPEARANCE.md`
   (аватар и картинку-описание загружать вручную в BotFather). Дальше: Б — внутренние настройки, В — мини-приложение.
+
+- Внутренние настройки (этап Б): ⚙️ Настройки → «📋 Состояние бота» (`settings.status_text`), «🎛 Пресеты» (`settings.PRESETS`: запуск/осторожно, с показом изменений),
+  «🔎 Найти настройку» (`settings.search`), у каждой настройки подсказка `HINTS` (тест требует) и кнопка «↩️ По умолчанию». Новая настройка = DEFAULTS, LABELS, SHORT, HINTS, SECTIONS.
