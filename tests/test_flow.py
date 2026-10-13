@@ -184,3 +184,18 @@ async def test_user_menu_has_no_admin_buttons_and_profile_is_set(app_bot, maker)
     await setup_profile(bot)
     assert any(isinstance(r, SetMyCommands) for r in api.requests)
     assert any(isinstance(r, SetMyDescription) for r in api.requests)
+
+
+async def test_about_command_and_profile_texts(app_bot):
+    from aiogram.methods import SetMyName
+
+    from app import config
+    from app.bot import setup
+
+    bot, dp, api = app_bot
+    assert len(setup.DESCRIPTION) <= 512 and len(setup.SHORT_DESCRIPTION) <= 120
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/about"))
+    assert "КлиентРадар" in api.texts(ADMIN_ID)[-1]
+    await setup.setup_profile(bot)
+    assert any(isinstance(r, SetMyName) for r in api.requests)
+    assert any(c.command == "about" for c in setup.USER_COMMANDS)

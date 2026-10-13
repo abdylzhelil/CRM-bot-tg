@@ -55,6 +55,7 @@ USER_COMMANDS = [
     BotCommand(command="deleteme", description="Удалить мои данные"),
     BotCommand(command="paysupport", description="Вопросы по оплате"),
     BotCommand(command="help", description="Как пользоваться"),
+    BotCommand(command="about", description="О боте"),
     BotCommand(command="cancel", description="Отменить ввод"),
 ]
 ADMIN_COMMANDS = USER_COMMANDS[:-2] + [
@@ -62,12 +63,25 @@ ADMIN_COMMANDS = USER_COMMANDS[:-2] + [
     BotCommand(command="groups", description="Группы и разведчики"),
     BotCommand(command="settings", description="Настройки бота"),
 ] + USER_COMMANDS[-2:]
+BOT_NAME = "КлиентРадар"
 DESCRIPTION = (
-    "Нахожу клиентов в Telegram-группах: присылаю сообщения людей, которые ищут исполнителя по вашей нише "
-    "и в вашем городе. Отсеиваю спам и конкурентов, помогаю ответить и довести до сделки (встроенная CRM). "
+    "📡 КлиентРадар находит клиентов в Telegram-группах.\n\n"
+    "• присылает сообщения людей, которые ищут исполнителя — по вашим нишам и городу\n"
+    "• отсеивает спам, рекламу и конкурентов\n"
+    "• готовит ответ и ведёт сделку во встроенной CRM\n\n"
     "Нажмите «Запустить» — настройка займёт 30 секунд."
 )
-SHORT_DESCRIPTION = "Заявки клиентов из Telegram-групп по вашей нише и городу + CRM"
+SHORT_DESCRIPTION = "📡 Заявки клиентов из Telegram-групп по вашей нише и городу + CRM"
+ABOUT = (
+    "📡 <b>КлиентРадар</b>\n\n"
+    "Бот читает открытые Telegram-группы и присылает сообщения людей, которые <b>ищут исполнителя</b> "
+    "по вашим нишам и в вашем городе. Спам и повторы отсеиваются сами.\n\n"
+    "Дальше — ✍️ ответ в один клик, 👥 CRM с этапами сделки и напоминаниями, 🌐 каталог групп с бонусами "
+    "и 🤝 приглашения друзей.\n\n"
+    "Бесплатно: до 5 заявок в день с небольшой задержкой. 💎 Полный тариф — без лимита и сразу.\n\n"
+    "Как пользоваться — /help, условия — /terms, политика — /privacy."
+)
+assert len(DESCRIPTION) <= 512 and len(SHORT_DESCRIPTION) <= 120 and len(BOT_NAME) <= 64
 
 
 def menu_keyboard(user: User | None = None) -> ReplyKeyboardMarkup:
@@ -95,6 +109,7 @@ async def setup_profile(bot: Bot) -> None:
         for admin_id in config.OWNER_IDS:
             await bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id))
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        await bot.set_my_name(BOT_NAME)
         await bot.set_my_description(DESCRIPTION)
         await bot.set_my_short_description(SHORT_DESCRIPTION)
     except Exception:
@@ -114,7 +129,13 @@ async def start(m: Message, state: FSMContext, user: User, command: CommandObjec
             await referrals.attach(s, user, referrer)
     if not user.onboarded:
         return await profile.show_niches(m, user)
-    await m.answer("👋 Выберите раздел:", reply_markup=menu_keyboard(user))
+    await m.answer("📡 Главное меню — выберите раздел:", reply_markup=menu_keyboard(user))
+
+
+@base.message(Command("about"))
+async def about_cmd(m: Message, state: FSMContext, user: User) -> None:
+    await state.clear()
+    await m.answer(ABOUT, reply_markup=menu_keyboard(user) if user.onboarded else None)
 
 
 @base.message(Command("help"))
