@@ -8,7 +8,7 @@ import logging
 from app.bot import notify
 from app.db import Session
 from app.models import Group, Lead
-from app.services import catalog, levels
+from app.services import catalog, levels, licenses
 from app.services.distribute import distribute
 from app.services.pipeline import Incoming, process
 
@@ -26,6 +26,7 @@ async def handle(msg: Incoming) -> Lead | None:
             if group is not None and group.submitted_by:
                 finder = group.submitted_by
                 new_level = await levels.refresh(s, finder)
+                await licenses.award(s, group)
     if lead:
         await notify.flush_due()
     for user_id, delta, kind in bonuses:

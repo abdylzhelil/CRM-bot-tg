@@ -73,6 +73,8 @@ async def take_back(s: AsyncSession, payment: Payment) -> None:
         if user.plan_until <= now():
             user.plan, user.plan_until = "free", None
     payment.refunded, payment.refunded_at = True, now()
+    if user is not None:
+        disable_renew(user)  # вернули деньги — карту больше не списываем
     await s.commit()
 
 
@@ -114,7 +116,7 @@ async def _api(method: str, path: str, body: dict | None = None, key: str = "") 
             return data
 
 
-async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str, api=None) -> str:
+async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str, api=None, auto: bool = False) -> str:
     """Создать платёж ЮKassa и вернуть ссылку на оплату. Способ оплаты не задаём — выбор (СБП, карта…) на странице ЮKassa."""
     import uuid
 
@@ -128,6 +130,8 @@ async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str,
         "description": f"Полный тариф на {days} дн. (Telegram {user_id})",
         "metadata": {"user_id": str(user_id), "days": str(days)},
     }
+    if auto:
+        body["save_payment_method"] = True  # ЮKassa запомнит карту для списаний за продление (с согласия человека)
     try:
         data = await (api or _api)("POST", "/payments", body, str(uuid.uuid4()))
     except Exception:
@@ -135,7 +139,7 @@ async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str,
     url = (data.get("confirmation") or {}).get("confirmation_url")
     if not url or not data.get("id"):
         raise RefundError(f"ЮKassa отказала: {data.get('description') or data.get('_http')}")
-    s.add(PendingLink(yk_id=data["id"], user_id=user_id, days=days, amount=price * 100))
+    s.add(PendingLink(yk_id=data["id"], user_id=user_id, days=days, amount=price * 100, auto=auto))
     await s.commit()
     return url
 
@@ -159,3 +163,63 @@ async def check_links(s: AsyncSession, api=None, max_age_h: int = 3) -> list[tup
             row.done = True
     await s.commit()
     return paid
+
+
+# ---------- автопродление ----------
+def autorenew_on(s_value: str) -> bool:
+    return s_value == "1" and links_enabled()
+
+
+def disable_renew(user: User) -> None:
+    user.renew_method, user.renew_days, user.renew_for = "", 0, None
+
+
+async def renew_due(s: AsyncSession, api=None, notify_user=None, notify_admin=None) -> int:
+    """Продлить тем, у кого включено автопродление и тариф кончается в ближайшие сутки.
+
+    Одна попытка на каждый срок окончания (renew_for). Не вышло — автопродление выключается, человеку сообщаем.
+    Возвращает число успешных продлений.
+    """
+    import uuid  # noqa: F401  (ключ идемпотентности детерминированный — на случай повтора запроса)
+
+    if await settings.get(s, "autorenew") != "1" or not links_enabled():
+        return 0
+    soon = now() + timedelta(days=1)
+    users = (await s.scalars(select(User).where(User.renew_method != "", User.plan_until.is_not(None),
+                                               User.plan_until < soon, ~User.is_admin))).all()
+    done = 0
+    for u in users:
+        if u.renew_for == u.plan_until:
+            continue
+        u.renew_for = u.plan_until
+        days = u.renew_days
+        price = await price_of(s, days)
+        ok, data = False, {}
+        if price:
+            body = {
+                "amount": {"value": f"{price:.2f}", "currency": config.PAYMENT_CURRENCY}, "capture": True,
+                "payment_method_id": u.renew_method,
+                "description": f"Автопродление: тариф на {days} дн. (Telegram {u.tg_id})",
+                "metadata": {"user_id": str(u.tg_id), "days": str(days), "renew": "1"},
+            }
+            try:
+                data = await (api or _api)("POST", "/payments", body, f"renew-{u.tg_id}-{u.plan_until:%Y%m%d%H%M}")
+                ok = data.get("status") == "succeeded"
+            except Exception:
+                ok = False
+        if ok:
+            new, share = await apply(s, u.tg_id, days, price * 100, config.PAYMENT_CURRENCY, f"yk:{data['id']}", data["id"])
+            done += 1
+            if notify_user:
+                await notify_user(u.tg_id, f"🔁 Тариф продлён автоматически на {days} дн. (списано {price} ₽). "
+                                  "Отключить автопродление: 👤 Профиль → 💎 Тариф.", True)
+            if notify_admin:
+                await notify_admin(u, days, price * 100, data["id"], share)
+        else:
+            disable_renew(u)
+            await s.commit()
+            if notify_user:
+                await notify_user(u.tg_id, "⚠️ Не удалось продлить тариф автоматически (платёж не прошёл). "
+                                  "Автопродление отключено — продлите вручную в 👤 Профиль → 💎 Тариф.", False)
+    await s.commit()
+    return done

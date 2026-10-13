@@ -109,7 +109,7 @@ async def test_prices_visible_before_payments_connected(maker, tgbot, monkeypatc
     monkeypatch.setattr(config, "PAYMENT_PROVIDER_TOKEN", "")
     cb = MagicMock()
     cb.answer, cb.message.edit_text, cb.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
-    await profile.pf_plan(cb, SimpleNamespace(tg_id=50, plan="free", plan_until=None, is_admin=False))
+    await profile.pf_plan(cb, SimpleNamespace(tg_id=50, plan="free", plan_until=None, is_admin=False, renew_method="", renew_days=0))
     shown = cb.answer.call_args
     text, markup = shown.args[0], shown.kwargs["reply_markup"]
     assert "990" in str(markup) and "подключаем" in text

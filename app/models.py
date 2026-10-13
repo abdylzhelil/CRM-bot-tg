@@ -67,6 +67,9 @@ class Group(Base):
     ad_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # реклама «Рекомендуем» до
     ad_spent: Mapped[int] = mapped_column(Integer, default=0)  # заявок потрачено на рекламу
     ad_pending: Mapped[bool] = mapped_column(Boolean, default=False)  # заказ рекламы ждёт подтверждения
+    license_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # лицензия бота модерации до
+    license_off: Mapped[bool] = mapped_column(Boolean, default=False)  # владелец отключил лицензию вручную
+    license_rewarded: Mapped[int] = mapped_column(Integer, default=0)  # заявок уже учтено в лицензии
 
 
 class FeedChat(Base):
@@ -234,6 +237,9 @@ class User(Base):
     level: Mapped[int] = mapped_column(Integer, default=0)  # уровень автора групп (services/levels.py)
     verified: Mapped[bool] = mapped_column(Boolean, default=True)  # прошёл проверку «я не бот» (у старых — да)
     warned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда предупредили об удалении
+    renew_method: Mapped[str] = mapped_column(String(64), default="")  # сохранённый способ оплаты ЮKassa (автопродление)
+    renew_days: Mapped[int] = mapped_column(Integer, default=0)  # на сколько дней продлевать
+    renew_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, для которого уже была попытка
     expiry_notice: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, о котором уже напомнили
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -298,6 +304,7 @@ class PendingLink(Base):
     amount: Mapped[int] = mapped_column(Integer)  # в копейках
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    auto: Mapped[bool] = mapped_column(Boolean, default=False)  # человек согласился на автопродление
 
 
 class SpamVote(Base):

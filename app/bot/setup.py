@@ -16,7 +16,7 @@ from app.bot import captcha, notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU
 from app.bot.handlers import (
-    accounts, blacklist, broadcast, catalog, categories, clients, payments, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
+    accounts, blacklist, broadcast, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
     submissions, users_admin,
 )
 from app.db import Session
@@ -82,7 +82,7 @@ def admin_panel():
         [("🔍 Группы", "adm:groups"), ("👥 Пользователи", "adm:users")],
         [("🗂 Категории", "adm:categories"), ("🔑 Ключевые слова", "adm:keywords")],
         [("🛡 Чёрный список", "adm:blacklist"), ("⚙️ Настройки", "adm:settings")],
-        [("📣 Рассылка", "adm:broadcast")],
+        [("📣 Рассылка", "adm:broadcast"), ("🪪 Лицензии", "adm:licenses")],
     ])
 
 
@@ -185,7 +185,7 @@ admin_nav = Router(name="admin_nav")
 ADMIN_TARGETS = {
     "groups": groups.groups_menu, "users": users_admin.users_menu, "categories": categories.categories_menu,
     "keywords": keywords.keywords_menu, "blacklist": blacklist.blacklist_menu, "settings": settings.settings_menu,
-    "broadcast": broadcast.broadcast_menu,
+    "broadcast": broadcast.broadcast_menu, "licenses": licenses.licenses_menu,
 }
 
 
@@ -223,7 +223,7 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     admin.callback_query.filter(IsAdmin())
     admin.include_routers(
         accounts.router, groups.router, categories.router, keywords.router, blacklist.router,
-        settings.router, users_admin.router, submissions.router, broadcast.router, admin_nav,
+        settings.router, users_admin.router, submissions.router, broadcast.router, licenses.router, admin_nav,
     )
     # личка: всем пользователям
     private = Router(name="private")

@@ -73,12 +73,18 @@ async def delivery_loop() -> None:
 
 
 async def expiry_once() -> int:
-    """За 3 дня до конца 💎 напоминаем один раз (на каждый срок окончания). Возвращает число напоминаний."""
+    """Тарифы 💎: за 3 дня до конца — напоминание (или предупреждение о списании), в день конца — «тариф закончился».
+
+    Возвращает число отправленных сообщений.
+    """
     from datetime import timedelta
 
     from app.models import User
+    from app.services import payments
 
     sent = 0
+    button = notify.InlineKeyboardMarkup(inline_keyboard=[[
+        notify.InlineKeyboardButton(text="💎 Продлить", callback_data="pf:plan")]])
     async with Session() as s:
         soon = (await s.scalars(select(User).where(
             User.plan == "full", User.plan_until.is_not(None), ~User.blocked,
@@ -88,62 +94,26 @@ async def expiry_once() -> int:
                 continue
             u.expiry_notice = u.plan_until
             sent += 1
-            await send_to(u.tg_id, f"⏳ 💎 Полный тариф заканчивается {u.plan_until:%d.%m}. "
-                          "Продлите, чтобы заявки приходили сразу и без лимита.",
-                          notify.InlineKeyboardMarkup(inline_keyboard=[[
-                              notify.InlineKeyboardButton(text="💎 Продлить", callback_data="pf:plan")]]))
+            price = await payments.price_of(s, u.renew_days) if u.renew_method else 0
+            if u.renew_method and price:
+                text = (f"🔁 💎 Полный тариф заканчивается {u.plan_until:%d.%m}: автоматически спишем {price} ₽ "
+                        f"за продление на {u.renew_days} дн. Не нужно — отключите: 👤 Профиль → 💎 Тариф.")
+                await send_to(u.tg_id, text)
+            else:
+                await send_to(u.tg_id, f"⏳ 💎 Полный тариф заканчивается {u.plan_until:%d.%m}. "
+                              "Продлите, чтобы заявки приходили сразу и без лимита.", button)
+        ended = (await s.scalars(select(User).where(
+            User.plan == "full", User.plan_until.is_not(None), User.plan_until <= now(), ~User.is_admin))).all()
+        for u in ended:
+            if u.renew_method and u.renew_for != u.plan_until:
+                continue  # автопродление ещё попробует — раньше времени «закончился» не пишем
+            u.plan, u.plan_until, u.expiry_notice = "free", None, None
+            if not u.blocked:
+                sent += 1
+                await send_to(u.tg_id, "⌛ 💎 Полный тариф закончился. Сейчас у вас бесплатный: заявок до 5 в день, "
+                              "с задержкой. Продлить можно в любой момент.", button)
         await s.commit()
     return sent
-
-
-async def send_ok(user_id: int, text: str, markup=None) -> bool:
-    """Отправка с ответом «дошло ли» (False — человек заблокировал бота)."""
-    from aiogram.exceptions import TelegramForbiddenError
-
-    try:
-        await notify._bot.send_message(user_id, text, reply_markup=markup)
-        return True
-    except TelegramForbiddenError:
-        return False
-    except Exception:
-        log.info("не удалось написать %s", user_id)
-        return True  # временная ошибка — не считаем заблокированным
-
-
-async def cleanup_loop() -> None:
-    """Раз в 6 часов удаляет аккаунты, не завершившие регистрацию за cleanup_days (по умолчанию 7) дней."""
-    from app.services import cleanup
-
-    while True:
-        try:
-            async with Session() as s:
-                warned = await cleanup.warn_due(s, send_ok)
-                if warned:
-                    log.info("предупреждено об удалении: %s", warned)
-            async with Session() as s:
-                removed = await cleanup.auto_cleanup(s)
-            if removed:
-                log.info("удалено пустых аккаунтов: %s", removed)
-                await notify._send(f"🧹 Автоочистка: удалено пустых аккаунтов (не завершили регистрацию): {removed}.")
-        except Exception:
-            log.exception("cleanup_loop")
-            await notify.alert_once("cleanup_loop", "В фоновой задаче cleanup_loop ошибка (см. логи сервера).")
-        await asyncio.sleep(6 * 3600)
-
-
-async def receipts_loop() -> None:
-    """Раз в час проверяет: не пора ли напомнить о чеках за прошлый месяц (5-го числа после 10:00)."""
-    from app.services import receipts
-
-    while True:
-        try:
-            async with Session() as s:
-                text = await receipts.due_message(s)
-            if text:
-                await notify._send(text)
-        except Exception:
-            log.exception("receipts_loop")
-        await asyncio.sleep(3600)
 
 
 async def expiry_loop() -> None:

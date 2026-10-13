@@ -75,27 +75,35 @@ async def link_menu(cb: CallbackQuery, user: User) -> None:
         return await cb.answer("Оплата по ссылке пока не подключена", show_alert=True)
     async with Session() as s:
         offers = await payments.packages(s)
-    rows = [[(f"📱 {d} дн. — {price} ₽", f"lnk:{d}")] for d, price in offers] + [[("◀️ Тариф", "pf:plan")]]
+    async with Session() as s:
+        auto = await settings.get(s, "autorenew") == "1"
+    rows = [[(f"📱 {d} дн. — {price} ₽", f"lnk:{d}")] + ([(f"🔁 с автопродлением", f"lnk:{d}:auto")] if auto else [])
+            for d, price in offers] + [[("◀️ Тариф", "pf:plan")]]
     from app.bot.common import reply
 
+    extra = ("\n\n🔁 <b>С автопродлением</b>: ЮKassa запомнит карту, и перед окончанием тарифа мы сами спишем ту же сумму. "
+             "За 3 дня предупредим, отключить можно в любой момент: 👤 Профиль → 💎 Тариф." if auto else "")
     await reply(cb, "📱 <b>Оплата по ссылке</b>\nОткроется страница ЮKassa: можно заплатить через <b>СБП</b> "
                 "(по номеру телефона, без комиссии для вас как покупателя) или картой. "
-                "Тариф включится сам в течение минуты после оплаты.", kb(rows))
+                "Тариф включится сам в течение минуты после оплаты." + extra, kb(rows))
 
 
-@router.callback_query(F.data.regexp(r"^lnk:\d+$"))
+@router.callback_query(F.data.regexp(r"^lnk:\d+(:auto)?$"))
 async def link_pay(cb: CallbackQuery, user: User) -> None:
     if not payments.links_enabled():
         return await cb.answer("Оплата по ссылке пока не подключена", show_alert=True)
     days = int(cb.data.split(":")[1])
+    auto = cb.data.endswith(":auto")
     me = await cb.bot.me()
     async with Session() as s:
+        if auto and await settings.get(s, "autorenew") != "1":
+            return await cb.answer("Автопродление сейчас недоступно", show_alert=True)
         try:
-            url = await payments.create_link(s, user.tg_id, days, f"https://t.me/{me.username}")
+            url = await payments.create_link(s, user.tg_id, days, f"https://t.me/{me.username}", auto=auto)
         except payments.RefundError as e:
             return await cb.answer(str(e), show_alert=True)
     await cb.message.answer(
-        f"🔗 Счёт на {days} дн. создан. Нажмите кнопку, оплатите, и вернитесь в бот — тариф включится сам.",
+        f"🔗 Счёт на {days} дн. создан{' с автопродлением' if auto else ''}. Нажмите кнопку, оплатите, и вернитесь в бот — тариф включится сам.",
         reply_markup=kb([[("Оплатить (СБП / карта)", f"url:{url}")]]))
     await cb.answer()
 
@@ -115,6 +123,9 @@ async def process_links(api=None) -> int:
             new, share = await payments.apply(s, link.user_id, link.days, amount, (data.get("amount") or {}).get("currency", "RUB"),
                                               f"yk:{link.yk_id}", link.yk_id)
             u = await s.get(User, link.user_id)
+            method = data.get("payment_method") or {}
+            if link.auto and u is not None and method.get("saved") and method.get("id"):
+                u.renew_method, u.renew_days = method["id"], link.days
             pay_id = await s.scalar(select(Payment.id).where(Payment.charge_id == f"yk:{link.yk_id}"))
             await s.commit()
         if not new or u is None:
@@ -128,6 +139,29 @@ async def process_links(api=None) -> int:
     return done
 
 
+@router.callback_query(F.data == "ren:off")
+async def renew_off(cb: CallbackQuery, user: User) -> None:
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+        payments.disable_renew(row)
+        await s.commit()
+    await cb.answer("Автопродление отключено, карта больше не списывается", show_alert=True)
+
+
+async def renew_once() -> int:
+    """Продление тем, у кого включено автопродление (вызывается циклом раз в час)."""
+    async def tell(uid, text, good):
+        await notify._bot.send_message(uid, text)
+
+    async def tell_admin(u, days, amount, yk_id, share):
+        await notify._send(f"💰 Автопродление: {esc(u.name or str(u.tg_id))} — {amount / 100:.0f} RUB, +{days} дн.\n🧾 Не забудьте чек в «Мой налог».")
+        if share:
+            await notify.bonus(share[0], share[1], "ref")
+
+    async with Session() as s:
+        return await payments.renew_due(s, notify_user=tell, notify_admin=tell_admin)
+
+
 async def link_loop() -> None:
     import asyncio
 
@@ -135,6 +169,7 @@ async def link_loop() -> None:
         try:
             if payments.links_enabled():
                 await process_links()
+                await renew_once()
         except Exception:
             log.exception("link_loop")
         await asyncio.sleep(15)

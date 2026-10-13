@@ -57,10 +57,12 @@ async def test_expiry_notice_once(maker, tgbot):
     await make_user(maker, 40, plan="full", plan_until=now() + timedelta(days=2))
     await make_user(maker, 41, plan="full", plan_until=now() + timedelta(days=20))
     await make_user(maker, 42, plan="full", plan_until=now() - timedelta(days=1))
-    assert await expiry_once() == 1
-    assert await expiry_once() == 0  # повторно не напоминаем
-    assert any("заканчивается" in t for t in tgbot.texts(40)) and not tgbot.texts(41) and not tgbot.texts(42)
+    assert await expiry_once() == 2  # 40 — «скоро кончится», 42 — «уже закончился»
+    assert await expiry_once() == 0  # повторно не пишем
+    assert any("заканчивается" in t for t in tgbot.texts(40)) and not tgbot.texts(41)
+    assert any("закончился" in t for t in tgbot.texts(42))
     async with maker() as s:  # продлил — на новый срок напомним снова
+        assert (await s.get(User, 42)).plan == "free"  # у закончившегося тариф переведён на бесплатный
         (await s.get(User, 40)).plan_until = now() + timedelta(days=1)
         await s.commit()
     assert await expiry_once() == 1

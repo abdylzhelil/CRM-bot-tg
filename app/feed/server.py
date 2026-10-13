@@ -2,6 +2,7 @@
 
 POST /feed/chats    — список групп бота модерации; в ответ — какие из них включены
 POST /feed/message  — сообщение из группы (только из включённых)
+GET  /feed/license  — действует ли у группы лицензия (?chat_id=…)
 Авторизация: заголовок «Authorization: Bearer <FEED_TOKEN>». Сервер слушает внутреннюю сеть Docker.
 """
 import hmac
@@ -109,6 +110,20 @@ async def message(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "lead": lead.id if lead else None})
 
 
+async def license_status(request: web.Request) -> web.Response:
+    """GET /feed/license?chat_id=…: есть ли у группы действующая лицензия (для бота модерации)."""
+    from app.services import licenses
+
+    try:
+        chat_id = int(request.query.get("chat_id", ""))
+    except ValueError:
+        return web.json_response({"error": "chat_id"}, status=400)
+    async with Session() as s:
+        g = await s.scalar(select(Group).where(Group.tg_id == chat_id))
+    active = bool(g and licenses.active(g))
+    return web.json_response({"active": active, "until": g.license_until.isoformat() if active else None})
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
@@ -118,6 +133,7 @@ def make_app() -> web.Application:
     app.router.add_post("/feed/chats", sync_chats)
     app.router.add_post("/feed/message", message)
     app.router.add_get("/feed/health", health)
+    app.router.add_get("/feed/license", license_status)
     return app
 
 

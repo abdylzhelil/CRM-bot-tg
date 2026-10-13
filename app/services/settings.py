@@ -34,6 +34,10 @@ DEFAULTS: dict[str, str] = {
     "refund_days": "3",
     "ad_leads": "20",
     "ad_days": "7",
+    "autorenew": "0",
+    "license_enabled": "0",
+    "license_leads": "50",
+    "license_days": "30",
     "channel_hour": "12",
     "niche_daily_limit": "3",
     "ref_limit": "10",
@@ -71,6 +75,10 @@ LABELS: dict[str, str] = {
     "refund_days": "Возврат денег в течение N дней после оплаты (0 — без возврата)",
     "ad_leads": "Реклама группы: сколько её заявок стоит (0 — реклама выключена)",
     "ad_days": "Реклама группы: на сколько дней",
+    "autorenew": "Автопродление тарифа при оплате по ссылке (1 — включено; нужно разрешение ЮKassa)",
+    "license_enabled": "Лицензия бота модерации за заявки группы (1 — включено)",
+    "license_leads": "Лицензия: заявок группы за один период",
+    "license_days": "Лицензия: дней за период",
     "channel_hour": "Час публикации статистики в канале",
     "niche_daily_limit": "Предложений новых ниш от пользователя в сутки",
     "ref_limit": "Сколько приглашений на человека награждается (всего)",
@@ -100,11 +108,11 @@ async def put(session: AsyncSession, key: str, value: str) -> None:
 
 # Разделы меню «⚙️ Настройки»: (значок, название, [ключи])
 SECTIONS: list[tuple[str, str, list[str]]] = [
-    ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "refund_days", "free_daily_limit", "free_delay_min"]),
+    ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "refund_days", "autorenew", "free_daily_limit", "free_delay_min"]),
     ("📥", "Раздача заявок", ["max_recipients", "share_gap_min", "pass_daily_limit"]),
     ("🎁", "Бонусы", ["bonus_leads", "bonus_max_days", "ref_days", "ref_percent", "ref_limit"]),
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
-                               "channel_poll_min", "channel_hour", "ad_leads", "ad_days"]),
+                               "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days"]),
@@ -113,14 +121,14 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
 
 # Короткие подписи для кнопок (полные — в LABELS, их видно при редактировании)
 SHORT: dict[str, str] = {
-    "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽", "refund_days": "Срок возврата, дн",
+    "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽", "refund_days": "Срок возврата, дн", "autorenew": "Автопродление (1/0)",
     "free_daily_limit": "Бесплатный: заявок/день", "free_delay_min": "Бесплатный: задержка, мин",
     "max_recipients": "Получателей на заявку", "share_gap_min": "Интервал очереди, мин",
     "pass_daily_limit": "Передач коллегам/день",
     "bonus_leads": "Заявок за +1 день", "bonus_max_days": "Потолок бонуса, дней",
     "ref_days": "За друга, дней", "ref_percent": "% от бонусов друга", "ref_limit": "Макс. приглашений",
     "submit_daily_limit": "Групп от человека/день", "catalog_min_members": "Мин. участников в группе",
-    "niche_daily_limit": "Своих ниш/день", "ad_leads": "Реклама: цена в заявках", "ad_days": "Реклама: дней", "channel_poll_min": "Опрос каналов, мин",
+    "niche_daily_limit": "Своих ниш/день", "ad_leads": "Реклама: цена в заявках", "ad_days": "Реклама: дней", "license_enabled": "Лицензия модерации (1/0)", "license_leads": "Лицензия: заявок", "license_days": "Лицензия: дней", "channel_poll_min": "Опрос каналов, мин",
     "channel_hour": "Статистика в канал, час",
     "mode": "Режим вступления", "min_members": "Мин. участников", "min_msgs_per_day": "Мин. сообщений/сутки",
     "default_join_limit": "Вступлений/сутки", "search_interval_h": "Поиск раз в, ч",
