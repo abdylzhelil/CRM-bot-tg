@@ -28,5 +28,7 @@ STATS_CHANNEL = os.getenv("STATS_CHANNEL", "")
 # Возврат денег из бота (необязательно): shopId и секретный ключ из кабинета ЮKassa -> Интеграция -> Ключи API.
 # «Сторож»: адрес отметки во внешнем сервисе (healthchecks.io и т. п.). Пусто — выключено.
 HEARTBEAT_URL = os.getenv("HEARTBEAT_URL", "")
+# ИИ на Claude (черновики ответов): ключ с console.anthropic.com. Пусто — ИИ выключен.
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")

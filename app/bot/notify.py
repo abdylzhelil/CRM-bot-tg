@@ -66,6 +66,8 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
             InlineKeyboardButton(text="🚫 Спам", callback_data=f"lead:spam:{d}"),
         ],
     ]
+    if config.ANTHROPIC_API_KEY:
+        rows.append([InlineKeyboardButton(text="✨ Черновик ответа (ИИ)", callback_data=f"lead:ai:{d}")])
     if lead.suspicious and admin:
         rows.append([InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

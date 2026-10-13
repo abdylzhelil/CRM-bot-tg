@@ -307,6 +307,18 @@ class PendingLink(Base):
     auto: Mapped[bool] = mapped_column(Boolean, default=False)  # человек согласился на автопродление
 
 
+class AiCall(Base):
+    """Один запрос к ИИ: для суточных лимитов и учёта токенов."""
+
+    __tablename__ = "ai_calls"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    model: Mapped[str] = mapped_column(String(48), default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
 class SpamVote(Base):
     """Голоса «это спам» от пользователей; несколько голосов — автор в общий чёрный список."""
 

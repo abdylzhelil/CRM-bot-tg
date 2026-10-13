@@ -43,6 +43,11 @@ async def setting(s, m, d, text):
     elif key == "report_hour":
         if not text.isdigit() or int(text) > 23:
             return await m.answer("Нужен час от 0 до 23") and False
+    elif key == "ai_model":
+        from app.services.ai import MODELS
+
+        if text not in MODELS:
+            return await m.answer("Допустимо: " + ", ".join(MODELS)) and False
     elif key != "mode" and not text.isdigit():
         return await m.answer("Нужно число") and False
     await settings.put(s, key, text)

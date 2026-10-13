@@ -38,6 +38,10 @@ DEFAULTS: dict[str, str] = {
     "license_enabled": "0",
     "license_leads": "50",
     "license_days": "30",
+    "ai_enabled": "1",
+    "ai_model": "claude-opus-5-5",
+    "ai_free_daily": "3",
+    "ai_paid_daily": "30",
     "channel_hour": "12",
     "niche_daily_limit": "3",
     "ref_limit": "10",
@@ -79,6 +83,10 @@ LABELS: dict[str, str] = {
     "license_enabled": "Лицензия бота модерации за заявки группы (1 — включено)",
     "license_leads": "Лицензия: заявок группы за один период",
     "license_days": "Лицензия: дней за период",
+    "ai_enabled": "ИИ-черновики ответов (1 — включено; нужен ключ в .env)",
+    "ai_model": "Модель ИИ (claude-opus-5-5, claude-sonnet-5-5 или claude-haiku-5-5)",
+    "ai_free_daily": "ИИ: запросов в сутки на бесплатном тарифе",
+    "ai_paid_daily": "ИИ: запросов в сутки на платном тарифе",
     "channel_hour": "Час публикации статистики в канале",
     "niche_daily_limit": "Предложений новых ниш от пользователя в сутки",
     "ref_limit": "Сколько приглашений на человека награждается (всего)",
@@ -116,6 +124,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days"]),
+    ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
 ]
 
@@ -136,4 +145,6 @@ SHORT: dict[str, str] = {
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана",
     "report_hour": "Час вечернего отчёта",
+    "ai_enabled": "ИИ включён (1/0)", "ai_model": "Модель ИИ", "ai_free_daily": "ИИ в сутки: бесплатные",
+    "ai_paid_daily": "ИИ в сутки: платные",
 }

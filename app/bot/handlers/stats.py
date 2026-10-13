@@ -73,7 +73,12 @@ async def users_line() -> str:
     money = f"\n💰 Оплаты за 30 дней: {pay[0]} шт. на {pay[1] / 100:.0f} ₽" if pay[0] else ""
     empty = total - ready
     extra = f"\n🧹 Не завершили регистрацию: {empty}" + (f" (не прошли проверку: {unverified})" if unverified else "") if empty else ""
-    return f"👥 Пользователей: {ready} (зарегистрированы), активных за неделю: {active}, на полном тарифе: {paid}{extra}{money}"
+    async with Session() as s:
+        from app.services import ai
+
+        calls, tin, tout = await ai.usage_summary(s)
+    ai_line = f"\n✨ ИИ за 30 дней: {calls} ответов, токенов: {tin:,} вход / {tout:,} выход".replace(",", " ") if calls else ""
+    return f"👥 Пользователей: {ready} (зарегистрированы), активных за неделю: {active}, на полном тарифе: {paid}{extra}{money}{ai_line}"
 
 
 async def funnel_text() -> str:

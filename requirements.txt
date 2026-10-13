@@ -1,4 +1,5 @@
 aiogram>=3.4,<4
+anthropic>=1.13,<2
 telethon>=1.36,<2
 sqlalchemy[asyncio]>=2.0,<3
 aiosqlite>=0.19

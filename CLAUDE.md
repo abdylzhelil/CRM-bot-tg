@@ -29,7 +29,7 @@
   группы в папках «🔍 Разведка», звук выключен; ротация.
 - Меню: сворачиваемая клавиатура, админские разделы в «🛠 Управление», команды в кнопке «Меню», фолбэк на меню.
 - Обновление базы без потери данных: `app/migrate.py` (добавляет новые колонки сам).
-- Тесты: `pytest` (126), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
+- Тесты: `pytest` (135), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
 
 - Этап 2 сделан: 🌐 Каталог (`handlers/catalog.py`, `submissions.py`, `services/catalog.py`): ссылка → проверка через Bot API →
   ниша → город → одобрение админом (🔍 Группы → 📝 От пользователей) → каталог. Бонус +1 день 💎 за каждые N (`bonus_leads`)
@@ -88,6 +88,9 @@
   (`groups.license_until/off/rewarded`, настройка `license_enabled`=0), админ-раздел 🪪 Лицензии, `GET /feed/license`. ВАЖНО: бот модерации этот запрос НЕ делает — менять его только с разрешения владельца.
 
 - `/deleteme` (`services/erase.py`), «сторож» (`services/heartbeat.py`, `HEARTBEAT_URL`), воронка в 📊 Статистике (`stats.funnel_text`), памятка после регистрации (`profile.finish_onboarding`).
+
+- ИИ: `services/ai.py` (Claude через `anthropic` SDK, `AsyncAnthropic`, `client.beta.messages.create` с `fallbacks="default"` для opus/sonnet), кнопка `lead:ai:<id>`
+  (`leads.send_ai_draft`), таблица `ai_calls`, настройки `ai_*`. Без `ANTHROPIC_API_KEY` кнопки нет. В запрос не передаём данные автора заявки.
 
 ## Дальше по плану
 1. ИИ на Claude (классификация, температура, черновики ответов) — в конце, нужен ключ Claude API.

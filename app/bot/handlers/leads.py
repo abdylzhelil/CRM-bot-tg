@@ -7,7 +7,7 @@ from app.bot import notify
 from app.bot.common import ask, esc, kb
 from app.db import Session
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Delivery, Group, Lead, SpamVote, User, now
-from app.services import referrals, settings, templates
+from app.services import ai, referrals, settings, templates
 from app.services.distribute import day_start
 
 router = Router()
@@ -84,6 +84,8 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
                 "Если его ещё нет в боте — дам ссылку-приглашение (вы оба получите бонус)."), did=d.id)
         if action == "tpl":
             return await send_template(cb, s, lead, user)
+        if action == "ai":
+            return await send_ai_draft(cb, s, lead, user, d.id)
         if action == "take":
             client = await s.scalar(select(Client).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
             if not client:
@@ -167,3 +169,19 @@ async def pass_to(s, m: Message, d, text):
     await s.commit()
     await notify.flush_due()
     await m.answer(f"✅ Заявка передана: {esc(colleague.name or str(colleague.tg_id))}")
+
+
+async def send_ai_draft(cb: CallbackQuery, s, lead: Lead, user: User, delivery_id: int, client=None) -> None:
+    """✨ Черновик ответа от ИИ (в лимитах суточной квоты)."""
+    if not ai.enabled():
+        return await cb.answer("ИИ пока не подключён", show_alert=True)
+    await cb.answer("✨ Пишу черновик…")
+    try:
+        text = await ai.draft_reply(s, user, lead, await category_name(s, lead.category_id),
+                                    user.reply_template, user.prices, client=client)
+    except ai.AiError as e:
+        return await cb.message.answer(f"✨ {esc(str(e))}")
+    contact = f"https://t.me/{lead.username}" if lead.username else f"tg://user?id={lead.author_id}"
+    await cb.message.answer(
+        f"✨ <b>Черновик ответа</b> (нажмите на текст — скопируется, поправьте под себя):\n\n<code>{esc(text)}</code>",
+        reply_markup=kb([[("🔄 Другой вариант", f"lead:ai:{delivery_id}"), ("✍️ Написать клиенту", f"url:{contact}")]]))
