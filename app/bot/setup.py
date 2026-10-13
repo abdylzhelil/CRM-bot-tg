@@ -47,6 +47,7 @@ USER_COMMANDS = [
     BotCommand(command="menu", description="Главное меню"),
     BotCommand(command="leads", description="Мои заявки"),
     BotCommand(command="clients", description="Мои клиенты (CRM)"),
+    BotCommand(command="invite", description="Пригласить друзей (+дни 💎)"),
     BotCommand(command="catalog", description="Каталог групп и бонусы"),
     BotCommand(command="profile", description="Профиль и настройки"),
     BotCommand(command="terms", description="Условия оплаты"),

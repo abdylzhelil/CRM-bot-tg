@@ -1,6 +1,7 @@
 """Регистрация и профиль пользователя: ниши, город, минус-слова, тишина, шаблон, тариф."""
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import delete, func, select
 
@@ -280,20 +281,37 @@ async def pf_back(cb: CallbackQuery, user: User) -> None:
     await profile(cb, user)
 
 
-@router.callback_query(F.data == "pf:ref")
-async def pf_ref(cb: CallbackQuery, user: User) -> None:
+async def _invite(target, user: User, back: bool) -> None:
+    from urllib.parse import quote
+
+    bot = target.bot
     async with Session() as s:
         days = await settings.get_int(s, "ref_days")
         percent = await settings.get_int(s, "ref_percent")
         total, done = await referrals.stats(s, user.tg_id)
-    link = referrals.link((await cb.bot.me()).username, user.tg_id)
-    await reply(cb, (
+    link = referrals.link((await bot.me()).username, user.tg_id)
+    share = f"https://t.me/share/url?url={quote(link, safe='')}&text={quote('КлиентРадар — заявки от клиентов из Telegram-групп. Заходи:')}"
+    rows = [[("📤 Отправить друзьям", f"url:{share}")]]
+    if back:
+        rows.append([("◀️ Профиль", "pf:back")])
+    await reply(target, (
         "🤝 <b>Пригласите друзей</b>\n\n"
         f"Друг заходит по вашей ссылке и настраивает бота — вы оба получаете <b>+{days} дней 💎</b>. "
         f"Дальше, когда он зарабатывает бонусные дни за свои группы, вам идёт ещё {percent}% от них.\n\n"
-        f"Ваша ссылка (нажмите — скопируется):\n<code>{link}</code>\n\n"
+        "Нажмите «📤 Отправить друзьям» — выберите чат, и ссылка уйдёт сама.\n"
+        f"Или скопируйте (нажмите на ссылку):\n<code>{link}</code>\n\n"
         f"Приглашено: {total}, завершили настройку: {done}"
-    ), kb([[("◀️ Профиль", "pf:back")]]))
+    ), kb(rows))
+
+
+@router.callback_query(F.data == "pf:ref")
+async def pf_ref(cb: CallbackQuery, user: User) -> None:
+    await _invite(cb, user, True)
+
+
+@router.message(Command("invite"))
+async def invite_cmd(msg: Message, user: User) -> None:
+    await _invite(msg, user, False)
 
 
 @router.callback_query(F.data == "pf:plan")
