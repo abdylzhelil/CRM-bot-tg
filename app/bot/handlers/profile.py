@@ -284,6 +284,10 @@ async def pf_plan(cb: CallbackQuery, user: User) -> None:
     contact = f"@{admin.username}" if admin else "администратору бота"
     how = ("Выберите пакет — оплата прямо в Telegram, тариф продлится сразу." if offers
            else f"Подключить: напишите {contact}.")
+    if offers and payments.enabled():
+        how += ("\n\n💡 Если окно оплаты не открывается или долго грузится (бывает при включённом VPN) — "
+                "на минуту отключите VPN или выберите сервер в России и нажмите кнопку ещё раз. "
+                f"Не получается — напишите {contact}, подключим вручную.")
     if offers and not payments.enabled():
         how += f"\n⏳ Онлайн-оплату подключаем. Пока можно оплатить, написав {contact}."
     rows = [[(f"💳 {d} дн. — {price} ₽", f"pay:{d}")] for d, price in offers]
