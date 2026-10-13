@@ -51,6 +51,12 @@ async def setting_find(s, m, d, text):
     await m.answer(f"🔎 Нашлось: {len(keys)}", reply_markup=kb(rows))
 
 
+async def us_forget(s, m, d, text):
+    from app.bot.handlers.users_admin import forget_preview
+
+    await forget_preview(m, text)
+
+
 async def client_field(s, m, d, text, field):
     from app.bot.handlers.clients import owned
 
@@ -270,6 +276,7 @@ HANDLERS = {
     "my_prices": lambda s, m, d, t: my_field(s, m, d, t, "prices"),
     "setting": setting,
     "setting_find": setting_find,
+    "us_forget": us_forget,
     "client_find": client_find,
     "client_add": client_add,
     "query_add": query_add,

@@ -1,5 +1,6 @@
 """Администратор: пользователи бота и их тарифы."""
 from aiogram import F, Router
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
@@ -7,6 +8,7 @@ from sqlalchemy import func, select
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import PLANS, Category, Client, Delivery, User, UserCategory
+from app.services import retention
 from app.services import users_admin as users_svc
 from app.services.distribute import delivered_today, is_paid
 
@@ -22,6 +24,7 @@ async def users_menu(target: Message | CallbackQuery) -> None:
     rows = [[(("💎 " if is_paid(u) else "") + ("⛔ " if u.blocked else "") + ("⚪ " if not u.onboarded else "") + (u.name or str(u.tg_id))[:40]
               + (f" · {u.city}" if u.city else ""), f"us:open:{u.tg_id}")] for u in users]
     rows.append([("🔎 Найти по ID или @нику", "us:find")])
+    rows.append([("🗑 Удалить данные автора заявки", "us:forget")])
     rows.append([("🧹 Убрать пустые аккаунты", "us:clean")])
     await reply(target, await users_line() + "\nПоследние активные:", kb(rows))
 
@@ -113,3 +116,49 @@ async def clean_do(cb: CallbackQuery) -> None:
         await cleanup.remove(s, ids)
     await cb.answer(f"Удалено: {len(ids)}", show_alert=True)
     await users_menu(cb)
+
+
+# ---------- удаление данных автора заявки (по его просьбе) ----------
+async def forget_preview(target, query: str) -> None:
+    """Показывает, что будет удалено, и просит подтвердить. Само удаление — только по кнопке."""
+    async with Session() as s:
+        authors = await retention.find_authors(s, query)
+        if not authors:
+            return await reply(target, "Автор не найден среди заявок и чёрного списка.", kb([[("◀️ Назад", "us:menu")]]))
+        rows, lines = [], []
+        for author_id, uname in authors[:5]:
+            st = await retention.author_stats(s, author_id)
+            if st["is_user"]:
+                lines.append(f"• <code>{author_id}</code> {('@' + esc(uname)) if uname else ''} — пользователь бота: его данные удаляет команда /deleteme у него.")
+                continue
+            lines.append(f"• <code>{author_id}</code> {('@' + esc(uname)) if uname else ''}: заявок {st['leads']}, доставок {st['deliveries']}, "
+                         f"карточек в CRM {st['crm']} (обезличим), чёрный список: {'да' if st['blacklist'] else 'нет'}")
+            rows.append([(f"🗑 Удалить {author_id}", f"fg:do:{author_id}")])
+    rows.append([("Отмена", "us:menu")])
+    await reply(target, "🗑 <b>Удалить данные автора?</b>\n" + "\n".join(lines)
+                + "\n\nБудут удалены его заявки (тексты, имя, ник), голоса «спам» и запись в чёрном списке. "
+                "Если он писал спам, после удаления бот снова сможет принимать его сообщения.", kb(rows))
+
+
+@router.message(Command("forget"))
+async def forget_cmd(m: Message, command: CommandObject) -> None:
+    if not (command.args or "").strip():
+        return await m.answer("Напишите так: /forget @ник или /forget ID автора заявки. Удалю его заявки и данные (с вашим подтверждением).")
+    await forget_preview(m, command.args)
+
+
+@router.callback_query(F.data == "us:forget")
+async def forget_ask(cb: CallbackQuery, state: FSMContext) -> None:
+    await ask(cb, state, "us_forget", "ID или @ник автора заявки, данные которого нужно удалить:")
+
+
+@router.callback_query(F.data.regexp(r"^fg:do:\d+$"))
+async def forget_do(cb: CallbackQuery) -> None:
+    author_id = int(cb.data.split(":")[2])
+    async with Session() as s:
+        if await s.get(User, author_id) is not None:
+            return await cb.answer("Это пользователь бота — удаляйте через /deleteme у него", show_alert=True)
+        st = await retention.forget_author(s, author_id)
+    await reply(cb, f"✅ Удалено: заявок {st['leads']}, доставок {st['deliveries']}; карточек CRM обезличено: {st['crm']}"
+                f"{'; запись в чёрном списке удалена' if st['blacklist'] else ''}.", kb([[("◀️ К пользователям", "us:menu")]]))
+    await cb.answer("Готово")

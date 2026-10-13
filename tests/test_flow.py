@@ -258,3 +258,40 @@ async def test_autosetup_for_user_and_admin(app_bot, maker):
     assert not any("Автонастройка бота" in t for t in api.texts(504))
     await dp.feed_update(bot, cb_update(ADMIN_ID, "st:auto"))
     assert "Автонастройка бота" in api.texts(ADMIN_ID)[-1]
+
+
+async def test_forget_command_asks_confirmation_then_deletes(app_bot, maker):
+    from app.models import Lead
+
+    bot, dp, api = app_bot
+    async with maker() as s:
+        s.add(Lead(author_id=910, username="gone_u", name="Автор", text="Нужен бот", text_hash="forget1"))
+        await s.commit()
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/forget"))
+    assert "Напишите так" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/forget @gone_u"))
+    assert "Удалить данные автора" in api.texts(ADMIN_ID)[-1] and "заявок 1" in api.texts(ADMIN_ID)[-1]
+    async with maker() as s:
+        assert (await s.scalar(select(Lead.id).where(Lead.author_id == 910))) is not None  # без подтверждения ничего не удалено
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "fg:do:910"))
+    assert "Удалено" in api.texts(ADMIN_ID)[-1]
+    async with maker() as s:
+        assert (await s.scalar(select(Lead.id).where(Lead.author_id == 910))) is None
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/forget @нет_такого"))
+    assert "не найден" in api.texts(ADMIN_ID)[-1]
+
+
+async def test_forget_is_admin_only_and_never_for_bot_users(app_bot, maker):
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(504, "/start"))
+    await pass_captcha(bot, dp, 504)
+    async with maker() as s:
+        (await s.get(DbUser, 504)).onboarded = True
+        await s.commit()
+    await dp.feed_update(bot, text_update(504, "/forget 905"))
+    assert not any("Удалить данные автора" in t or "Напишите так" in t for t in api.texts(504))
+    await dp.feed_update(bot, cb_update(504, "fg:do:905"))
+    assert not any("Удалено" in t for t in api.texts(504))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "fg:do:504"))  # 504 — пользователь бота: удаляется через /deleteme
+    async with maker() as s:
+        assert await s.get(DbUser, 504) is not None

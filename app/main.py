@@ -13,7 +13,7 @@ from app.migrate import migrate_data, upgrade_schema
 from app.feed import server as feed_server
 from app.web import server as web_server
 from app.models import Client, Reminder, now
-from app.services import backup, cleanup, heartbeat, public_stats, quiet, receipts, settings
+from app.services import backup, cleanup, heartbeat, public_stats, quiet, receipts, retention, settings
 from app.scout.channels import channel_loop
 from app.scout.joiner import join_loop, rotation_loop, search_loop
 from app.scout.manager import ScoutManager
@@ -149,6 +149,22 @@ async def cleanup_loop() -> None:
         await asyncio.sleep(6 * 3600)
 
 
+async def retention_loop() -> None:
+    """Раз в сутки удаляет заявки старше lead_keep_days (тексты и ники людей из групп не храним бессрочно)."""
+    while True:
+        try:
+            async with Session() as s:
+                days = await settings.get_int(s, "lead_keep_days")
+            async with Session() as s:
+                n = await retention.purge_old(s, days)
+            if n:
+                log.info("удалено старых заявок: %s (срок хранения %s дн.)", n, days)
+        except Exception:
+            log.exception("retention_loop")
+            await notify.alert_once("retention_loop", "В фоновой задаче retention_loop ошибка (см. логи сервера).")
+        await asyncio.sleep(24 * 3600)
+
+
 async def receipts_loop() -> None:
     """Раз в месяц напоминает владельцу про чеки в «Мой налог»."""
     while True:
@@ -178,7 +194,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(c)
         for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
-          backup.backup_loop(), expiry_loop(), payments_h.link_loop(), cleanup_loop(), receipts_loop(), heartbeat.heartbeat_loop())
+          backup.backup_loop(), expiry_loop(), payments_h.link_loop(), cleanup_loop(), retention_loop(), receipts_loop(), heartbeat.heartbeat_loop())
     ]
     await setup_profile(bot)
     await notify._send("🟢 Бот запущен (или перезапущен).")

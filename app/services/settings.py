@@ -48,6 +48,7 @@ DEFAULTS: dict[str, str] = {
     "bonus_max_days": "180",
     "cleanup_days": "7",
     "cleanup_warn_days": "1",
+    "lead_keep_days": "90",
 }
 
 LABELS: dict[str, str] = {
@@ -93,6 +94,7 @@ LABELS: dict[str, str] = {
     "bonus_max_days": "Потолок бонусных дней вперёд (бонусы и приглашения)",
     "cleanup_days": "Удалять не завершивших регистрацию через N дней (0 — не удалять)",
     "cleanup_warn_days": "Предупреждать об удалении за N дней (0 — не предупреждать)",
+    "lead_keep_days": "Хранить заявки N дней, потом удалять (0 — хранить всегда)",
 }
 
 
@@ -123,7 +125,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days"]),
-    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days"]),
+    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
 ]
@@ -143,7 +145,7 @@ SHORT: dict[str, str] = {
     "default_join_limit": "Вступлений/сутки", "search_interval_h": "Поиск раз в, ч",
     "rotation_days": "Выход из тихих групп, дн",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
-    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана",
+    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
     "ai_enabled": "Claude (1/0)", "ai_model": "Модель ИИ", "ai_free_daily": "ИИ в сутки: бесплатные",
     "ai_paid_daily": "ИИ в сутки: платные",
@@ -194,6 +196,7 @@ HINTS: dict[str, str] = {
     "bonus_max_days": "Больше этого бонусами не накопить (купленные дни — без потолка).",
     "cleanup_days": "Незавершившие регистрацию удаляются через столько дней. 0 — не удалять.",
     "cleanup_warn_days": "За сколько дней до удаления прислать предупреждение. 0 — без предупреждения.",
+    "lead_keep_days": "Заявки содержат тексты и ники людей из групп. Через столько дней они удаляются (кроме тех, что взяты в работу). 0 — не удалять.",
 }
 
 # Быстрые наборы значений: (значок, название, описание, {ключ: значение})
@@ -255,7 +258,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "spam_suspicious": (0, 100), "spam_block": (0, 100),
     "ref_percent": (0, 100), "bonus_leads": (1, 1000), "free_delay_min": (0, 1440), "free_daily_limit": (0, 1000),
     "share_gap_min": (0, 60), "refund_days": (0, 60), "ad_days": (1, 365), "license_days": (1, 365),
-    "cleanup_days": (0, 365), "cleanup_warn_days": (0, 30), "default_join_limit": (1, 50),
+    "cleanup_days": (0, 365), "cleanup_warn_days": (0, 30), "lead_keep_days": (0, 3650), "default_join_limit": (1, 50),
     "price_30": (0, 1_000_000), "price_90": (0, 1_000_000), "price_365": (0, 1_000_000),
 }
 
