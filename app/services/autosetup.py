@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import config
 from app.models import ScoutAccount, User, UserCategory, UserNegative
-from app.services import settings
+from app.services import settings, sysmem
 from app.services.distribute import is_paid
 
 START_NEGATIVES = ["бесплатно", "даром", "вакансия", "подработка"]  # такие сообщения — не клиенты
@@ -86,5 +86,8 @@ async def admin_checklist(s: AsyncSession) -> tuple[list[str], list[str]]:
     put(await settings.get(s, "refund_days") != "0" or not selling, "Срок возврата задан", "Продаёте 💎, но возврат выключен (refund_days=0)")
     ai_on = await settings.get(s, "ai_enabled") == "1"
     put(not ai_on or bool(config.ANTHROPIC_API_KEY), "ИИ выключен или с ключом", "ИИ включён, но нет ANTHROPIC_API_KEY")
+    mem = sysmem.read()
+    if mem:
+        put(mem["level"] == "ok", sysmem.line(mem), sysmem.line(mem) + " — пора увеличить память сервера или разгрузить его")
     put(bool(config.STATS_CHANNEL), "Канал статистики подключён", "Канал статистики не подключён (необязательно) — STATS_CHANNEL в .env")
     return ok, bad

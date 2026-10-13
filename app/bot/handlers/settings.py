@@ -10,7 +10,7 @@ from app import config
 from app.bot.common import Ask, ask, esc, kb, reply
 from app.db import Session
 from app.models import Delivery, Lead, Payment, ScoutAccount, User, now
-from app.services import admin_status, autosetup, settings
+from app.services import admin_status, autosetup, settings, sysmem
 
 router = Router()
 
@@ -70,7 +70,7 @@ async def status_text() -> str:
         f"{_flag(d['ai'])} Claude (платно)"
         + ("" if d["ai_key"] or not d["ai"] else " — ⚠️ нет ANTHROPIC_API_KEY"),
         f"{_flag(bool(d['stats_channel']))} Канал статистики: {esc(d['stats_channel']) or 'не подключён'}",
-    ])
+    ] + ([sysmem.line(d["memory"])] if d["memory"] else []))
 
 
 @router.callback_query(F.data == "st:status")
