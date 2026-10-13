@@ -63,6 +63,7 @@ ADMIN_COMMANDS = USER_COMMANDS[:-1] + [
     BotCommand(command="groups", description="Группы и разведчики"),
     BotCommand(command="settings", description="Настройки бота"),
     BotCommand(command="forget", description="Удалить данные автора заявки"),
+    BotCommand(command="aitest", description="Сравнить ИИ-модели (платно)"),
 ] + USER_COMMANDS[-1:]
 BOT_NAME = "КлиентРадар"
 DESCRIPTION = (

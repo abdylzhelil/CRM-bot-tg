@@ -295,3 +295,37 @@ async def test_forget_is_admin_only_and_never_for_bot_users(app_bot, maker):
     await dp.feed_update(bot, cb_update(ADMIN_ID, "fg:do:504"))  # 504 — пользователь бота: удаляется через /deleteme
     async with maker() as s:
         assert await s.get(DbUser, 504) is not None
+
+
+async def test_aitest_command_confirmation_and_no_key_spends_nothing(app_bot, maker, monkeypatch):
+    from app import config
+    from app.models import AiCall, Lead
+    from tests.test_ai import FakeClaude
+
+    bot, dp, api = app_bot
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/aitest"))
+    assert "не задан" in api.texts(ADMIN_ID)[-1]  # без ключа — ничего не тратится
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    claude = FakeClaude()
+    monkeypatch.setattr("app.services.ai.make_client", lambda: claude)
+    async with maker() as s:
+        s.add(Lead(author_id=920, username="u920", name="Автор", text="Нужен сайт для кафе", text_hash="aitest1"))
+        await s.commit()
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/aitest 3"))
+    assert "Запустить?" in api.texts(ADMIN_ID)[-1] and not claude.calls  # сначала подтверждение, запросов ещё нет
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "ait:go:3"))
+    assert [c["model"] for c in claude.calls] == ["claude-haiku-5-5", "claude-sonnet-5-5"]
+    assert any("Сравнение" in t or "haiku" in t for t in api.texts(ADMIN_ID))
+    async with maker() as s:
+        assert len((await s.scalars(select(AiCall))).all()) == 2
+    # обычный пользователь команду не получает
+    await dp.feed_update(bot, text_update(504, "/start"))
+    await pass_captcha(bot, dp, 504)
+    async with maker() as s:
+        (await s.get(DbUser, 504)).onboarded = True
+        await s.commit()
+    before = len(claude.calls)
+    await dp.feed_update(bot, text_update(504, "/aitest"))
+    await dp.feed_update(bot, cb_update(504, "ait:go:3"))
+    assert len(claude.calls) == before

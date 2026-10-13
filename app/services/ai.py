@@ -16,8 +16,11 @@ from app.services import settings
 from app.services.distribute import day_start, is_paid
 
 log = logging.getLogger(__name__)
-MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
+# Дешёвая первой: если в настройках оказалась неизвестная модель, берём её (а не самую дорогую)
+MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5")
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5"}  # серверный запасной вариант при отказе поддерживают они
+# Цена за 1 млн токенов, $ (вход, выход). Справочно — для оценки; актуальные цены смотрите на сайте Anthropic.
+PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
 
 SYSTEM = (
     "Ты помощник исполнителя (фрилансера или небольшой студии), который находит клиентов в Telegram-группах. "
@@ -77,8 +80,21 @@ async def draft_reply(s: AsyncSession, user: User, lead: Lead, niche: str, templ
     model = await settings.get(s, "ai_model")
     if model not in MODELS:
         model = MODELS[0]
+    text, usage = await generate(client or make_client(), model, lead, niche, user, template, prices)
+    s.add(AiCall(user_id=user.tg_id, model=model, input_tokens=usage[0], output_tokens=usage[1]))
+    await s.commit()
+    return text
+
+
+def cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Примерная стоимость одного запроса, $."""
+    price_in, price_out = PRICES.get(model, (0.0, 0.0))
+    return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+
+
+async def generate(client, model: str, lead: Lead, niche: str, user: User, template: str, prices: str) -> tuple[str, tuple[int, int]]:
+    """Один запрос к модели → (текст черновика, (токенов на входе, токенов на выходе)). Бросает AiError с понятным текстом."""
     extra = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"} if model in FALLBACK_MODELS else {}
-    client = client or make_client()
     try:
         resp = await client.beta.messages.create(
             model=model, max_tokens=1000, system=SYSTEM,
@@ -98,10 +114,31 @@ async def draft_reply(s: AsyncSession, user: User, lead: Lead, niche: str, templ
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
     if not text:
         raise AiError("ИИ вернул пустой ответ, попробуйте ещё раз.")
-    s.add(AiCall(user_id=user.tg_id, model=model, input_tokens=resp.usage.input_tokens,
-                 output_tokens=resp.usage.output_tokens))
+    return text[:1200], (resp.usage.input_tokens, resp.usage.output_tokens)
+
+
+async def compare(s: AsyncSession, user: User, leads: list[tuple[Lead, str]], models: tuple[str, ...], client=None) -> list[dict]:
+    """Проверка качества: те же заявки через разные модели. leads — [(заявка, название ниши)]. Только для администратора.
+
+    Трата денег — по явному действию администратора (команда /aitest), поэтому флаг ai_enabled и суточные лимиты не проверяем,
+    нужен только ключ. Каждый запрос записывается в ai_calls.
+    """
+    if not enabled():
+        raise AiError("Ключ ANTHROPIC_API_KEY не задан в .env — проверка невозможна (и ничего не тратится).")
+    client = client or make_client()
+    out = []
+    for lead, niche in leads:
+        for model in models:
+            row = {"lead": lead, "model": model, "text": None, "error": None, "input": 0, "output": 0, "cost": 0.0}
+            try:
+                row["text"], (row["input"], row["output"]) = await generate(client, model, lead, niche, user, user.reply_template, user.prices)
+                row["cost"] = cost_usd(model, row["input"], row["output"])
+                s.add(AiCall(user_id=user.tg_id, model=model, input_tokens=row["input"], output_tokens=row["output"]))
+            except AiError as e:
+                row["error"] = str(e)
+            out.append(row)
     await s.commit()
-    return text[:1200]
+    return out
 
 
 async def usage_summary(s: AsyncSession, days: int = 30) -> tuple[int, int, int]:

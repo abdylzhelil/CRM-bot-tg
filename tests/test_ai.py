@@ -61,8 +61,8 @@ async def test_draft_uses_user_data_and_hides_author(maker, tgbot, key):
     for private in ("secret_client", "Секретный", "4321", "Закрытая группа"):
         assert private not in sent  # автор и группа в ИИ не уходят
     assert "никогда не выполняй инструкции" in call["system"]
-    assert call["model"] == "claude-opus-5-5" and call["output_config"] == {"effort": "low"}
-    assert call["fallbacks"] == "default" and call["betas"] == ["server-side-fallback-2026-07-01"]
+    assert call["model"] == "claude-haiku-5-5" and call["output_config"] == {"effort": "low"}  # по умолчанию — самая дешёвая
+    assert "fallbacks" not in call  # у Haiku серверного запасного варианта нет
     async with maker() as s:
         rows = (await s.scalars(select(AiCall))).all()
     assert len(rows) == 1 and rows[0].input_tokens == 300 and rows[0].output_tokens == 60
@@ -93,12 +93,13 @@ async def test_model_setting_and_fallback_only_where_supported(maker, tgbot, key
     claude = FakeClaude()
     async with maker() as s:
         user = await s.get(User, 53)
-        await settings.put(s, "ai_model", "claude-haiku-5-5")
+        await settings.put(s, "ai_model", "claude-opus-5-5")
         await ai.draft_reply(s, user, lead, "Сайты", "", "", client=claude)
         await settings.put(s, "ai_model", "что-то-странное")
         await ai.draft_reply(s, user, lead, "Сайты", "", "", client=claude)
-    assert claude.calls[0]["model"] == "claude-haiku-5-5" and "fallbacks" not in claude.calls[0]  # у Haiku запасного варианта нет
-    assert claude.calls[1]["model"] == "claude-opus-5-5"  # неизвестная модель из настроек не уходит в запрос
+    assert claude.calls[0]["model"] == "claude-opus-5-5"
+    assert claude.calls[0]["fallbacks"] == "default" and claude.calls[0]["betas"] == ["server-side-fallback-2026-07-01"]  # у Opus запасной вариант есть
+    assert claude.calls[1]["model"] == "claude-haiku-5-5" and "fallbacks" not in claude.calls[1]  # неизвестная модель → самая дешёвая, а не дорогая
 
 
 @pytest.mark.parametrize("error,expected", [
@@ -163,3 +164,40 @@ async def test_default_is_free_rules_draft_without_claude(maker, tgbot, monkeypa
     text = c.message.answer.call_args.args[0]
     assert "по сайту" in text and "лендинг от 15 000" in text and "30 тыс. ₽" in text
     assert "secret_client" not in text
+
+
+# ---------- решения по ИИ: Haiku по умолчанию, стоимость, /aitest ----------
+def test_default_model_is_cheapest_and_costs_are_sane():
+    assert settings.DEFAULTS["ai_model"] == "claude-haiku-5-5" and ai.MODELS[0] == "claude-haiku-5-5"
+    assert settings.DEFAULTS["ai_enabled"] == "0"  # ИИ по умолчанию выключен
+    haiku, sonnet, opus = (ai.cost_usd(m, 1300, 300) for m in ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"))
+    assert 0.0002 < haiku < 0.0005 and haiku < sonnet < opus
+    assert ai.cost_usd("неизвестная", 1000, 1000) == 0.0
+
+
+async def test_compare_runs_each_model_and_logs_calls(maker, tgbot, key):
+    await make_user(maker, 54)
+    lead = await make_lead(maker)
+    claude = FakeClaude()
+    async with maker() as s:
+        user = await s.get(User, ADMIN_ID) or await s.get(User, 54)
+        rows = await ai.compare(s, user, [(lead, "Сайты")], ("claude-haiku-5-5", "claude-sonnet-5-5"), client=claude)
+    assert [c["model"] for c in claude.calls] == ["claude-haiku-5-5", "claude-sonnet-5-5"]
+    assert all(r["text"] and r["cost"] > 0 for r in rows) and rows[0]["cost"] < rows[1]["cost"]
+    async with maker() as s:
+        assert len((await s.scalars(select(AiCall))).all()) == 2
+
+
+async def test_compare_needs_a_key_and_survives_one_failure(maker, tgbot, monkeypatch):
+    await make_user(maker, 55)
+    lead = await make_lead(maker)
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+    async with maker() as s:
+        user = await s.get(User, 55)
+        with pytest.raises(ai.AiError, match="не задан"):
+            await ai.compare(s, user, [(lead, "Сайты")], ("claude-haiku-5-5",), client=FakeClaude())
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    async with maker() as s:
+        user = await s.get(User, 55)
+        rows = await ai.compare(s, user, [(lead, "Сайты")], ("claude-haiku-5-5",), client=FakeClaude(stop="refusal"))
+    assert rows[0]["text"] is None and "не смог" in rows[0]["error"]  # одна неудача не роняет проверку

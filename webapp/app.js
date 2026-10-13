@@ -550,7 +550,7 @@
           el("div", { text: flag(d.pay_ready) + " Ключи оплаты: " + (d.pay_ready ? "есть" : "нет") }),
           el("div", { text: flag(d.refund_days !== "0") + " Возврат: " + (d.refund_days !== "0" ? d.refund_days + " дн." : "выключен") }),
           el("div", { text: flag(d.autorenew) + " Автопродление  " + flag(d.license) + " Лицензия  " + flag(d.ads) + " Реклама" }),
-          el("div", { text: flag(d.ai) + " Claude (платно)" + (d.ai && !d.ai_key ? " — ⚠️ нет ключа" : "") }),
+          el("div", { text: flag(d.ai) + " Claude (платно)" + (d.ai ? ", модель " + d.ai_model : "") + (d.ai && !d.ai_key ? " — ⚠️ нет ключа" : "") }),
           el("div", { text: flag(!!d.stats_channel) + " Канал статистики: " + (d.stats_channel || "не подключён") }),
           d.memory ? el("div", { text: ({ ok: "✅", warn: "⚠️", bad: "🔴" })[d.memory.level] + " Память: свободно " + d.memory.available_mb + " из " + d.memory.total_mb + " МБ, подкачка " + d.memory.swap_used_mb + " МБ" + (d.memory.bot_mb !== null ? ", бот " + d.memory.bot_mb + " МБ" : "") }) : null
         ])

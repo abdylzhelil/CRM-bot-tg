@@ -1,10 +1,15 @@
 from aiogram import F, Router
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from sqlalchemy import select
+
 from app.bot.common import Ask, ask, esc, kb, reply
+from app.bot.handlers.leads import category_name
 from app.db import Session
-from app.services import admin_status, autosetup, settings, sysmem
+from app.models import Lead, User
+from app.services import admin_status, ai, autosetup, settings, sysmem
 
 router = Router()
 
@@ -61,7 +66,7 @@ async def status_text() -> str:
         f"{_flag(d['pay_ready'])} Ключи оплаты в .env: {'есть' if d['pay_ready'] else 'нет'}",
         f"{_flag(refund != '0')} Возврат: {refund} дн." if refund != "0" else f"{_flag(False)} Возврат выключен",
         f"{_flag(d['autorenew'])} Автопродление   {_flag(d['license'])} Лицензия   {_flag(d['ads'])} Реклама групп",
-        f"{_flag(d['ai'])} Claude (платно)"
+        f"{_flag(d['ai'])} Claude (платно)" + (f", модель {esc(d['ai_model'])}" if d["ai"] else "")
         + ("" if d["ai_key"] or not d["ai"] else " — ⚠️ нет ANTHROPIC_API_KEY"),
         f"{_flag(bool(d['stats_channel']))} Канал статистики: {esc(d['stats_channel']) or 'не подключён'}",
     ] + ([sysmem.line(d["memory"])] if d["memory"] else []))
@@ -181,3 +186,52 @@ async def publish_now(cb: CallbackQuery) -> None:
             "Чтобы включить: создайте канал, добавьте бота администратором и впишите STATS_CHANNEL=@имя_канала в файл .env.",
             show_alert=True)
     await cb.answer("Не получилось написать в канал. Проверьте, что бот добавлен в него администратором.", show_alert=True)
+
+
+# ---------- /aitest: сравнить ИИ-модели на ваших заявках (платно, только по подтверждению) ----------
+AITEST_MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5")
+EST_TOKENS = (1300, 300)  # примерно: вход / выход на один черновик
+
+
+@router.message(Command("aitest"))
+async def aitest(m: Message, command: CommandObject) -> None:
+    if not ai.enabled():
+        return await m.answer("🔑 Ключ ANTHROPIC_API_KEY не задан в .env — проверка невозможна, ничего не тратится.\n"
+                              "Как подключить ИИ: файл docs/AI_PLAN.md в репозитории.")
+    arg = (command.args or "").strip()
+    n = min(max(int(arg), 1), 10) if arg.isdigit() else 5
+    est = sum(ai.cost_usd(model, *EST_TOKENS) for model in AITEST_MODELS) * n
+    await m.answer(
+        f"🧪 <b>Сравнение ИИ-моделей</b>\nВозьму последние заявки (до {n}) и составлю по каждой черновик двумя моделями: "
+        f"Haiku (дешёвая) и Sonnet. Это платные запросы Claude: примерно ${est:.2f} (оценка).\nЗапустить?",
+        reply_markup=kb([[(f"✅ Запустить ({n})", f"ait:go:{n}"), ("Отмена", "ait:no")]]))
+
+
+@router.callback_query(F.data == "ait:no")
+async def aitest_cancel(cb: CallbackQuery) -> None:
+    await reply(cb, "Отменено, ничего не потрачено.")
+
+
+@router.callback_query(F.data.regexp(r"^ait:go:\d+$"))
+async def aitest_run(cb: CallbackQuery, user: User) -> None:
+    n = min(max(int(cb.data.split(":")[2]), 1), 10)
+    await cb.answer("Считаю…")
+    async with Session() as s:
+        leads = (await s.scalars(select(Lead).where(~Lead.suspicious).order_by(Lead.id.desc()).limit(n))).all()
+        if not leads:
+            return await cb.message.answer("Пока нет заявок для проверки: дождитесь первых.")
+        pairs = [(lead, await category_name(s, lead.category_id)) for lead in leads]
+        try:
+            rows = await ai.compare(s, user, pairs, AITEST_MODELS)
+        except ai.AiError as e:
+            return await cb.message.answer(f"⚠️ {esc(str(e))}")
+    total = sum(r["cost"] for r in rows)
+    await cb.message.answer(f"🧪 Готово. Заявок: {len(pairs)}, запросов: {len(rows)}, потрачено примерно ${total:.3f}. Ниже сравнение:")
+    for lead, _ in pairs:
+        parts = [f"<b>Заявка:</b> {esc(lead.text.strip()[:300])}"]
+        for r in (r for r in rows if r["lead"] is lead):
+            name = r["model"].replace("claude-", "").replace("-5-5", "")
+            body = f"<code>{esc(r['text'])}</code>" if r["text"] else f"⚠️ {esc(r['error'])}"
+            parts.append(f"\n<b>{name}</b> (${r['cost']:.4f}, {r['input']}+{r['output']} ток.):\n{body}")
+        await cb.message.answer("\n".join(parts)[:4000])
+    await cb.message.answer("Какая модель лучше? Выбрать: ⚙️ Настройки → ✨ ИИ → «Модель ИИ».")

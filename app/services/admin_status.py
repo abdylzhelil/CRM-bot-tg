@@ -26,6 +26,6 @@ async def collect(s) -> dict:
         "pay_ready": bool(config.PAYMENT_PROVIDER_TOKEN or (config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY)),
         "refund_days": await get("refund_days"),
         "autorenew": await get("autorenew") == "1", "license": await get("license_enabled") == "1",
-        "ads": await get("ad_leads") != "0", "ai": await get("ai_enabled") == "1", "ai_key": bool(config.ANTHROPIC_API_KEY),
+        "ads": await get("ad_leads") != "0", "ai": await get("ai_enabled") == "1", "ai_model": await get("ai_model"), "ai_key": bool(config.ANTHROPIC_API_KEY),
         "stats_channel": config.STATS_CHANNEL, "memory": sysmem.read(),
     }
