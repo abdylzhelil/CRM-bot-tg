@@ -448,3 +448,34 @@ async def test_admin_users_search_card_and_plan(client, maker, tgbot):
     for bad in ("много", "-5", "99999"):
         assert (await client.post("/api/admin/users/52/plan", json={"value": bad}, headers=h)).status == 422
     assert (await client.post("/api/admin/users/999999/plan", json={"value": "30"}, headers=h)).status == 404
+
+
+# ---------- М5: ошибки и кэш ----------
+async def test_server_error_becomes_friendly_json(client, maker, tgbot, monkeypatch):
+    from app.web import api
+
+    await make_user(maker, 60)
+
+    async def boom(request):
+        raise RuntimeError("секретная внутренняя причина")
+
+    monkeypatch.setattr(api, "profile_get", boom)
+    app = web_server.make_app()
+    c2 = TestClient(TestServer(app))
+    await c2.start_server()
+    try:
+        r = await c2.get("/api/profile", headers=tma(60))
+        body = await r.json()
+        assert r.status == 500 and body["error"] == "server" and "секретная" not in body["message"]
+        assert any("Ошибка в кабинете" in t for t in tgbot.texts(ADMIN_ID))
+    finally:
+        await c2.close()
+
+
+async def test_static_is_revalidated_not_stuck(client):
+    page = await client.get("/app/")
+    assert page.headers["Cache-Control"] == "no-cache"
+    js = await client.get("/app/app.js")
+    assert js.headers["Cache-Control"] == "no-cache" and js.headers.get("ETag")
+    again = await client.get("/app/app.js", headers={"If-None-Match": js.headers["ETag"]})
+    assert again.status == 304  # ничего не качаем заново, пока файл не изменился

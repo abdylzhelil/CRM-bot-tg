@@ -1,7 +1,19 @@
 (function () {
   "use strict";
   var tg = window.Telegram && window.Telegram.WebApp;
-  if (tg) { tg.ready(); tg.expand(); }
+  if (tg) {
+    tg.ready(); tg.expand();
+    try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) { /* старые версии Telegram */ }
+    try { tg.setHeaderColor("secondary_bg_color"); } catch (e) { /* не критично */ }
+  }
+  var backHandler = null;
+  // кнопка «Назад» в шапке Telegram: у вложенных экранов ведёт на уровень выше, на вкладках скрыта
+  function setBack(fn) {
+    if (!tg || !tg.BackButton) return;
+    if (backHandler) tg.BackButton.offClick(backHandler);
+    backHandler = fn ? function () { fn(); } : null;
+    if (backHandler) { tg.BackButton.onClick(backHandler); tg.BackButton.show(); } else tg.BackButton.hide();
+  }
   var view = document.getElementById("view");
   var nav = document.getElementById("nav");
   var toastEl = document.getElementById("toast");
@@ -34,8 +46,8 @@
       return r.json().then(function (data) {
         if (!r.ok) { var e = new Error(data.message || "Ошибка"); e.code = data.error; throw e; }
         return data;
-      });
-    });
+      }, function () { var e = new Error("Сервер ответил не так, как ожидалось. Попробуйте ещё раз."); e.code = "bad_response"; throw e; });
+    }, function () { var e = new Error("Нет связи с сервером. Проверьте интернет (или VPN) и повторите."); e.code = "offline"; throw e; });
   }
 
   var toastTimer;
@@ -276,6 +288,7 @@
   }
 
   function renderClients() {
+    setBack(null);
     var list = el("div", {});
     var more = el("button", { class: "btn ghost", text: "Показать ещё", hidden: "" });
     var chipsBox = el("div", { class: "tabs scroll" });
@@ -311,6 +324,7 @@
   }
 
   function renderClientForm() {
+    setBack(renderClients);
     var name = el("input", { type: "text", maxlength: "255", placeholder: "Имя" });
     var user = el("input", { type: "text", maxlength: "64", placeholder: "@username" });
     var phone = el("input", { type: "text", maxlength: "32", placeholder: "Телефон" });
@@ -325,11 +339,13 @@
   }
 
   function renderClient(id) {
+    setBack(renderClients);
     show(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/clients/" + id).then(function (c) { buildClient(c); }).catch(function (e) { toast(e.message, true); renderClients(); });
   }
 
   function buildClient(c) {
+    setBack(renderClients);
     var STAGES = [["new", "🆕 Новый"], ["talk", "💬 В переговорах"], ["thinking", "🤔 Думает"], ["payment", "💳 Оплата"], ["done", "✅ Выполнено"], ["lost", "❌ Отказ"]];
     function patch(body, msg) {
       api("PATCH", "/api/clients/" + c.id, body).then(function (n) { toast(msg || "Сохранено"); buildClient(n); }).catch(function (e) { toast(e.message, true); });
@@ -383,6 +399,7 @@
   }
 
   function renderCatalog() {
+    setBack(function () { go("home"); });
     var body = el("div", {});
     var tabs = el("div", { class: "tabs" }, [["mine", "По моим нишам"], ["all", "Весь каталог"], ["my", "Мои группы"], ["top", "🏆 Рейтинг"]].map(function (x) {
       return el("button", { class: "chip" + (x[0] === catTab ? " on" : ""), text: x[1], onclick: function () { catTab = x[0]; renderCatalog(); } });
@@ -434,6 +451,7 @@
 
   // ---------- Тариф и оплата ----------
   function renderPlans() {
+    setBack(function () { go("home"); });
     show(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/plans").then(function (r) {
       var parts = [el("h1", { text: "💎 Тариф" }), el("div", { class: "card" }, [
@@ -458,6 +476,7 @@
 
   // ---------- Статистика ----------
   function renderStats() {
+    setBack(function () { go("home"); });
     show(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/stats").then(function (r) {
       show(
@@ -474,6 +493,7 @@
 
   // ---------- Друзья ----------
   function renderFriends() {
+    setBack(function () { go("home"); });
     show(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/referrals").then(function (r) {
       show(
@@ -496,6 +516,7 @@
   var adminTab = "status";
 
   function renderAdmin() {
+    setBack(null);
     var body = el("div", {});
     var tabs = el("div", { class: "tabs" }, [["status", "Состояние"], ["settings", "Настройки"], ["users", "Пользователи"]].map(function (x) {
       return el("button", { class: "chip" + (x[0] === adminTab ? " on" : ""), text: x[1], onclick: function () { adminTab = x[0]; renderAdmin(); } });
@@ -618,11 +639,13 @@
   }
 
   function adminUser(id) {
+    setBack(renderAdmin);
     show(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/admin/users/" + id).then(buildAdminUser).catch(function (e) { toast(e.message, true); renderAdmin(); });
   }
 
   function buildAdminUser(u) {
+    setBack(renderAdmin);
     function plan(value, text) {
       confirmAsk(text + " Пользователю " + (u.name || u.id) + "?", function () {
         api("POST", "/api/admin/users/" + u.id + "/plan", { value: value }).then(function (n) { toast("Тариф обновлён"); buildAdminUser(n); }).catch(function (e) { toast(e.message, true); });
@@ -666,6 +689,7 @@
   function go(tab) { state.tab = tab; render(); }
 
   function render() {
+    setBack(null);
     var s = state.me.sections.filter(function (x) { return x.id === state.tab; })[0];
     if (!s) state.tab = "home";
     if (state.tab === "home") renderHome();

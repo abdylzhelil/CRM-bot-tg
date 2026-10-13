@@ -42,6 +42,26 @@ def allowed_sections(user: User) -> list[dict]:
 
 
 @web.middleware
+async def errors(request: web.Request, handler):
+    """Любая необработанная ошибка в API — понятный ответ человеку, подробности в лог, тревога админу (не чаще раза в 15 минут)."""
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except Exception as e:
+        log.exception("ошибка кабинета: %s %s", request.method, request.path)
+        if request.path.startswith("/api/"):
+            try:
+                from app.bot import notify
+
+                await notify.alert_once(f"web:{type(e).__name__}", f"Ошибка в кабинете: {type(e).__name__} (подробности в логах сервера).")
+            except Exception:
+                pass
+            return web.json_response({"error": "server", "message": "Что-то пошло не так. Попробуйте ещё раз чуть позже."}, status=500)
+        raise
+
+
+@web.middleware
 async def security_headers(request: web.Request, handler):
     resp = await handler(request)
     resp.headers["Content-Security-Policy"] = (
@@ -51,6 +71,8 @@ async def security_headers(request: web.Request, handler):
     resp.headers["Referrer-Policy"] = "no-referrer"
     if request.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store"
+    elif request.path == "/" or request.path.startswith("/app/"):
+        resp.headers["Cache-Control"] = "no-cache"  # браузер каждый раз сверяет версию (ETag) — после обновления сразу видно новое
     return resp
 
 
@@ -126,7 +148,7 @@ async def index(request: web.Request) -> web.FileResponse:
 
 
 def make_app() -> web.Application:
-    app = web.Application(middlewares=[security_headers, auth])
+    app = web.Application(middlewares=[errors, security_headers, auth])
     app.router.add_get("/healthz", health)
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/leads", api.leads_list)
