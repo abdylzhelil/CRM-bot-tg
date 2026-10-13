@@ -273,3 +273,21 @@ async def test_link_requires_keys_and_price(maker, tgbot, monkeypatch):
     c.bot.me = AsyncMock(return_value=SimpleNamespace(username="bot"))
     await ph.link_pay(c, SimpleNamespace(tg_id=5))  # цена 0 — пакет недоступен
     assert "недоступен" in c.answer.call_args.args[0]
+
+
+async def test_terms_show_refund_period(maker, tgbot):
+    async with maker() as s:
+        await settings.put(s, "price_30", "490")
+    m = MagicMock()
+    m.from_user.id = 5
+    m.answer = AsyncMock()
+    await ph.terms(m)
+    assert "в течение 3 дн." in m.answer.call_args.args[0]  # срок по умолчанию
+    async with maker() as s:
+        await settings.put(s, "refund_days", "7")
+    await ph.paysupport(m)
+    assert "в течение 7 дн." in m.answer.call_args.args[0]
+    async with maker() as s:
+        await settings.put(s, "refund_days", "0")
+    await ph.terms(m)
+    assert "не предусмотрен" in m.answer.call_args.args[0]

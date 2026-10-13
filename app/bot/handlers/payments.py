@@ -11,7 +11,7 @@ from app.bot import notify
 from app.bot.common import esc, kb
 from app.db import Session
 from app.models import Payment, PendingLink, User
-from app.services import payments
+from app.services import payments, settings
 
 log = logging.getLogger(__name__)
 router = Router()  # личные сообщения и кнопки (с пользователем)
@@ -140,6 +140,13 @@ async def link_loop() -> None:
         await asyncio.sleep(15)
 
 
+def refund_line(days: int) -> str:
+    if days <= 0:
+        return "Возврат оплаченного тарифа не предусмотрен; если что-то не работает — напишите нам, разберёмся."
+    return (f"Если вы не довольны, мы вернём деньги в течение {days} дн. после оплаты, пока тарифом ещё не пользовались "
+            "(не получали заявки по платному тарифу). Напишите нам: /paysupport.")
+
+
 async def _contact(s) -> str:
     admin = await s.scalar(select(User).where(User.is_admin, User.username != "").limit(1))
     return f"@{admin.username}" if admin else "администратору бота"
@@ -150,6 +157,7 @@ async def terms(m: Message) -> None:
     async with Session() as s:
         offers = await payments.packages(s)
         contact = await _contact(s)
+        refund = refund_line(await settings.get_int(s, "refund_days"))
     prices = "\n".join(f"• {d} дн. — {p} ₽" for d, p in offers) or "• цены уточняйте у администратора"
     await m.answer(
         "📄 <b>Условия</b>\n\n"
@@ -159,6 +167,7 @@ async def terms(m: Message) -> None:
         "Бот присылает сообщения людей из открытых Telegram-групп; мы не гарантируем количество заявок и сделок.\n"
         "Если окно оплаты не открывается (например, из-за VPN), отключите VPN или выберите сервер в России и повторите; "
         "можно также оплатить через администратора.\n"
+        f"<b>Возврат.</b> {refund}\n"
         f"Вопросы по оплате и возврату: /paysupport или {contact}.")
 
 
@@ -166,10 +175,11 @@ async def terms(m: Message) -> None:
 async def paysupport(m: Message) -> None:
     async with Session() as s:
         contact = await _contact(s)
+        refund = refund_line(await settings.get_int(s, "refund_days"))
     await m.answer(
         "💬 <b>Вопросы по оплате</b>\n\n"
         f"Напишите {contact} и укажите свой ID: <code>{m.from_user.id}</code>, дату оплаты и суть вопроса. "
-        "Ответим как можно быстрее; возврат рассматривается по обращению.")
+        f"Ответим как можно быстрее. {refund}")
 
 
 # ---------- возврат (только администратор) ----------

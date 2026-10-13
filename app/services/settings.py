@@ -31,6 +31,7 @@ DEFAULTS: dict[str, str] = {
     "price_30": "0",
     "price_90": "0",
     "price_365": "0",
+    "refund_days": "3",
     "channel_hour": "12",
     "niche_daily_limit": "3",
     "ref_limit": "10",
@@ -65,6 +66,7 @@ LABELS: dict[str, str] = {
     "price_30": "Цена 💎 на 30 дней, ₽ (0 — не продавать)",
     "price_90": "Цена 💎 на 90 дней, ₽ (0 — не продавать)",
     "price_365": "Цена 💎 на 365 дней, ₽ (0 — не продавать)",
+    "refund_days": "Возврат денег в течение N дней после оплаты (0 — без возврата)",
     "channel_hour": "Час публикации статистики в канале",
     "niche_daily_limit": "Предложений новых ниш от пользователя в сутки",
     "ref_limit": "Сколько приглашений на человека награждается (всего)",
@@ -94,7 +96,7 @@ async def put(session: AsyncSession, key: str, value: str) -> None:
 
 # Разделы меню «⚙️ Настройки»: (значок, название, [ключи])
 SECTIONS: list[tuple[str, str, list[str]]] = [
-    ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "free_daily_limit", "free_delay_min"]),
+    ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "refund_days", "free_daily_limit", "free_delay_min"]),
     ("📥", "Раздача заявок", ["max_recipients", "share_gap_min", "pass_daily_limit"]),
     ("🎁", "Бонусы", ["bonus_leads", "bonus_max_days", "ref_days", "ref_percent", "ref_limit"]),
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
@@ -107,7 +109,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
 
 # Короткие подписи для кнопок (полные — в LABELS, их видно при редактировании)
 SHORT: dict[str, str] = {
-    "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽",
+    "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽", "refund_days": "Срок возврата, дн",
     "free_daily_limit": "Бесплатный: заявок/день", "free_delay_min": "Бесплатный: задержка, мин",
     "max_recipients": "Получателей на заявку", "share_gap_min": "Интервал очереди, мин",
     "pass_daily_limit": "Передач коллегам/день",
