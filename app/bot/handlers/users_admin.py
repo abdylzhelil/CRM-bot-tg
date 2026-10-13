@@ -20,9 +20,10 @@ async def users_menu(target: Message | CallbackQuery) -> None:
 
     async with Session() as s:
         users = (await s.scalars(select(User).order_by(User.last_seen.desc()).limit(25))).all()
-    rows = [[(("💎 " if is_paid(u) else "") + ("⛔ " if u.blocked else "") + (u.name or str(u.tg_id))[:40]
+    rows = [[(("💎 " if is_paid(u) else "") + ("⛔ " if u.blocked else "") + ("⚪ " if not u.onboarded else "") + (u.name or str(u.tg_id))[:40]
               + (f" · {u.city}" if u.city else ""), f"us:open:{u.tg_id}")] for u in users]
     rows.append([("🔎 Найти по ID или @нику", "us:find")])
+    rows.append([("🧹 Убрать пустые аккаунты", "us:clean")])
     await reply(target, await users_line() + "\nПоследние активные:", kb(rows))
 
 
@@ -91,3 +92,39 @@ async def set_plan(cb: CallbackQuery) -> None:
         pass
     await cb.answer("Тариф обновлён")
     await user_card(cb, int(raw_id))
+
+
+# ---------- чистка «пустых» аккаунтов ----------
+async def empty_users(s, days: int = 3) -> list[int]:
+    """Не завершили регистрацию давно, заявок и клиентов нет, не администраторы."""
+    cutoff = now() - timedelta(days=days)
+    users = (await s.scalars(select(User).where(~User.onboarded, ~User.is_admin, User.created_at < cutoff))).all()
+    out = []
+    for x in users:
+        has = await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.user_id == x.tg_id)) or 0
+        has += await s.scalar(select(func.count()).select_from(Client).where(Client.user_id == x.tg_id)) or 0
+        if not has:
+            out.append(x.tg_id)
+    return out
+
+
+@router.callback_query(F.data == "us:clean")
+async def clean_ask(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        ids = await empty_users(s)
+    if not ids:
+        return await cb.answer("Пустых аккаунтов нет (старше 3 дней)", show_alert=True)
+    await reply(cb, f"🧹 Найдено пустых аккаунтов: {len(ids)}\nЭто люди, которые зашли, но за 3 дня не завершили регистрацию "
+                "и ничего не получали. Удалить их из базы? Если кто-то вернётся, просто пройдёт регистрацию заново.",
+                kb([[(f"✅ Удалить {len(ids)}", "us:clean:do"), ("❌ Не надо", "us:menu")]]))
+
+
+@router.callback_query(F.data == "us:clean:do")
+async def clean_do(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        ids = await empty_users(s)
+        if ids:
+            await s.execute(User.__table__.delete().where(User.tg_id.in_(ids)))
+            await s.commit()
+    await cb.answer(f"Удалено: {len(ids)}", show_alert=True)
+    await users_menu(cb)

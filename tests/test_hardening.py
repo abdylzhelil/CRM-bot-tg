@@ -1,6 +1,7 @@
 """Защита от злоупотреблений, бэкап, напоминание о конце тарифа, условия оплаты."""
 import sqlite3
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy import select
@@ -84,3 +85,46 @@ async def _terms_text(maker):
     m.answer = AsyncMock()
     await ph.terms(m)
     return m.answer.call_args.args[0]
+
+
+# ---------- проверка «я не бот» и чистка пустых аккаунтов ----------
+async def test_referral_survives_captcha(maker, tgbot):
+    from app.bot import captcha
+
+    await make_user(maker, 10)
+    async with maker() as s:
+        s.add(User(tg_id=80, verified=False))
+        await s.commit()
+    ev = MagicMock()
+    ev.text = "/start ref_10"
+    ev.answer = AsyncMock()
+    user = SimpleNamespace(tg_id=80, verified=False, is_admin=False, onboarded=False, name="x", username="")
+    assert await captcha.gate(ev, AsyncMock(), {}, user) is None  # проверку показали, обработчик не вызван
+    icons, target, param = captcha._pending[80]
+    assert param == "ref_10"
+    cb = MagicMock()
+    cb.data = f"cap:{icons.index(target)}"
+    cb.answer, cb.message.delete, cb.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    await captcha.answer(cb, user)
+    cb.message.answer.assert_called()  # дальше человек видит выбор ниш
+    async with maker() as s:
+        u = await s.get(User, 80)
+    assert u.verified and u.referred_by == 10  # приглашение не потерялось
+
+
+async def test_clean_empty_accounts(maker):
+    from app.bot.handlers import users_admin
+
+    await make_user(maker, 90)  # настоящий пользователь
+    async with maker() as s:
+        s.add(User(tg_id=91, onboarded=False, created_at=now() - timedelta(days=5)))  # давно зашёл и ушёл
+        s.add(User(tg_id=92, onboarded=False, created_at=now() - timedelta(hours=2)))  # только зашёл
+        await s.commit()
+    async with maker() as s:
+        assert await users_admin.empty_users(s) == [91]
+    c = MagicMock()
+    c.data = "us:clean:do"
+    c.answer, c.message.edit_text, c.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    await users_admin.clean_do(c)
+    async with maker() as s:
+        assert await s.get(User, 91) is None and await s.get(User, 92) and await s.get(User, 90)

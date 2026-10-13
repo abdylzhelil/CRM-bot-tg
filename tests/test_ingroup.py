@@ -51,8 +51,16 @@ async def test_middleware_registers_users_and_admin_flag(maker):
     # сообщения групп проходят без регистрации
     assert await mw(handler, None, {"event_chat": CHAT, "event_from_user": stranger}) == "ok"
     data = {"event_chat": Chat(id=999, type="private"), "event_from_user": stranger}
-    assert await mw(handler, None, data) == "ok"
+    event = AsyncMock()
+    event.text = "/start"
+    assert await mw(handler, event, data) is None  # новому гостю сначала показывают проверку «я не бот»
+    assert "Проверка" in event.answer.call_args.args[0]
     assert data["user"].tg_id == 999 and not data["user"].is_admin and not data["user"].onboarded
+    async with maker() as s:
+        (await s.get(DbUser, 999)).verified = True  # прошёл проверку
+        await s.commit()
+    data = {"event_chat": Chat(id=999, type="private"), "event_from_user": stranger}
+    assert await mw(handler, None, data) == "ok"
     assert not await IsAdmin()(None, user=data["user"])
     async with maker() as s:
         assert (await s.get(DbUser, 999)).name == "Гость"

@@ -24,6 +24,7 @@ class UserMiddleware(BaseMiddleware):
             user = await s.get(User, tg_user.id)
             if user is None:
                 user = User(tg_id=tg_user.id, is_admin=tg_user.id in config.OWNER_IDS)
+                user.verified = user.is_admin  # остальные проходят проверку «я не бот»
                 if user.is_admin:
                     user.plan = "full"
                 s.add(user)
@@ -35,6 +36,10 @@ class UserMiddleware(BaseMiddleware):
                 user.is_admin = True
             await s.commit()
         data["user"] = user
+        if not user.verified and not user.is_admin:
+            from app.bot import captcha
+
+            return await captcha.gate(event, handler, data, user)
         return await handler(event, data)
 
 

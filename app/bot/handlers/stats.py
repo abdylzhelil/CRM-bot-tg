@@ -66,10 +66,14 @@ async def users_line() -> str:
         total = await s.scalar(select(func.count()).select_from(User))
         active = await s.scalar(select(func.count()).select_from(User).where(User.last_seen > now() - timedelta(days=7)))
         paid = await s.scalar(select(func.count()).select_from(User).where(User.plan == "full"))
+        ready = await s.scalar(select(func.count()).select_from(User).where(User.onboarded)) or 0
+        unverified = await s.scalar(select(func.count()).select_from(User).where(~User.verified)) or 0
         pay = (await s.execute(select(func.count(), func.coalesce(func.sum(Payment.amount), 0)).where(
             Payment.created_at > now() - timedelta(days=30)))).one()
     money = f"\n💰 Оплаты за 30 дней: {pay[0]} шт. на {pay[1] / 100:.0f} ₽" if pay[0] else ""
-    return f"👥 Пользователей: {total}, активных за неделю: {active}, на полном тарифе: {paid}{money}"
+    empty = total - ready
+    extra = f"\n🧹 Не завершили регистрацию: {empty}" + (f" (не прошли проверку: {unverified})" if unverified else "") if empty else ""
+    return f"👥 Пользователей: {ready} (зарегистрированы), активных за неделю: {active}, на полном тарифе: {paid}{extra}{money}"
 
 
 @router.message(F.text == "📊 Статистика")

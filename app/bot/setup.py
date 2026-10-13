@@ -12,7 +12,7 @@ from aiogram.types import (
 )
 
 from app import config
-from app.bot import notify
+from app.bot import captcha, notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU
 from app.bot.handlers import (
@@ -220,7 +220,7 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     private = Router(name="private")
     private.message.filter(F.chat.type == "private")
     private.include_routers(
-        base, inputs.router, profile.router, catalog.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
+        captcha.router, base, inputs.router, profile.router, catalog.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
     )
     dp.include_routers(ingroup.router, payments.checkout, private)
 

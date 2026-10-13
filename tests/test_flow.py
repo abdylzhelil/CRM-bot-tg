@@ -76,9 +76,28 @@ def cb_update(uid: int, data: str) -> Update:
     ))
 
 
+async def pass_captcha(bot, dp, uid: int) -> None:
+    """Пройти проверку «я не бот»: нажать нужный значок."""
+    from app.bot import captcha
+
+    icons, target, _ = captcha._pending[uid]
+    await dp.feed_update(bot, cb_update(uid, f"cap:{icons.index(target)}"))
+
+
 async def test_new_user_onboarding_flow(app_bot, maker):
     bot, dp, api = app_bot
     await dp.feed_update(bot, text_update(500, "/start"))
+    assert "Проверка" in api.texts(500)[-1]  # сначала «я не бот»
+    await dp.feed_update(bot, text_update(500, "привет"))  # пока проверки нет — ничего, кроме неё, не работает
+    assert "Проверка" in api.texts(500)[-1]
+    from app.bot import captcha
+
+    icons, target, _ = captcha._pending[500]
+    wrong = next(i for i, ic in enumerate(icons) if ic != target)
+    await dp.feed_update(bot, cb_update(500, f"cap:{wrong}"))
+    async with maker() as s:
+        assert not (await s.get(DbUser, 500)).verified  # неверный значок — проверка не пройдена
+    await pass_captcha(bot, dp, 500)
     assert "Привет" in api.texts(500)[-1] and "ниши" in api.texts(500)[-1]
 
     async with maker() as s:
@@ -98,6 +117,7 @@ async def test_new_user_onboarding_flow(app_bot, maker):
 async def test_admin_sections_hidden_from_users(app_bot, maker):
     bot, dp, api = app_bot
     await dp.feed_update(bot, text_update(501, "/start"))
+    await pass_captcha(bot, dp, 501)
     async with maker() as s:
         (await s.get(DbUser, 501)).onboarded = True
         await s.commit()
@@ -116,6 +136,7 @@ async def test_admin_sections_hidden_from_users(app_bot, maker):
 async def test_admin_can_manage_users(app_bot, maker):
     bot, dp, api = app_bot
     await dp.feed_update(bot, text_update(502, "/start"))
+    await pass_captcha(bot, dp, 502)
     await dp.feed_update(bot, text_update(ADMIN_ID, "👥 Пользователи"))
     assert "Пользователей" in api.texts(ADMIN_ID)[-1]
     await dp.feed_update(bot, cb_update(ADMIN_ID, "us:plan:502:30"))
@@ -149,6 +170,7 @@ async def test_user_menu_has_no_admin_buttons_and_profile_is_set(app_bot, maker)
 
     bot, dp, api = app_bot
     await dp.feed_update(bot, text_update(503, "/start"))
+    await pass_captcha(bot, dp, 503)
     async with maker() as s:
         (await s.get(DbUser, 503)).onboarded = True
         await s.commit()
