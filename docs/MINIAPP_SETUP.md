@@ -34,3 +34,10 @@ docker exec tg-group-bot-caddy-1 caddy reload --config /etc/caddy/Caddyfile
 
 ## Откат
 Удалить из `.env` две строки (`WEBAPP_URL`, `COMPOSE_FILE`) и `docker compose up -d`. Блок в Caddyfile можно оставить или вернуть из `.bak` и сделать `caddy reload`.
+
+## Важно знать
+- Кабинет подключается к сети `tg-group-bot_default`, которую создаёт стек бота модерации. Если когда-нибудь выполнить `docker compose down` в `~/tg-group-bot`
+  (сеть удалится), то `docker compose up` в CRM остановится с ошибкой про сеть. Чинится так: сначала поднять бота модерации (`docker compose up -d` в `~/tg-group-bot`),
+  либо временно убрать из `.env` строку `COMPOSE_FILE=…` — CRM запустится без кабинета.
+- Обычный `restart`, обновление (`git pull && docker compose up -d --build`) и перезагрузка сервера на это не влияют.
+- Если CRM остановлен, кабинет отвечает ошибкой 502 только на своём адресе, веб-панель бота модерации работает как раньше.

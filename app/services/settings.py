@@ -244,21 +244,30 @@ class SettingError(ValueError):
     """Понятная причина, почему значение настройки не подходит."""
 
 
+# Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused"}
+# Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
+RANGES: dict[str, tuple[int, int]] = {
+    "max_recipients": (1, 50),          # 0 — заявки перестали бы доходить до людей
+    "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
+    "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
+    "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
+    "spam_suspicious": (0, 100), "spam_block": (0, 100),
+    "ref_percent": (0, 100), "bonus_leads": (1, 1000), "free_delay_min": (0, 1440), "free_daily_limit": (0, 1000),
+    "share_gap_min": (0, 60), "refund_days": (0, 60), "ad_days": (1, 365), "license_days": (1, 365),
+    "cleanup_days": (0, 365), "cleanup_warn_days": (0, 30), "default_join_limit": (1, 50),
+    "price_30": (0, 1_000_000), "price_90": (0, 1_000_000), "price_365": (0, 1_000_000),
+}
+
+
 def validate(key: str, text: str) -> str:
     """Проверяет и нормализует значение настройки (одни правила для бота и кабинета). Возвращает строку для записи."""
-    from app.services import quiet
-
     text = str(text).strip()
     if key not in LABELS:
         raise SettingError("Такой настройки нет")
     if key == "mode":
         if text not in ("semi", "auto"):
             raise SettingError("Нужно semi или auto")
-    elif key == "quiet_hours":
-        if text in ("-", "0", "выкл"):
-            return ""
-        if not quiet.parse_hours(text):
-            raise SettingError("Формат: 23-8 (с 23:00 до 08:00) или «-», чтобы выключить")
     elif key in ("report_hour", "channel_hour"):
         if not text.isdigit() or int(text) > 23:
             raise SettingError("Нужен час от 0 до 23")
@@ -267,6 +276,12 @@ def validate(key: str, text: str) -> str:
 
         if text not in MODELS:
             raise SettingError("Допустимо: " + ", ".join(MODELS))
+    elif key in FLAGS:
+        if text not in ("0", "1"):
+            raise SettingError("Нужно 0 (выключено) или 1 (включено)")
     elif not text.isdigit() or len(text) > 9:
         raise SettingError("Нужно число")
+    elif key in RANGES and not RANGES[key][0] <= int(text) <= RANGES[key][1]:
+        lo, hi = RANGES[key]
+        raise SettingError(f"Допустимо от {lo} до {hi}")
     return text

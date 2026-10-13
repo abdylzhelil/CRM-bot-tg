@@ -39,11 +39,13 @@ async def update_profile(s, user: User, data: dict) -> list[str]:
         ids = data["niches"]
         if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
             raise ValidationError("Ниши: нужен список номеров")
-        valid = set((await s.scalars(select(Category.id).where(Category.id.in_(ids), Category.parent_id.is_(None),
-                                                               Category.enabled, ~Category.pending))).all())
+        visible = set((await s.scalars(select(Category.id).where(
+            Category.parent_id.is_(None), Category.enabled, ~Category.pending))).all())
+        valid = visible & set(ids)
         if not valid:
             raise ValidationError("Выберите хотя бы одну нишу")
-        await s.execute(delete(UserCategory).where(UserCategory.user_id == row.tg_id))
+        # меняем только то, что пользователь видит в списке; своя ниша на проверке и прочие связи остаются
+        await s.execute(delete(UserCategory).where(UserCategory.user_id == row.tg_id, UserCategory.category_id.in_(visible)))
         for cid in valid:
             s.add(UserCategory(user_id=row.tg_id, category_id=cid))
         changed.append("niches")

@@ -479,3 +479,86 @@ async def test_static_is_revalidated_not_stuck(client):
     assert js.headers["Cache-Control"] == "no-cache" and js.headers.get("ETag")
     again = await client.get("/app/app.js", headers={"If-None-Match": js.headers["ETag"]})
     assert again.status == 304  # ничего не качаем заново, пока файл не изменился
+
+
+# ---------- проверка на ошибки: границы настроек, запуск, заголовки ----------
+def test_setting_validation_blocks_dangerous_values():
+    from app.services import settings as st
+
+    for key, bad in [("max_recipients", "0"), ("rotation_days", "0"), ("search_interval_h", "0"), ("channel_poll_min", "0"),
+                     ("spam_block", "101"), ("ref_percent", "150"), ("autorenew", "2"), ("ai_enabled", "да"),
+                     ("scout_paused", "5"), ("bonus_leads", "0"), ("price_30", "99999999")]:
+        try:
+            st.validate(key, bad)
+        except st.SettingError:
+            continue
+        raise AssertionError(f"{key}={bad} должно отклоняться")
+    for key, good in [("max_recipients", "5"), ("rotation_days", "30"), ("spam_block", "60"), ("autorenew", "1"),
+                      ("ai_enabled", "0"), ("price_30", "490"), ("free_daily_limit", "0"), ("mode", "auto")]:
+        st.validate(key, good)
+    # все значения по умолчанию сами проходят проверку (иначе «↩️ По умолчанию» сломалось бы)
+    for key in st.LABELS:
+        st.validate(key, st.DEFAULTS[key])
+
+
+async def test_web_server_really_starts(monkeypatch):
+    import socket
+
+    import aiohttp
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    monkeypatch.setattr(config, "WEBAPP_URL", "https://example.test")
+    monkeypatch.setattr(config, "WEBAPP_PORT", port)
+    runner = await web_server.start()
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(f"http://127.0.0.1:{port}/healthz") as r:
+                assert r.status == 200 and (await r.json()) == {"ok": True}
+    finally:
+        await runner.cleanup()
+    monkeypatch.setattr(config, "WEBAPP_URL", "")
+    assert await web_server.start() is None  # без адреса кабинет выключен
+
+
+async def test_error_response_keeps_security_headers(client, maker, tgbot, monkeypatch):
+    from app.web import api
+
+    await make_user(maker, 61)
+
+    async def boom(request):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(api, "profile_get", boom)
+    c2 = TestClient(TestServer(web_server.make_app()))
+    await c2.start_server()
+    try:
+        r = await c2.get("/api/profile", headers=tma(61))
+        assert r.status == 500 and "default-src 'self'" in r.headers["Content-Security-Policy"]
+    finally:
+        await c2.close()
+
+
+async def test_saving_niches_keeps_own_pending_niche(client, maker):
+    from sqlalchemy import select
+
+    from app.models import Category, UserCategory
+
+    await make_user(maker, 62, niches=("Сайты",))
+    async with maker() as s:
+        mine = Category(name="Ремонт квартир", emoji="📌", proposed_by=62, pending=True)
+        s.add(mine)
+        await s.flush()
+        s.add(UserCategory(user_id=62, category_id=mine.id))
+        await s.commit()
+        pending_id = mine.id
+    prof = await (await client.get("/api/profile", headers=tma(62))).json()
+    assert pending_id not in [n["id"] for n in prof["niches"]]  # на проверке — не показываем
+    other = next(n["id"] for n in prof["niches"] if not n["on"])
+    r = await client.put("/api/profile", json={"niches": [other]}, headers=tma(62))
+    assert r.status == 200
+    async with maker() as s:
+        ids = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == 62))).all())
+    assert pending_id in ids and other in ids  # своя ниша не потерялась, выбранная добавилась

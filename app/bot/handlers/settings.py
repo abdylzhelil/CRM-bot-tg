@@ -2,14 +2,8 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from datetime import timedelta
-
-from sqlalchemy import func, select
-
-from app import config
 from app.bot.common import Ask, ask, esc, kb, reply
 from app.db import Session
-from app.models import Delivery, Lead, Payment, ScoutAccount, User, now
 from app.services import admin_status, autosetup, settings, sysmem
 
 router = Router()

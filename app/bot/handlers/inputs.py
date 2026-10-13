@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.bot.common import Ask, esc, kb, split_words
 from app.bot.handlers import clients as clients_h
 from app.db import Session
-from app.models import BlacklistEntry, Category, Client, ClientEvent, Keyword, ScoutAccount, SearchQuery
+from app.models import BlacklistEntry, Category, Keyword, ScoutAccount, SearchQuery
 from app.scout.client import parse_proxy
 from app.services import crm, quiet, rules, settings
 

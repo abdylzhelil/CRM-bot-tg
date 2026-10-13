@@ -77,6 +77,10 @@ async def security_headers(request: web.Request, handler):
 
 
 def _limited(user_id: int) -> bool:
+    if len(_hits) > 5000:  # не копим счётчики давно ушедших людей
+        stale = [uid for uid, dq in _hits.items() if not dq or time.monotonic() - dq[-1] > 60]
+        for uid in stale:
+            del _hits[uid]
     q, t = _hits[user_id], time.monotonic()
     while q and t - q[0] > 60:
         q.popleft()
@@ -148,7 +152,7 @@ async def index(request: web.Request) -> web.FileResponse:
 
 
 def make_app() -> web.Application:
-    app = web.Application(middlewares=[errors, security_headers, auth])
+    app = web.Application(middlewares=[security_headers, errors, auth])
     app.router.add_get("/healthz", health)
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/leads", api.leads_list)
@@ -188,7 +192,7 @@ async def start() -> web.AppRunner | None:
     if not config.WEBAPP_URL:
         log.info("мини-приложение выключено (WEBAPP_URL пуст)")
         return None
-    runner = web.AppRunner(make_app())
+    runner = web.AppRunner(make_app(), access_log=None)  # в журнал не пишем адреса запросов: в поиске бывают телефоны и ники
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", config.WEBAPP_PORT).start()
     log.info("мини-приложение: порт %s, адрес %s", config.WEBAPP_PORT, config.WEBAPP_URL)

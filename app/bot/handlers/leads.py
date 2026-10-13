@@ -6,8 +6,8 @@ from sqlalchemy import func, select
 from app.bot import notify
 from app.bot.common import ask, esc, kb
 from app.db import Session
-from app.models import BlacklistEntry, Category, Client, ClientEvent, Delivery, Group, Lead, SpamVote, User, now
-from app.services import ai, draft, lead_actions, referrals, settings, templates
+from app.models import Category, Delivery, Lead, User, now
+from app.services import ai, draft, lead_actions, referrals, settings
 from app.services.distribute import day_start, root_category
 
 router = Router()
