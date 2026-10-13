@@ -11,6 +11,7 @@ from app.bot.setup import build, setup_profile
 from app.db import Session, engine, init_db
 from app.migrate import migrate_data, upgrade_schema
 from app.feed import server as feed_server
+from app.web import server as web_server
 from app.models import Client, Reminder, now
 from app.services import backup, cleanup, heartbeat, public_stats, quiet, receipts, settings
 from app.scout.channels import channel_loop
@@ -182,6 +183,7 @@ async def main() -> None:
     await setup_profile(bot)
     await notify._send("🟢 Бот запущен (или перезапущен).")
     feed = await feed_server.start()
+    webapp = await web_server.start()
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
@@ -189,6 +191,8 @@ async def main() -> None:
             t.cancel()
         if feed:
             await feed.cleanup()
+        if webapp:
+            await webapp.cleanup()
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import html
 
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 esc = html.escape
 
@@ -31,10 +31,12 @@ class AccountFlow(StatesGroup):
 
 
 def kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
-    """(текст, callback_data) либо (текст, 'url:https://...')."""
+    """(текст, callback_data), (текст, 'url:https://...') либо (текст, 'webapp:https://...') — мини-приложение."""
     def btn(t: str, d: str) -> InlineKeyboardButton:
         if d.startswith("url:"):
             return InlineKeyboardButton(text=t, url=d[4:])
+        if d.startswith("webapp:"):
+            return InlineKeyboardButton(text=t, web_app=WebAppInfo(url=d[7:]))
         return InlineKeyboardButton(text=t, callback_data=d)
 
     return InlineKeyboardMarkup(inline_keyboard=[[btn(t, d) for t, d in row] for row in rows])

@@ -13,6 +13,25 @@ services:
       tgbots:
         aliases: [crm]
 
+  # HTTPS для мини-приложения. Включается строкой COMPOSE_PROFILES=web в .env (и WEBAPP_HOST, WEBAPP_URL — см. docs/MINIAPP_SETUP.md)
+  caddy:
+    image: caddy:2-alpine
+    profiles: [web]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      WEBAPP_HOST: ${WEBAPP_HOST:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    mem_limit: 128m
+    depends_on: [bot]
+
+volumes:
+  caddy_data:
+
 networks:
   # создаётся один раз командой: docker network create tgbots
   tgbots:

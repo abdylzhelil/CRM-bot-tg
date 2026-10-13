@@ -1,0 +1,31 @@
+:root {
+  --bg: var(--tg-theme-bg-color, #ffffff);
+  --text: var(--tg-theme-text-color, #14171a);
+  --hint: var(--tg-theme-hint-color, #6b7785);
+  --card: var(--tg-theme-secondary-bg-color, #f2f4f7);
+  --accent: var(--tg-theme-button-color, #2481cc);
+  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --ok: #2e9d57;
+  --warn: #d98a00;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { padding: 16px 16px 96px; max-width: 640px; margin: 0 auto; }
+h1 { font-size: 22px; margin: 4px 0 2px; }
+h2 { font-size: 15px; margin: 20px 0 8px; color: var(--hint); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.muted { color: var(--hint); }
+.center { text-align: center; margin-top: 40vh; }
+.card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat { background: var(--card); border-radius: 14px; padding: 12px 14px; }
+.stat b { display: block; font-size: 26px; line-height: 1.1; }
+.stat span { color: var(--hint); font-size: 13px; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 13px; background: var(--card); }
+.badge.paid { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.badge.admin { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.btn { display: block; width: 100%; border: 0; border-radius: 12px; padding: 14px; font: inherit; font-weight: 600; background: var(--accent); color: var(--accent-text); margin-top: 10px; }
+.btn.ghost { background: var(--card); color: var(--text); }
+.error { background: color-mix(in srgb, var(--warn) 16%, transparent); border-radius: 14px; padding: 14px; }
+nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--bg); border-top: 1px solid color-mix(in srgb, var(--hint) 25%, transparent); padding-bottom: env(safe-area-inset-bottom); }
+nav button { flex: 1; border: 0; background: none; color: var(--hint); font: inherit; font-size: 12px; padding: 10px 2px; min-height: 52px; }
+nav button[aria-current="true"] { color: var(--accent); font-weight: 600; }

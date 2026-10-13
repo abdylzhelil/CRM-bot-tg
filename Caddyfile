@@ -1,0 +1,5 @@
+# HTTPS для мини-приложения. Адрес берётся из WEBAPP_HOST (например 1-2-3-4.sslip.io); сертификат Caddy получает и продлевает сам.
+{$WEBAPP_HOST} {
+	encode gzip
+	reverse_proxy bot:8091
+}

@@ -20,6 +20,10 @@ TG_API_HASH = os.getenv("TG_API_HASH", "")
 FEED_TOKEN = os.getenv("FEED_TOKEN", "")
 FEED_PORT = int(os.getenv("FEED_PORT") or 8090)
 
+# Мини-приложение (кабинет в Telegram): публичный https-адрес (например https://1-2-3-4.sslip.io). Пусто — выключено.
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
+WEBAPP_PORT = int(os.getenv("WEBAPP_PORT") or 8091)
+
 # Онлайн-оплата через Telegram Payments (токен провайдера из @BotFather -> Payments). Пусто — оплата выключена.
 PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
 PAYMENT_CURRENCY = os.getenv("PAYMENT_CURRENCY", "RUB")

@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import delete, func, select
 
+from app import config
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import PLANS, Category, Delivery, Lead, User, UserCategory, UserNegative
@@ -224,7 +225,7 @@ async def profile(target, user: User) -> None:
         f"Получено заявок: {total}\n"
         f"{'⏸ Заявки на паузе' if user.paused else ''}"
     )
-    await reply(target, text, kb([
+    await reply(target, text, kb(([[("📱 Кабинет", f"webapp:{config.WEBAPP_URL}/app/")]] if config.WEBAPP_URL else []) + [
         [("🎯 Ниши", "pf:niches"), ("📍 Город", "pf:city")],
         [("⛔ Минус-слова", "pf:neg"), ("🌙 Тишина", "pf:quiet")],
         [("📋 Мой шаблон ответа", "pf:tpl"), ("💰 Мои цены", "pf:prices")],

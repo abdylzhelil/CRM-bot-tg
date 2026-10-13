@@ -105,9 +105,10 @@ def admin_panel():
 async def setup_profile(bot: Bot) -> None:
     """Кнопка «Меню» с командами, описание бота до запуска. Ошибки не мешают работе."""
     try:
-        await bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
+        cabinet = [BotCommand(command="app", description="📱 Кабинет")] if config.WEBAPP_URL else []
+        await bot.set_my_commands(cabinet + USER_COMMANDS, scope=BotCommandScopeDefault())
         for admin_id in config.OWNER_IDS:
-            await bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id))
+            await bot.set_my_commands(cabinet + ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id))
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
         await bot.set_my_description(DESCRIPTION)
         await bot.set_my_short_description(SHORT_DESCRIPTION)
@@ -134,6 +135,15 @@ async def start(m: Message, state: FSMContext, user: User, command: CommandObjec
     if not user.onboarded:
         return await profile.show_niches(m, user)
     await m.answer("📡 Главное меню — выберите раздел:", reply_markup=menu_keyboard(user))
+
+
+@base.message(Command("app"))
+async def app_cmd(m: Message, state: FSMContext, user: User) -> None:
+    await state.clear()
+    if not config.WEBAPP_URL:
+        return await m.answer("📱 Кабинет пока не подключён. Всё доступно в меню бота.")
+    await m.answer("📱 <b>Кабинет</b> — заявки, клиенты и настройки в одном окне.",
+                   reply_markup=kb([[("📱 Открыть кабинет", f"webapp:{config.WEBAPP_URL}/app/")]]))
 
 
 @base.message(Command("about"))
