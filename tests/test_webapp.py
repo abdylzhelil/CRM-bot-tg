@@ -104,3 +104,117 @@ def test_kb_builds_webapp_button():
 
     btn = kb([[("📱 Кабинет", "webapp:https://x.sslip.io/app/")]]).inline_keyboard[0][0]
     assert btn.web_app.url == "https://x.sslip.io/app/" and btn.callback_data is None
+
+
+# ---------- М1: заявки, профиль, автонастройка ----------
+async def add_lead(maker, user_id, text="Нужен сайт для кафе, бюджет 30к", status="new", author=900, sent=True):
+    from app.models import Delivery, Lead
+
+    async with maker() as s:
+        lead = Lead(author_id=author, username="client_u", name="Клиент", group_title="Группа", text=text,
+                    text_hash=f"h{author}{text}"[:40], city="Москва")
+        s.add(lead)
+        await s.flush()
+        d = Delivery(lead_id=lead.id, user_id=user_id, status=status, sent=sent)
+        s.add(d)
+        await s.commit()
+        return d.id
+
+
+def json_put(client, path, user_id, body):
+    return client.put(path, json=body, headers=tma(user_id))
+
+
+async def test_leads_list_is_private_filtered_and_paged(client, maker):
+    await make_user(maker, 20)
+    await make_user(maker, 21)
+    mine = [await add_lead(maker, 20, text=f"заявка {i}", author=1000 + i) for i in range(23)]
+    await add_lead(maker, 20, text="отложенная", status="postponed", author=2000)
+    await add_lead(maker, 21, text="чужая", author=3000)
+    await add_lead(maker, 20, text="ещё не доставлена", author=4000, sent=False)
+    first = await (await client.get("/api/leads?status=new", headers=tma(20))).json()
+    assert len(first["items"]) == 20 and first["has_more"] is True
+    assert first["items"][0]["id"] == mine[-1] and first["items"][0]["contact"] == "https://t.me/client_u"
+    rest = await (await client.get(f"/api/leads?status=new&before={first['items'][-1]['id']}", headers=tma(20))).json()
+    assert len(rest["items"]) == 3 and rest["has_more"] is False
+    later = await (await client.get("/api/leads?status=postponed", headers=tma(20))).json()
+    assert [i["text"] for i in later["items"]] == ["отложенная"]
+    assert (await client.get("/api/leads?status=хм", headers=tma(20))).status == 400
+
+
+async def test_lead_actions_take_later_spam_and_ownership(client, maker):
+    from sqlalchemy import select
+
+    from app.models import BlacklistEntry, Client, Delivery
+
+    await make_user(maker, 22)
+    await make_user(maker, 23)
+    d_take = await add_lead(maker, 22, author=910)
+    r = await client.post(f"/api/leads/{d_take}/take", headers=tma(22))
+    body = await r.json()
+    assert r.status == 200 and body["status"] == "taken" and body["client_id"]
+    async with maker() as s:
+        assert (await s.scalar(select(Client).where(Client.user_id == 22, Client.tg_id == 910))) is not None
+    d_later = await add_lead(maker, 22, author=911)
+    assert (await (await client.post(f"/api/leads/{d_later}/later", headers=tma(22))).json())["status"] == "postponed"
+    d_spam = await add_lead(maker, 22, author=912)
+    assert (await (await client.post(f"/api/leads/{d_spam}/spam", headers=tma(22))).json())["status"] == "spam"
+    async with maker() as s:
+        assert await s.get(BlacklistEntry, 912) is None  # один голос — ещё не общий чёрный список
+    assert (await client.post(f"/api/leads/{d_take}/reject", headers=tma(23))).status == 404  # чужая заявка
+    assert (await client.post(f"/api/leads/{d_later}/client", headers=tma(22))).status == 403  # «Это клиент» — только админ
+    assert (await client.post(f"/api/leads/{d_later}/взлом", headers=tma(22))).status == 400
+    assert (await client.post(f"/api/leads/{d_later}/later")).status == 401
+    async with maker() as s:
+        assert (await s.get(Delivery, d_later)).status == "postponed"
+
+
+async def test_reply_texts(client, maker):
+    await make_user(maker, 24, prices="сайт от 15 000 ₽")
+    d = await add_lead(maker, 24)
+    tpl = await (await client.get(f"/api/leads/{d}/reply?kind=template", headers=tma(24))).json()
+    drf = await (await client.get(f"/api/leads/{d}/reply?kind=draft", headers=tma(24))).json()
+    assert "15 000" in tpl["text"] and tpl["contact"] == "https://t.me/client_u"
+    assert drf["text"] and "15 000" in drf["text"]
+    assert (await client.get(f"/api/leads/{d}/reply?kind=x", headers=tma(24))).status == 400
+    assert (await client.get(f"/api/leads/{d}/reply", headers=tma(25))).status == 403  # нет такого пользователя
+
+
+async def test_profile_read_and_save_with_validation(client, maker):
+    from sqlalchemy import select
+
+    from app.models import UserNegative
+
+    await make_user(maker, 26, niches=("Сайты",))
+    prof = await (await client.get("/api/profile", headers=tma(26))).json()
+    on = [n for n in prof["niches"] if n["on"]]
+    assert len(on) == 1 and on[0]["name"] == "Сайты"
+    other = next(n["id"] for n in prof["niches"] if not n["on"])
+    r = await json_put(client, "/api/profile", 26, {"niches": [other], "city": "Казань", "only_city": True, "quiet_hours": "23-8",
+                                                    "reply_template": "Здравствуйте!", "prices": "от 1000", "paused": True,
+                                                    "negatives": ["бесплатно", "Бесплатно", " вакансия ", ""]})
+    body = await r.json()
+    assert r.status == 200 and body["profile"]["city"] == "Казань" and body["profile"]["only_city"] and body["profile"]["paused"]
+    assert [n["id"] for n in body["profile"]["niches"] if n["on"]] == [other]
+    assert body["profile"]["negatives"] == ["бесплатно", "вакансия"] and body["profile"]["quiet_hours"] == "23-8"
+    # ошибки ввода не меняют ничего
+    assert (await json_put(client, "/api/profile", 26, {"niches": []})).status == 422
+    assert (await json_put(client, "/api/profile", 26, {"quiet_hours": "ночью"})).status == 422
+    assert (await json_put(client, "/api/profile", 26, {"prices": "я" * 3000})).status == 422
+    assert (await json_put(client, "/api/profile", 26, {"niches": [999999]})).status == 422
+    assert (await client.put("/api/profile", data="не json", headers=tma(26))).status == 400
+    # пустой город — «вся Россия», «только мой город» тогда выключается
+    r = await json_put(client, "/api/profile", 26, {"city": ""})
+    assert (await r.json())["profile"]["only_city"] is False
+    async with maker() as s:
+        assert len((await s.scalars(select(UserNegative).where(UserNegative.user_id == 26))).all()) == 2
+
+
+async def test_autosetup_api(client, maker):
+    await make_user(maker, 27)
+    info = await (await client.get("/api/autosetup", headers=tma(27))).json()
+    assert "Бесплатный тариф" in info["intro"] and {p["what"] for p in info["plan"]} == {"Режим тишины", "Минус-слова"}
+    assert (await (await client.post("/api/autosetup", headers=tma(27))).json())["applied"] == 2
+    prof = await (await client.get("/api/profile", headers=tma(27))).json()
+    assert prof["quiet_hours"] == "23-8" and len(prof["negatives"]) == 4
+    assert (await (await client.get("/api/autosetup", headers=tma(27))).json())["plan"] == []

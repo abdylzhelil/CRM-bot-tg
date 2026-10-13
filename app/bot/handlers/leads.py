@@ -7,11 +7,13 @@ from app.bot import notify
 from app.bot.common import ask, esc, kb
 from app.db import Session
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Delivery, Group, Lead, SpamVote, User, now
-from app.services import ai, draft, referrals, settings, templates
+from app.services import ai, draft, lead_actions, referrals, settings, templates
 from app.services.distribute import day_start, root_category
 
 router = Router()
-STATUS_NOTES = {"later": ("postponed", "Отложено"), "reject": ("rejected", "Отказ")}
+STATUS_NOTES = lead_actions.STATUS_NOTES
+_blacklist = lead_actions.blacklist
+vote_spam = lead_actions.vote_spam
 
 
 async def category_name(s, cat_id: int | None) -> str:
@@ -52,24 +54,6 @@ async def leads_menu(m: Message, user: User) -> None:
             await send_card(m, s, d, lead, user)
 
 
-async def _blacklist(s, lead: Lead, status: str, reason: str) -> None:
-    entry = await s.get(BlacklistEntry, lead.author_id)
-    if entry:
-        entry.status, entry.reason = status, reason
-    else:
-        s.add(BlacklistEntry(user_id=lead.author_id, username=lead.username, status=status, reason=reason))
-
-
-async def vote_spam(s, lead: Lead, user: User) -> None:
-    """Голос «спам»: пользователю автор больше не приходит; админ или N голосов — общий чёрный список."""
-    if await s.get(SpamVote, (lead.author_id, user.tg_id)) is None:
-        s.add(SpamVote(author_id=lead.author_id, user_id=user.tg_id))
-        await s.flush()
-    votes = await s.scalar(select(func.count()).select_from(SpamVote).where(SpamVote.author_id == lead.author_id))
-    if user.is_admin or votes >= await settings.get_int(s, "spam_votes_to_ban"):
-        await _blacklist(s, lead, "spam", "отмечено администратором" if user.is_admin else f"голосов «спам»: {votes}")
-
-
 @router.callback_query(F.data.startswith("lead:"))
 async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -> None:
     _, action, raw_id = cb.data.split(":")
@@ -87,29 +71,13 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
         if action == "ai":
             return await send_ai_draft(cb, s, lead, user, d.id)
         if action == "take":
-            client = await s.scalar(select(Client).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
-            if not client:
-                group = await s.get(Group, lead.group_id) if lead.group_id else None
-                client = Client(
-                    user_id=user.tg_id, tg_id=lead.author_id, name=lead.name, username=lead.username,
-                    source=group.title if group else lead.group_title, category_id=lead.category_id,
-                )
-                s.add(client)
-                await s.flush()
-            s.add(ClientEvent(client_id=client.id, text=f"Заявка: {lead.text[:300]}"))
-            d.status = "taken"
+            client = await lead_actions.take(s, user, d, lead)
             await s.commit()
             await cb.message.edit_reply_markup(reply_markup=kb([[("👤 Открыть клиента", f"cl:open:{client.id}")]]))
             return await cb.answer("Клиент в CRM")
-        if action in STATUS_NOTES:
-            d.status, note = STATUS_NOTES[action]
-        elif action == "spam":
-            d.status, note = "spam", "Это спам — автор больше не придёт"
-            await vote_spam(s, lead, user)
-        elif action == "client" and user.is_admin:
-            await _blacklist(s, lead, "client", "отмечено администратором")
-            lead.suspicious, note = False, "В белом списке"
-        else:
+        try:
+            note = await lead_actions.apply_status(s, user, d, lead, action)
+        except lead_actions.ActionError:
             return await cb.answer()
         await s.commit()
     await cb.message.edit_reply_markup(reply_markup=kb([[(f"✔ {note}", "noop")]]))
@@ -123,16 +91,7 @@ async def noop(cb: CallbackQuery) -> None:
 
 async def send_template(cb: CallbackQuery, s, lead: Lead, user: User) -> None:
     """Ответ клиенту: шаблон и цены пользователя; у администратора — ещё и из категории."""
-    cat = await s.get(Category, lead.category_id) if lead.category_id else None
-    parent = await s.get(Category, cat.parent_id) if cat and cat.parent_id else None
-    tpl, prices = user.reply_template, user.prices
-    if user.is_admin:
-        tpl = tpl or (cat.reply_template if cat else "") or (parent.reply_template if parent else "")
-        prices = prices or (cat.prices if cat else "") or (parent.prices if parent else "")
-    text = templates.render(
-        tpl, name=lead.name, group=lead.group_title,
-        category=(cat.name.lower() if cat else "эта услуга"), prices=prices,
-    )
+    text = await lead_actions.template_text(s, user, lead)
     contact = f"https://t.me/{lead.username}" if lead.username else f"tg://user?id={lead.author_id}"
     await cb.message.answer(
         f"📋 Ответ клиенту (нажмите на текст — скопируется):\n\n<code>{esc(text)}</code>\n\n"

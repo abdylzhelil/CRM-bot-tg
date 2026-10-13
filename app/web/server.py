@@ -17,14 +17,15 @@ from app.db import Session
 from app.models import Client, Delivery, User, now
 from app.services import settings
 from app.services.distribute import is_paid
+from app.web import api
 from app.web.auth import verify_init_data
+from app.web.keys import USER_KEY
 
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parents[2] / "webapp"
 RATE_LIMIT = 90  # запросов в минуту на пользователя
 _hits: dict[int, deque] = defaultdict(deque)
-USER_KEY = web.RequestKey("user", User)
 
 # Что показывать в меню приложения: раздел → кому доступен
 SECTIONS = [
@@ -126,6 +127,13 @@ def make_app() -> web.Application:
     app = web.Application(middlewares=[security_headers, auth])
     app.router.add_get("/healthz", health)
     app.router.add_get("/api/me", me)
+    app.router.add_get("/api/leads", api.leads_list)
+    app.router.add_post("/api/leads/{id}/{action}", api.lead_act)
+    app.router.add_get("/api/leads/{id}/reply", api.lead_reply)
+    app.router.add_get("/api/profile", api.profile_get)
+    app.router.add_put("/api/profile", api.profile_put)
+    app.router.add_get("/api/autosetup", api.autosetup_get)
+    app.router.add_post("/api/autosetup", api.autosetup_post)
     app.router.add_get("/", index)
     app.router.add_get("/app/", index)
     app.router.add_static("/app/", STATIC_DIR, show_index=False)
