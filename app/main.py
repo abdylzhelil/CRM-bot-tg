@@ -57,6 +57,7 @@ async def reminder_loop() -> None:
                 await notify._send("🌙 Вечерний отчёт\n" + await build_report())
         except Exception:
             log.exception("reminder_loop")
+            await notify.alert_once("reminder_loop", "В фоновой задаче reminder_loop ошибка (см. логи сервера).")
         await asyncio.sleep(60)
 
 
@@ -67,6 +68,7 @@ async def delivery_loop() -> None:
             await notify.flush_due()
         except Exception:
             log.exception("delivery_loop")
+            await notify.alert_once("delivery_loop", "В фоновой задаче delivery_loop ошибка (см. логи сервера).")
         await asyncio.sleep(20)
 
 
@@ -100,6 +102,7 @@ async def expiry_loop() -> None:
             await expiry_once()
         except Exception:
             log.exception("expiry_loop")
+            await notify.alert_once("expiry_loop", "В фоновой задаче expiry_loop ошибка (см. логи сервера).")
         await asyncio.sleep(3600)
 
 
@@ -121,6 +124,7 @@ async def main() -> None:
           backup.backup_loop(), expiry_loop(), payments_h.link_loop())
     ]
     await setup_profile(bot)
+    await notify._send("🟢 Бот запущен (или перезапущен).")
     feed = await feed_server.start()
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

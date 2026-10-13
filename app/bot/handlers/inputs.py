@@ -15,7 +15,7 @@ router = Router()
 
 
 # действия, которые доступны только администратору
-ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_")
+ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_")
 
 
 @router.message(Ask.value, F.text)
@@ -255,7 +255,14 @@ async def niche_propose(s, m, d, text):
     await notify._send("📌 Новая ниша от пользователя:\n\n" + body, markup)
 
 
+async def bc_text(s, m, d, text):
+    from app.bot.handlers import broadcast
+
+    return await broadcast.bc_text(s, m, d, text)
+
+
 HANDLERS = {
+    "bc_text": bc_text,
     "niche_propose": niche_propose,
     "pass_to": pass_to,
     "grp_link": grp_link,

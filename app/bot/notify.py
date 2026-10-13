@@ -30,6 +30,22 @@ async def _send(text: str, markup: InlineKeyboardMarkup | None = None) -> None:
             log.exception("не удалось отправить сообщение %s", uid)
 
 
+_last_alert: dict[str, float] = {}
+
+
+async def alert_once(key: str, text: str, cooldown: float = 900) -> None:
+    """Тревога администраторам, не чаще раза в cooldown секунд на один ключ (чтобы не засыпать сообщениями)."""
+    import time
+
+    if time.monotonic() - _last_alert.get(key, -cooldown - 1) < cooldown:
+        return
+    _last_alert[key] = time.monotonic()
+    try:
+        await alert(text)
+    except Exception:
+        log.exception("не удалось отправить тревогу")
+
+
 async def alert(text: str) -> None:
     await _send(f"🚨 {html.escape(text)}")
 

@@ -16,7 +16,7 @@ from app.bot import notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU
 from app.bot.handlers import (
-    accounts, blacklist, catalog, categories, clients, payments, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
+    accounts, blacklist, broadcast, catalog, categories, clients, payments, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
     submissions, users_admin,
 )
 from app.db import Session
@@ -81,6 +81,7 @@ def admin_panel():
         [("🔍 Группы", "adm:groups"), ("👥 Пользователи", "adm:users")],
         [("🗂 Категории", "adm:categories"), ("🔑 Ключевые слова", "adm:keywords")],
         [("🛡 Чёрный список", "adm:blacklist"), ("⚙️ Настройки", "adm:settings")],
+        [("📣 Рассылка", "adm:broadcast")],
     ])
 
 
@@ -175,6 +176,7 @@ admin_nav = Router(name="admin_nav")
 ADMIN_TARGETS = {
     "groups": groups.groups_menu, "users": users_admin.users_menu, "categories": categories.categories_menu,
     "keywords": keywords.keywords_menu, "blacklist": blacklist.blacklist_menu, "settings": settings.settings_menu,
+    "broadcast": broadcast.broadcast_menu,
 }
 
 
@@ -212,7 +214,7 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     admin.callback_query.filter(IsAdmin())
     admin.include_routers(
         accounts.router, groups.router, categories.router, keywords.router, blacklist.router,
-        settings.router, users_admin.router, submissions.router, admin_nav,
+        settings.router, users_admin.router, submissions.router, broadcast.router, admin_nav,
     )
     # личка: всем пользователям
     private = Router(name="private")
@@ -221,4 +223,12 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
         base, inputs.router, profile.router, catalog.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
     )
     dp.include_routers(ingroup.router, payments.checkout, private)
+
+    @dp.errors()
+    async def on_error(event) -> bool:
+        """Любая необработанная ошибка в обработчике: в лог и тревога администратору (не чаще раза в 15 минут)."""
+        log.error("ошибка обработчика", exc_info=event.exception)
+        await notify.alert_once(f"handler:{type(event.exception).__name__}",
+                                f"Ошибка в боте: {type(event.exception).__name__} (подробности в логах сервера).")
+        return True
     return bot, dp
