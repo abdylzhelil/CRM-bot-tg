@@ -4,7 +4,7 @@ from itertools import count
 
 import pytest
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetMe, SendMessage, TelegramMethod
+from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetMe, GetMyName, SendMessage, TelegramMethod
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from sqlalchemy import select
 
@@ -28,6 +28,10 @@ class FakeSession(BaseSession):
         if isinstance(method, SendMessage | EditMessageText):
             return Message(message_id=next(_ids), date=datetime.now(),
                            chat=Chat(id=method.chat_id or 0, type="private"), text=method.text)
+        if isinstance(method, GetMyName):
+            from aiogram.types import BotName
+
+            return BotName(name="старое имя")
         if isinstance(method, AnswerCallbackQuery):
             return True
         return True

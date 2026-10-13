@@ -40,7 +40,7 @@ HELP = (
     "🌐 <b>Каталог</b> — добавьте свою открытую группу или канал: за заявки из неё дарим дни 💎.\n\n"
     "<b>Настройки</b> — в 👤 Профиль: ниши, город, минус-слова, режим тишины, свой шаблон и цены, пауза.\n"
     "Заявка живёт минуты — отвечайте быстро 🔥\n\n"
-    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /catalog — каталог, /profile — профиль, /terms — условия оплаты, /privacy — политика конфиденциальности, /deleteme — удалить мои данные, /cancel — отмена ввода."
+    "Команды: /menu — меню, /leads — заявки, /about — о боте, /clients — клиенты, /catalog — каталог, /profile — профиль, /terms — условия оплаты, /privacy — политика конфиденциальности, /deleteme — удалить мои данные, /cancel — отмена ввода."
 )
 
 USER_COMMANDS = [
@@ -109,11 +109,15 @@ async def setup_profile(bot: Bot) -> None:
         for admin_id in config.OWNER_IDS:
             await bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id))
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-        await bot.set_my_name(BOT_NAME)
         await bot.set_my_description(DESCRIPTION)
         await bot.set_my_short_description(SHORT_DESCRIPTION)
     except Exception:
         log.warning("не удалось обновить команды/описание бота", exc_info=True)
+    try:  # имя Telegram разрешает менять редко — трогаем, только если оно отличается
+        if (await bot.get_my_name()).name != BOT_NAME:
+            await bot.set_my_name(BOT_NAME)
+    except Exception:
+        log.warning("не удалось обновить имя бота", exc_info=True)
 
 
 base = Router()
