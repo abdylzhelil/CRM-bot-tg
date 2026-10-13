@@ -130,23 +130,65 @@ async def test_clean_empty_accounts(maker):
         assert await s.get(User, 91) is None and await s.get(User, 92) and await s.get(User, 90)
 
 
-async def test_auto_cleanup_after_seven_days(maker):
+async def test_warning_then_delete_after_seven_days(maker):
     from app.models import UserCategory
     from app.services import cleanup
 
     await make_user(maker, 95)  # настоящий
     async with maker() as s:
-        s.add(User(tg_id=96, onboarded=False, created_at=now() - timedelta(days=8)))  # ушёл давно — удалить
-        s.add(User(tg_id=97, onboarded=False, created_at=now() - timedelta(days=5)))  # ещё рано
+        s.add(User(tg_id=96, onboarded=False, created_at=now() - timedelta(days=8)))  # давно, ещё не предупреждён
+        s.add(User(tg_id=97, onboarded=False, created_at=now() - timedelta(days=3)))  # рано
         s.add(User(tg_id=98, onboarded=False, created_at=now() - timedelta(days=30), is_admin=True))  # админа не трогаем
+        s.add(User(tg_id=99, onboarded=False, created_at=now() - timedelta(days=8), blocked=True))  # бот заблокирован
         s.add(UserCategory(user_id=96, category_id=1))  # выбрал нишу, но не дошёл до конца — хвосты тоже уходят
         await s.commit()
+    async with maker() as s:  # ещё не предупредили — не удаляем (кроме заблокировавших бота)
+        assert await cleanup.auto_cleanup(s) == 1
+    sent = []
+
+    async def send(uid, text, markup=None):
+        sent.append((uid, text, markup))
+        return True
+
     async with maker() as s:
+        assert await cleanup.warn_due(s, send) == 1  # предупреждён один: 96 (за 1 день до срока в 7 дней)
+        assert await cleanup.warn_due(s, send) == 0  # повторно не пишем
+    assert sent[0][0] == 96 and "удалим" in sent[0][1] and "reg:go" in str(sent[0][2])
+    async with maker() as s:
+        assert await cleanup.auto_cleanup(s) == 0  # предупреждение только что — срок «отлежать» не прошёл
+        (await s.get(User, 96)).warned_at = now() - timedelta(days=2)
+        await s.commit()
         assert await cleanup.auto_cleanup(s) == 1
     async with maker() as s:
-        assert await s.get(User, 96) is None and await s.get(User, 97) and await s.get(User, 98) and await s.get(User, 95)
-        assert await s.get(UserCategory, (96, 1)) is None
+        assert await s.get(User, 96) is None and await s.get(UserCategory, (96, 1)) is None
+        assert await s.get(User, 97) and await s.get(User, 98) and await s.get(User, 95)
         await settings.put(s, "cleanup_days", "0")  # 0 — автоудаление выключено
-        s.add(User(tg_id=99, onboarded=False, created_at=now() - timedelta(days=60)))
+        s.add(User(tg_id=100, onboarded=False, created_at=now() - timedelta(days=60)))
         await s.commit()
-        assert await cleanup.auto_cleanup(s) == 0 and await s.get(User, 99)
+        assert await cleanup.auto_cleanup(s) == 0 and await cleanup.warn_due(s, send) == 0
+        assert await s.get(User, 100)
+
+
+async def test_warn_marks_blocked_when_undeliverable(maker):
+    from app.services import cleanup
+
+    async with maker() as s:
+        s.add(User(tg_id=101, onboarded=False, created_at=now() - timedelta(days=7)))
+        await s.commit()
+
+    async def refuse(uid, text, markup=None):
+        return False
+
+    async with maker() as s:
+        assert await cleanup.warn_due(s, refuse) == 0
+        assert (await s.get(User, 101)).blocked  # не доставить — значит бот заблокирован, удалим по сроку
+        assert await cleanup.auto_cleanup(s) == 1
+
+
+async def test_registration_screen_mentions_deletion_period(maker, tgbot):
+    from app.bot.handlers import profile
+
+    m = MagicMock()
+    m.answer = AsyncMock()
+    await profile.show_niches(m, SimpleNamespace(tg_id=300, onboarded=False))
+    assert "удалится" in m.answer.call_args.args[0] and "7 дн" in m.answer.call_args.args[0]

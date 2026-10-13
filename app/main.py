@@ -96,12 +96,30 @@ async def expiry_once() -> int:
     return sent
 
 
+async def send_ok(user_id: int, text: str, markup=None) -> bool:
+    """Отправка с ответом «дошло ли» (False — человек заблокировал бота)."""
+    from aiogram.exceptions import TelegramForbiddenError
+
+    try:
+        await notify._bot.send_message(user_id, text, reply_markup=markup)
+        return True
+    except TelegramForbiddenError:
+        return False
+    except Exception:
+        log.info("не удалось написать %s", user_id)
+        return True  # временная ошибка — не считаем заблокированным
+
+
 async def cleanup_loop() -> None:
     """Раз в 6 часов удаляет аккаунты, не завершившие регистрацию за cleanup_days (по умолчанию 7) дней."""
     from app.services import cleanup
 
     while True:
         try:
+            async with Session() as s:
+                warned = await cleanup.warn_due(s, send_ok)
+                if warned:
+                    log.info("предупреждено об удалении: %s", warned)
             async with Session() as s:
                 removed = await cleanup.auto_cleanup(s)
             if removed:

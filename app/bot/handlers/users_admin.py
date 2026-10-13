@@ -98,7 +98,7 @@ async def set_plan(cb: CallbackQuery) -> None:
 async def empty_users(s, days: int = 3) -> list[int]:
     from app.services import cleanup
 
-    return await cleanup.empty_users(s, days)
+    return [x.tg_id for x in await cleanup.empty_users(s, days)]
 
 
 @router.callback_query(F.data == "us:clean")

@@ -33,6 +33,11 @@ async def niches_keyboard(user_id: int, onboarding: bool):
 async def show_niches(target, user: User) -> None:
     markup, count = await niches_keyboard(user.tg_id, not user.onboarded)
     text = "🎯 <b>Ваши ниши</b> — по ним приходят заявки. Отметьте одну или несколько:"
+    if not user.onboarded:
+        async with Session() as s:
+            days = await settings.get_int(s, "cleanup_days")
+        if days > 0:
+            text += f"\n\n<i>ℹ️ Если не закончить настройку за {days} дн., аккаунт удалится (можно зарегистрироваться заново).</i>"
     if not user.onboarded and isinstance(target, Message):
         text = WELCOME + "\n\n" + text
     await reply(target, text, markup)
@@ -73,6 +78,15 @@ async def toggle_niche(cb: CallbackQuery, user: User) -> None:
             s.add(UserCategory(user_id=user.tg_id, category_id=cid))
         await s.commit()
     await show_niches(cb, user)
+
+
+@router.callback_query(F.data == "reg:go")
+async def resume_registration(cb: CallbackQuery, user: User) -> None:
+    """Кнопка из предупреждения об удалении: продолжить настройку."""
+    await cb.answer()
+    if user.onboarded:
+        return await cb.message.answer("Настройка уже завершена 👍")
+    await show_niches(cb.message, user)
 
 
 @router.callback_query(F.data == "ob:propose")

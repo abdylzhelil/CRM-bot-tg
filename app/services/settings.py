@@ -36,6 +36,7 @@ DEFAULTS: dict[str, str] = {
     "ref_limit": "10",
     "bonus_max_days": "180",
     "cleanup_days": "7",
+    "cleanup_warn_days": "1",
 }
 
 LABELS: dict[str, str] = {
@@ -69,6 +70,7 @@ LABELS: dict[str, str] = {
     "ref_limit": "Сколько приглашений на человека награждается (всего)",
     "bonus_max_days": "Потолок бонусных дней вперёд (бонусы и приглашения)",
     "cleanup_days": "Удалять не завершивших регистрацию через N дней (0 — не удалять)",
+    "cleanup_warn_days": "Предупреждать об удалении за N дней (0 — не предупреждать)",
 }
 
 
@@ -99,7 +101,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days"]),
-    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days"]),
+    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days"]),
     ("📊", "Отчёты", ["report_hour"]),
 ]
 
@@ -118,6 +120,6 @@ SHORT: dict[str, str] = {
     "default_join_limit": "Вступлений/сутки", "search_interval_h": "Поиск раз в, ч",
     "rotation_days": "Выход из тихих групп, дн",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
-    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "spam_votes_to_ban": "Голосов «спам» для бана",
+    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана",
     "report_hour": "Час вечернего отчёта",
 }
