@@ -1,4 +1,5 @@
 """Публичная статистика для канала: только цифры, без имён, ников и текстов заявок."""
+import html
 import logging
 from datetime import timedelta
 
@@ -7,7 +8,7 @@ from sqlalchemy import func, select
 from app import config
 from app.db import Session
 from app.models import Category, Group, Lead, User, now
-from app.services import quiet, settings
+from app.services import ads, quiet, settings
 from app.services.distribute import root_category
 
 log = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ async def build() -> str:
         for root, n in sorted(niches.items(), key=lambda kv: -kv[1])[:3]:
             cat = await s.get(Category, root)
             top.append(f"• {cat.emoji} {cat.name}: {n}".replace("  ", " "))
+        promo = await ads.featured(s)
         cities = (await s.execute(select(Lead.city, func.count()).where(Lead.created_at > week, Lead.city != "")
                                   .group_by(Lead.city).order_by(func.count().desc()).limit(3))).all()
     lines = [
@@ -41,6 +43,8 @@ async def build() -> str:
     ]
     if top:
         lines += ["", "Самые востребованные ниши недели:"] + top
+    if promo:
+        lines += ["", "📢 Рекомендуем:"] + [f'• <a href="https://t.me/{html.escape(g.username)}">{html.escape(g.title[:40])}</a>' for g in promo]
     if cities:
         lines += ["", "Города с наибольшим спросом: " + ", ".join(f"{c} ({n})" for c, n in cities)]
     return "\n".join(lines)

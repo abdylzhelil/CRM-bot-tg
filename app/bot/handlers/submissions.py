@@ -7,7 +7,7 @@ from app.bot.common import esc, kb, reply
 from app.bot.handlers.catalog import KIND
 from app.db import Session
 from app.models import Category, Group, User
-from app.services import catalog
+from app.services import ads, catalog, settings
 
 router = Router()
 
@@ -56,6 +56,39 @@ async def decide(cb: CallbackQuery) -> None:
     await cb.answer()
     text = (f"✅ Ваша группа «{esc(title)}» одобрена и добавлена в каталог. За заявки из неё вы получите бонусы 🎁"
             if action == "ok" else f"❌ Группа «{esc(title)}» не прошла проверку.")
+    try:
+        await cb.bot.send_message(owner, text)
+    except Exception:
+        pass
+
+
+# ---------- реклама групп ----------
+async def ad_card(g: Group, user: User):
+    async with Session() as s:
+        cost, days = await settings.get_int(s, "ad_leads"), await settings.get_int(s, "ad_days")
+    text = (f"{KIND.get(g.kind, '')} <b>{esc(g.title)}</b> — <a href=\"https://t.me/{esc(g.username)}\">@{esc(g.username)}</a>\n"
+            f"Просит рекламу на {days} дн. за {cost} заявок (доступно {ads.available(g)})\n"
+            f"Заказал(а): {esc(user.name or str(user.tg_id))}")
+    return text, kb([[("✅ Подтвердить", f"adm_ad:ok:{g.id}"), ("❌ Отклонить", f"adm_ad:no:{g.id}")]])
+
+
+@router.callback_query(F.data.regexp(r"^adm_ad:(ok|no):\d+$"))
+async def ad_decide(cb: CallbackQuery) -> None:
+    _, action, gid = cb.data.split(":")
+    async with Session() as s:
+        g = await s.get(Group, int(gid))
+        if g is None or not g.ad_pending:
+            return await cb.answer("Уже обработано", show_alert=True)
+        title, owner = g.title, g.submitted_by
+        if action == "ok":
+            await ads.approve(s, g)
+            until = g.ad_until
+        else:
+            await ads.reject(s, g)
+    await cb.message.edit_reply_markup(reply_markup=kb([[("✔ Подтверждена" if action == "ok" else "✔ Отклонена", "noop")]]))
+    await cb.answer()
+    text = (f"📢 Реклама группы «{esc(title)}» запущена до {until:%d.%m.%Y}!" if action == "ok"
+            else f"❌ Заказ рекламы группы «{esc(title)}» отклонён, заявки не списаны.")
     try:
         await cb.bot.send_message(owner, text)
     except Exception:

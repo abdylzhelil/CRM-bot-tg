@@ -8,7 +8,7 @@ from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import Category, Group, User, UserCategory
-from app.services import catalog, geo, levels, settings
+from app.services import ads, catalog, geo, levels, settings
 
 router = Router()
 
@@ -56,7 +56,7 @@ async def browse(cb: CallbackQuery, user: User) -> None:
         return await reply(cb, "Пока пусто. Станьте первым — добавьте группу 👇",
                            kb([[("➕ Добавить группу или канал", "cg:add")], [("◀️ Назад", "cg:menu")]]))
     lines = [
-        f"{KIND[g.kind]} <a href=\"https://t.me/{esc(g.username)}\">{esc(g.title[:50])}</a> — {g.members} уч."
+        ("📢 " if ads.active(g) else "") + f"{KIND[g.kind]} <a href=\"https://t.me/{esc(g.username)}\">{esc(g.title[:50])}</a> — {g.members} уч."
         + (f", {esc(g.city)}" if g.city else "") + (f", заявок: {g.leads_count}" if g.leads_count else "")
         for g in groups
     ]
@@ -161,8 +161,39 @@ async def my_groups(cb: CallbackQuery, user: User) -> None:
     lines = [f"{KIND[g.kind]} <b>{esc(g.title[:40])}</b> — {STATUS.get(g.status, g.status)}"
              + (f", заявок: {g.leads_count}" if g.catalog else "") for g in groups]
     days = sum(catalog.bonus_days(g, per) for g in groups)
+    ad_rows = [[(f"📢 Реклама: {g.title[:24]}", f"ad:ask:{g.id}")] for g in groups if g.catalog]
     await reply(cb, "📂 <b>Мои группы</b>\n\n" + "\n".join(lines) + f"\n\n🎁 Получено бонусных дней: {days}\n🏆 Уровень: {levels.name(user.level)}",
-                kb([[("◀️ Назад", "cg:menu")]]))
+                kb(ad_rows + [[("◀️ Назад", "cg:menu")]]))
+
+
+@router.callback_query(F.data.regexp(r"^ad:ask:\d+$"))
+async def ad_ask(cb: CallbackQuery, user: User) -> None:
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        cost, days = await settings.get_int(s, "ad_leads"), await settings.get_int(s, "ad_days")
+    if g is None or g.submitted_by != user.tg_id:
+        return await cb.answer("Группа не найдена", show_alert=True)
+    until = f"\nСейчас реклама идёт до {g.ad_until:%d.%m.%Y}." if ads.active(g) else ""
+    rows = [[("✅ Заказать", f"ad:go:{g.id}")]] if cost > 0 else []
+    await reply(cb, (f"📢 <b>Реклама группы «{esc(g.title[:40])}»</b>\n\n"
+                     f"Ваша группа будет в начале каталога с пометкой 📢 и в канале статистики на {days} дн. "
+                     f"Стоит {cost} заявок из этой группы (доступно: {ads.available(g)}). Дни 💎 за заявки не тратятся.{until}\n"
+                     "Рекламу подтверждает администратор." if cost > 0 else "Реклама сейчас не подключена."),
+                kb(rows + [[("◀️ Назад", "cg:my")]]))
+
+
+@router.callback_query(F.data.regexp(r"^ad:go:\d+$"))
+async def ad_go(cb: CallbackQuery, user: User) -> None:
+    from app.bot.handlers.submissions import ad_card
+
+    async with Session() as s:
+        try:
+            g = await ads.request(s, user.tg_id, int(cb.data.split(":")[2]))
+        except ads.AdError as e:
+            return await cb.answer(str(e), show_alert=True)
+    text, markup = await ad_card(g, user)
+    await notify._send("📢 Заказ рекламы:\n\n" + text, markup)
+    await cb.answer("Заявка отправлена администратору", show_alert=True)
 
 
 @router.callback_query(F.data.regexp(r"^cg:top:(mine|all)$"))

@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import FeedChat, Group, User, now
-from app.services import geo, plans, referrals, settings
+from app.services import ads, geo, plans, referrals, settings
 from app.services.distribute import day_start, root_category
 
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
@@ -118,6 +118,7 @@ async def pending_count(s: AsyncSession) -> int:
 async def browse(s: AsyncSession, user: User, roots: set[int], everything: bool, limit: int = 12) -> list[Group]:
     """Каталог: группы моих ниш и моего города (everything — без фильтров)."""
     groups = (await s.scalars(select(Group).where(Group.catalog).order_by(Group.leads_count.desc(), Group.members.desc()))).all()
+    groups = sorted(groups, key=lambda g: not ads.active(g))  # «Рекомендуем» — первыми, остальной порядок сохраняется
     if everything:
         return list(groups[:limit])
     out = []

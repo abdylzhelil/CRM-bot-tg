@@ -64,6 +64,9 @@ class Group(Base):
     catalog: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # показана в каталоге
     last_post_id: Mapped[int] = mapped_column(Integer, default=0)  # канал: последний прочитанный пост
     bonus_rewarded: Mapped[int] = mapped_column(Integer, default=0)  # заявок уже обменяно на бонус автору
+    ad_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # реклама «Рекомендуем» до
+    ad_spent: Mapped[int] = mapped_column(Integer, default=0)  # заявок потрачено на рекламу
+    ad_pending: Mapped[bool] = mapped_column(Boolean, default=False)  # заказ рекламы ждёт подтверждения
 
 
 class FeedChat(Base):
