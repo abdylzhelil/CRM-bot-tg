@@ -128,3 +128,25 @@ async def test_clean_empty_accounts(maker):
     await users_admin.clean_do(c)
     async with maker() as s:
         assert await s.get(User, 91) is None and await s.get(User, 92) and await s.get(User, 90)
+
+
+async def test_auto_cleanup_after_seven_days(maker):
+    from app.models import UserCategory
+    from app.services import cleanup
+
+    await make_user(maker, 95)  # настоящий
+    async with maker() as s:
+        s.add(User(tg_id=96, onboarded=False, created_at=now() - timedelta(days=8)))  # ушёл давно — удалить
+        s.add(User(tg_id=97, onboarded=False, created_at=now() - timedelta(days=5)))  # ещё рано
+        s.add(User(tg_id=98, onboarded=False, created_at=now() - timedelta(days=30), is_admin=True))  # админа не трогаем
+        s.add(UserCategory(user_id=96, category_id=1))  # выбрал нишу, но не дошёл до конца — хвосты тоже уходят
+        await s.commit()
+    async with maker() as s:
+        assert await cleanup.auto_cleanup(s) == 1
+    async with maker() as s:
+        assert await s.get(User, 96) is None and await s.get(User, 97) and await s.get(User, 98) and await s.get(User, 95)
+        assert await s.get(UserCategory, (96, 1)) is None
+        await settings.put(s, "cleanup_days", "0")  # 0 — автоудаление выключено
+        s.add(User(tg_id=99, onboarded=False, created_at=now() - timedelta(days=60)))
+        await s.commit()
+        assert await cleanup.auto_cleanup(s) == 0 and await s.get(User, 99)

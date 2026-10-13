@@ -96,16 +96,9 @@ async def set_plan(cb: CallbackQuery) -> None:
 
 # ---------- чистка «пустых» аккаунтов ----------
 async def empty_users(s, days: int = 3) -> list[int]:
-    """Не завершили регистрацию давно, заявок и клиентов нет, не администраторы."""
-    cutoff = now() - timedelta(days=days)
-    users = (await s.scalars(select(User).where(~User.onboarded, ~User.is_admin, User.created_at < cutoff))).all()
-    out = []
-    for x in users:
-        has = await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.user_id == x.tg_id)) or 0
-        has += await s.scalar(select(func.count()).select_from(Client).where(Client.user_id == x.tg_id)) or 0
-        if not has:
-            out.append(x.tg_id)
-    return out
+    from app.services import cleanup
+
+    return await cleanup.empty_users(s, days)
 
 
 @router.callback_query(F.data == "us:clean")
@@ -115,16 +108,17 @@ async def clean_ask(cb: CallbackQuery) -> None:
     if not ids:
         return await cb.answer("Пустых аккаунтов нет (старше 3 дней)", show_alert=True)
     await reply(cb, f"🧹 Найдено пустых аккаунтов: {len(ids)}\nЭто люди, которые зашли, но за 3 дня не завершили регистрацию "
-                "и ничего не получали. Удалить их из базы? Если кто-то вернётся, просто пройдёт регистрацию заново.",
+                "и ничего не получали. Удалить их из базы? Если кто-то вернётся, просто пройдёт регистрацию заново.\n"
+                "(Автоматически бот удаляет таких через 7 дней — срок меняется в ⚙️ Настройки → 🛡 Антиспам.)",
                 kb([[(f"✅ Удалить {len(ids)}", "us:clean:do"), ("❌ Не надо", "us:menu")]]))
 
 
 @router.callback_query(F.data == "us:clean:do")
 async def clean_do(cb: CallbackQuery) -> None:
+    from app.services import cleanup
+
     async with Session() as s:
         ids = await empty_users(s)
-        if ids:
-            await s.execute(User.__table__.delete().where(User.tg_id.in_(ids)))
-            await s.commit()
+        await cleanup.remove(s, ids)
     await cb.answer(f"Удалено: {len(ids)}", show_alert=True)
     await users_menu(cb)

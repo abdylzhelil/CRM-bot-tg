@@ -96,6 +96,23 @@ async def expiry_once() -> int:
     return sent
 
 
+async def cleanup_loop() -> None:
+    """Раз в 6 часов удаляет аккаунты, не завершившие регистрацию за cleanup_days (по умолчанию 7) дней."""
+    from app.services import cleanup
+
+    while True:
+        try:
+            async with Session() as s:
+                removed = await cleanup.auto_cleanup(s)
+            if removed:
+                log.info("удалено пустых аккаунтов: %s", removed)
+                await notify._send(f"🧹 Автоочистка: удалено пустых аккаунтов (не завершили регистрацию): {removed}.")
+        except Exception:
+            log.exception("cleanup_loop")
+            await notify.alert_once("cleanup_loop", "В фоновой задаче cleanup_loop ошибка (см. логи сервера).")
+        await asyncio.sleep(6 * 3600)
+
+
 async def expiry_loop() -> None:
     while True:
         try:
@@ -121,7 +138,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(c)
         for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
-          backup.backup_loop(), expiry_loop(), payments_h.link_loop())
+          backup.backup_loop(), expiry_loop(), payments_h.link_loop(), cleanup_loop())
     ]
     await setup_profile(bot)
     await notify._send("🟢 Бот запущен (или перезапущен).")
