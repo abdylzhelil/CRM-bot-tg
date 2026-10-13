@@ -201,3 +201,43 @@ async def test_privacy_command(maker):
     m.answer = AsyncMock()
     await privacy(m)
     assert "telegra.ph" in m.answer.call_args.args[0]
+
+
+async def test_receipts_reminder_once_a_month(maker, monkeypatch):
+    from datetime import datetime
+
+    from app.models import Payment
+    from app.services import quiet, receipts
+
+    async with maker() as s:
+        s.add(Payment(user_id=1, days=30, amount=49000, currency="RUB", charge_id="a", created_at=datetime(2026, 9, 12)))
+        s.add(Payment(user_id=1, days=30, amount=99000, currency="RUB", charge_id="b", created_at=datetime(2026, 9, 20)))
+        s.add(Payment(user_id=1, days=30, amount=49000, currency="RUB", charge_id="c", created_at=datetime(2026, 9, 25), refunded=True))
+        s.add(Payment(user_id=1, days=30, amount=49000, currency="RUB", charge_id="d", created_at=datetime(2026, 10, 2)))  # этот месяц
+        await s.commit()
+    monkeypatch.setattr(quiet, "local_now", lambda: datetime(2026, 10, 3, 12))
+    async with maker() as s:
+        assert await receipts.due_message(s) is None  # до 5-го числа рано
+    monkeypatch.setattr(quiet, "local_now", lambda: datetime(2026, 10, 5, 12))
+    async with maker() as s:
+        text = await receipts.due_message(s)
+    assert "оплат 2 на 1480 ₽" in text and "09.2026" in text  # возвращённый платёж не считается
+    async with maker() as s:
+        assert await receipts.due_message(s) is None  # повторно в этом месяце не напоминаем
+
+
+async def test_weekly_backup_is_sent_to_admin(maker, tgbot, tmp_path, monkeypatch):
+    from app.services import backup
+
+    folder = tmp_path / "backups"
+    folder.mkdir()
+    (folder / "crm-2026-10-13.db").write_bytes(b"x")
+    docs = []
+
+    async def send_document(uid, file, caption=""):
+        docs.append((uid, caption))
+
+    tgbot.send_document = send_document
+    assert await backup.send_latest(tgbot, [ADMIN_ID], folder) == 1
+    assert docs[0][0] == ADMIN_ID and "копия базы" in docs[0][1]
+    assert await backup.send_latest(tgbot, [ADMIN_ID], tmp_path / "нет") == 0  # копий нет — ничего не шлём

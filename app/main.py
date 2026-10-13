@@ -131,6 +131,21 @@ async def cleanup_loop() -> None:
         await asyncio.sleep(6 * 3600)
 
 
+async def receipts_loop() -> None:
+    """Раз в час проверяет: не пора ли напомнить о чеках за прошлый месяц (5-го числа после 10:00)."""
+    from app.services import receipts
+
+    while True:
+        try:
+            async with Session() as s:
+                text = await receipts.due_message(s)
+            if text:
+                await notify._send(text)
+        except Exception:
+            log.exception("receipts_loop")
+        await asyncio.sleep(3600)
+
+
 async def expiry_loop() -> None:
     while True:
         try:
@@ -156,7 +171,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(c)
         for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
-          backup.backup_loop(), expiry_loop(), payments_h.link_loop(), cleanup_loop())
+          backup.backup_loop(), expiry_loop(), payments_h.link_loop(), cleanup_loop(), receipts_loop())
     ]
     await setup_profile(bot)
     await notify._send("🟢 Бот запущен (или перезапущен).")
