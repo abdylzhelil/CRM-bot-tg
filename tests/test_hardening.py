@@ -256,3 +256,54 @@ def test_main_background_loops_defined():
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.endswith("_loop"):
             assert hasattr(m, node.func.id), node.func.id
+
+
+async def test_sqlite_uses_wal_and_busy_timeout(tmp_path):
+    """Файловая база SQLite открывается в режиме WAL с ожиданием блокировки (защита от «database is locked»)."""
+    from sqlalchemy import text
+
+    from app.db import make_engine
+    from app.models import Base
+
+    engine = make_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with engine.connect() as conn:
+            assert (await conn.execute(text("PRAGMA journal_mode"))).scalar() == "wal"
+            assert (await conn.execute(text("PRAGMA busy_timeout"))).scalar() == 15000
+            assert (await conn.execute(text("PRAGMA synchronous"))).scalar() == 1  # NORMAL
+    finally:
+        await engine.dispose()
+
+
+async def test_concurrent_writers_do_not_lock(tmp_path):
+    """Много одновременных записей и чтений не падают с «database is locked»."""
+    import asyncio
+
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.db import make_engine
+    from app.models import Base, Setting
+
+    engine = make_engine(f"sqlite+aiosqlite:///{tmp_path}/c.db")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def write(i):
+            async with maker() as s:
+                s.add(Setting(key=f"k{i}", value=str(i)))
+                await s.commit()
+
+        async def read():
+            async with maker() as s:
+                await s.scalars(select(Setting))
+
+        await asyncio.gather(*[write(i) for i in range(40)], *[read() for _ in range(40)])
+        async with maker() as s:
+            assert len((await s.scalars(select(Setting))).all()) == 40
+    finally:
+        await engine.dispose()
