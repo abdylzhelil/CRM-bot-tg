@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import config
-from app.models import Payment, User, now
+from app.models import Payment, PendingLink, User, now
 from app.services import plans, referrals, settings
 
 PACKAGES = (30, 90, 365)
@@ -42,6 +42,9 @@ async def apply(s: AsyncSession, user_id: int, days: int, amount: int, currency:
 
 def refunds_enabled() -> bool:
     return bool(config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY)
+
+
+links_enabled = refunds_enabled  # те же ключи API
 
 
 async def _yookassa_refund(payment_id: str, amount_kop: int, currency: str, key: str) -> dict:
@@ -93,3 +96,66 @@ async def refund(s: AsyncSession, payment: Payment, money: bool, call=None) -> s
         note = "Деньги возвращены через ЮKassa."
     await take_back(s, payment)
     return note
+
+
+# ---------- оплата по ссылке (СБП и карта на странице ЮKassa) ----------
+API = "https://api.yookassa.ru/v3"
+
+
+async def _api(method: str, path: str, body: dict | None = None, key: str = "") -> dict:
+    import aiohttp
+
+    auth = aiohttp.BasicAuth(config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET_KEY)
+    headers = {"Idempotence-Key": key} if key else {}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as http:
+        async with http.request(method, API + path, json=body, auth=auth, headers=headers) as resp:
+            data = await resp.json()
+            data["_http"] = resp.status
+            return data
+
+
+async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str, api=None) -> str:
+    """Создать платёж ЮKassa и вернуть ссылку на оплату. Способ оплаты не задаём — выбор (СБП, карта…) на странице ЮKassa."""
+    import uuid
+
+    price = await price_of(s, days)
+    if not price:
+        raise RefundError("Этот пакет сейчас недоступен.")
+    body = {
+        "amount": {"value": f"{price:.2f}", "currency": config.PAYMENT_CURRENCY},
+        "capture": True,  # одностадийная оплата — иначе СБП не покажется
+        "confirmation": {"type": "redirect", "return_url": return_url},
+        "description": f"Полный тариф на {days} дн. (Telegram {user_id})",
+        "metadata": {"user_id": str(user_id), "days": str(days)},
+    }
+    try:
+        data = await (api or _api)("POST", "/payments", body, str(uuid.uuid4()))
+    except Exception:
+        raise RefundError("ЮKassa не ответила. Попробуйте позже.") from None
+    url = (data.get("confirmation") or {}).get("confirmation_url")
+    if not url or not data.get("id"):
+        raise RefundError(f"ЮKassa отказала: {data.get('description') or data.get('_http')}")
+    s.add(PendingLink(yk_id=data["id"], user_id=user_id, days=days, amount=price * 100))
+    await s.commit()
+    return url
+
+
+async def check_links(s: AsyncSession, api=None, max_age_h: int = 3) -> list[tuple[PendingLink, dict]]:
+    """Опросить ЮKassa по ожидающим платежам; вернуть оплаченные (ещё не обработанные)."""
+    rows = (await s.scalars(select(PendingLink).where(~PendingLink.done))).all()
+    paid = []
+    for row in rows:
+        if row.created_at < now() - timedelta(hours=max_age_h):
+            row.done = True
+            continue
+        try:
+            data = await (api or _api)("GET", f"/payments/{row.yk_id}")
+        except Exception:
+            continue
+        status = data.get("status")
+        if status == "succeeded" and data.get("paid", True):
+            paid.append((row, data))
+        elif status == "canceled":
+            row.done = True
+    await s.commit()
+    return paid

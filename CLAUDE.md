@@ -29,7 +29,7 @@
   группы в папках «🔍 Разведка», звук выключен; ротация.
 - Меню: сворачиваемая клавиатура, админские разделы в «🛠 Управление», команды в кнопке «Меню», фолбэк на меню.
 - Обновление базы без потери данных: `app/migrate.py` (добавляет новые колонки сам).
-- Тесты: `pytest` (96), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
+- Тесты: `pytest` (99), общая обвязка в `tests/conftest.py` (`maker`, `tgbot`, `make_user`).
 
 - Этап 2 сделан: 🌐 Каталог (`handlers/catalog.py`, `submissions.py`, `services/catalog.py`): ссылка → проверка через Bot API →
   ниша → город → одобрение админом (🔍 Группы → 📝 От пользователей) → каталог. Бонус +1 день 💎 за каждые N (`bonus_leads`)
@@ -62,6 +62,9 @@
 - Возврат: кнопка у админа под «💰 Оплата» (`handlers/payments.py` rf:*, `services/payments.refund`): деньги через ЮKassa API
   (`YOOKASSA_SHOP_ID`/`YOOKASSA_SECRET_KEY`, идемпотентно по `refund-<id>`) + снятие дней платежа. `payments.provider_id` — id платежа ЮKassa.
   Бонус пригласившему при возврате не отзывается. ВАЖНО: платежи, сделанные до этого обновления, без provider_id — возврат только вручную.
+
+- Оплата по ссылке (СБП): `payments.create_link/check_links`, `handlers/payments.process_links/link_loop`, таблица `pending_links`;
+  платёж создаётся с `capture=true` и БЕЗ `payment_method_data` (иначе СБП не покажется). Окно Telegram sendInvoice СБП не поддерживает (ответ поддержки ЮKassa).
 
 ## Дальше по плану
 1. ИИ на Claude (классификация, температура, черновики ответов) — в конце, нужен ключ Claude API.

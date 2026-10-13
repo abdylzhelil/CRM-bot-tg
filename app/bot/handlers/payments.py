@@ -10,7 +10,7 @@ from app import config
 from app.bot import notify
 from app.bot.common import esc, kb
 from app.db import Session
-from app.models import Payment, User
+from app.models import Payment, PendingLink, User
 from app.services import payments
 
 log = logging.getLogger(__name__)
@@ -55,12 +55,89 @@ async def paid(m: Message, user: User) -> None:
         pay_id = await s.scalar(select(Payment.id).where(Payment.charge_id == p.telegram_payment_charge_id))
     if not new:
         return
+    await _announce(row, user.name or str(user.tg_id), days, p.total_amount, p.currency, pay_id, share, m.answer)
+
+
+async def _announce(row, name: str, days: int, amount: int, currency: str, pay_id, share, reply) -> None:
+    """Сообщения после успешной оплаты: человеку, администратору (с кнопкой возврата), пригласившему."""
     until = f" до {row.plan_until:%d.%m.%Y}" if row.plan_until else " бессрочно"
-    await m.answer(f"✅ Оплата получена. 💎 Полный тариф{until}. Спасибо!")
-    await notify._send(f"💰 Оплата: {esc(user.name or str(user.tg_id))} — {p.total_amount / 100:.0f} {p.currency}, +{days} дн.",
+    await reply(f"✅ Оплата получена. 💎 Полный тариф{until}. Спасибо!")
+    await notify._send(f"💰 Оплата: {esc(name)} — {amount / 100:.0f} {currency}, +{days} дн.",
                        kb([[("↩️ Вернуть и снять тариф", f"rf:ask:{pay_id}")]]))
     if share:
         await notify.bonus(share[0], share[1], "ref")
+
+
+# ---------- оплата по ссылке: СБП и карта в браузере ----------
+@router.callback_query(F.data == "lnk:menu")
+async def link_menu(cb: CallbackQuery, user: User) -> None:
+    if not payments.links_enabled():
+        return await cb.answer("Оплата по ссылке пока не подключена", show_alert=True)
+    async with Session() as s:
+        offers = await payments.packages(s)
+    rows = [[(f"📱 {d} дн. — {price} ₽", f"lnk:{d}")] for d, price in offers] + [[("◀️ Тариф", "pf:plan")]]
+    from app.bot.common import reply
+
+    await reply(cb, "📱 <b>Оплата по ссылке</b>\nОткроется страница ЮKassa: можно заплатить через <b>СБП</b> "
+                "(по номеру телефона, без комиссии для вас как покупателя) или картой. "
+                "Тариф включится сам в течение минуты после оплаты.", kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^lnk:\d+$"))
+async def link_pay(cb: CallbackQuery, user: User) -> None:
+    if not payments.links_enabled():
+        return await cb.answer("Оплата по ссылке пока не подключена", show_alert=True)
+    days = int(cb.data.split(":")[1])
+    me = await cb.bot.me()
+    async with Session() as s:
+        try:
+            url = await payments.create_link(s, user.tg_id, days, f"https://t.me/{me.username}")
+        except payments.RefundError as e:
+            return await cb.answer(str(e), show_alert=True)
+    await cb.message.answer(
+        f"🔗 Счёт на {days} дн. создан. Нажмите кнопку, оплатите, и вернитесь в бот — тариф включится сам.",
+        reply_markup=kb([[("Оплатить (СБП / карта)", f"url:{url}")]]))
+    await cb.answer()
+
+
+async def process_links(api=None) -> int:
+    """Проверить ожидающие платежи по ссылкам и включить тариф тем, кто заплатил. Возвращает число обработанных."""
+    done = 0
+    async with Session() as s:
+        found = await payments.check_links(s, api)
+    for row, data in found:
+        async with Session() as s:
+            link = await s.get(PendingLink, row.id)
+            if link is None or link.done:
+                continue
+            link.done = True
+            amount = int(round(float((data.get("amount") or {}).get("value", link.amount / 100)) * 100))
+            new, share = await payments.apply(s, link.user_id, link.days, amount, (data.get("amount") or {}).get("currency", "RUB"),
+                                              f"yk:{link.yk_id}", link.yk_id)
+            u = await s.get(User, link.user_id)
+            pay_id = await s.scalar(select(Payment.id).where(Payment.charge_id == f"yk:{link.yk_id}"))
+            await s.commit()
+        if not new or u is None:
+            continue
+
+        async def reply(text, uid=u.tg_id):
+            await notify._bot.send_message(uid, text)
+
+        await _announce(u, u.name or str(u.tg_id), link.days, amount, "RUB", pay_id, share, reply)
+        done += 1
+    return done
+
+
+async def link_loop() -> None:
+    import asyncio
+
+    while True:
+        try:
+            if payments.links_enabled():
+                await process_links()
+        except Exception:
+            log.exception("link_loop")
+        await asyncio.sleep(15)
 
 
 async def _contact(s) -> str:

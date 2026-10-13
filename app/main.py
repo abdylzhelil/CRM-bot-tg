@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app import config
 from app.bot import notify
+from app.bot.handlers import payments as payments_h
 from app.bot.handlers.stats import build_report
 from app.bot.setup import build, setup_profile
 from app.db import Session, engine, init_db
@@ -117,7 +118,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(c)
         for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
-          backup.backup_loop(), expiry_loop())
+          backup.backup_loop(), expiry_loop(), payments_h.link_loop())
     ]
     await setup_profile(bot)
     feed = await feed_server.start()

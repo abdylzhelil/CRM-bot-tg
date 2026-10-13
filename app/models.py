@@ -282,6 +282,19 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class PendingLink(Base):
+    """Платёж по ссылке ЮKassa (СБП/карта в браузере): ждём, пока клиент заплатит."""
+
+    __tablename__ = "pending_links"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    yk_id: Mapped[str] = mapped_column(String(64), unique=True)  # id платежа в ЮKassa
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    days: Mapped[int] = mapped_column(Integer)
+    amount: Mapped[int] = mapped_column(Integer)  # в копейках
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
 class SpamVote(Base):
     """Голоса «это спам» от пользователей; несколько голосов — автор в общий чёрный список."""
 

@@ -291,6 +291,8 @@ async def pf_plan(cb: CallbackQuery, user: User) -> None:
     if offers and not payments.enabled():
         how += f"\n⏳ Онлайн-оплату подключаем. Пока можно оплатить, написав {contact}."
     rows = [[(f"💳 {d} дн. — {price} ₽", f"pay:{d}")] for d, price in offers]
+    if offers and payments.links_enabled():
+        rows.append([("📱 Оплатить через СБП / по ссылке", "lnk:menu")])
     await reply(cb, (
         f"💎 <b>Тариф</b>\nСейчас: {line}\n\n"
         f"{PLANS['full']}: заявки приходят сразу (а заявка живёт минуты!), без дневного лимита, "

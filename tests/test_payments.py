@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from app import config
 from app.bot.handlers import payments as ph
-from app.models import Payment, User, now
+from app.models import Payment, PendingLink, User, now
 from app.services import intake, payments, public_stats, settings
 from app.services.antispam import AuthorInfo
 from app.services.pipeline import Incoming
@@ -195,3 +195,81 @@ async def test_refund_failures_and_access(maker, tgbot, monkeypatch):
     await ph.refund_do(c, SimpleNamespace(tg_id=62, is_admin=False))
     async with maker() as s:
         assert not (await s.get(Payment, pay.id)).refunded
+
+
+# ---------- оплата по ссылке (СБП) ----------
+class FakeYK:
+    """Подмена API ЮKassa: хранит платежи и отвечает на создание/проверку."""
+
+    def __init__(self):
+        self.payments, self.calls = {}, []
+
+    async def __call__(self, method, path, body=None, key=""):
+        self.calls.append((method, path, body))
+        if method == "POST":
+            pid = f"yk-{len(self.payments) + 1}"
+            self.payments[pid] = {"id": pid, "status": "pending", "paid": False, "amount": body["amount"]}
+            return {"id": pid, "confirmation": {"confirmation_url": f"https://yookassa.ru/pay/{pid}"}, "_http": 200}
+        return dict(self.payments[path.rsplit("/", 1)[1]], _http=200)
+
+
+async def test_link_payment_flow(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1492675")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    await set_price(maker, 30, 490)
+    await make_user(maker, 70)
+    yk = FakeYK()
+    async with maker() as s:
+        url = await payments.create_link(s, 70, 30, "https://t.me/klientradarbot", api=yk)
+    assert url == "https://yookassa.ru/pay/yk-1"
+    method, path, body = yk.calls[0]
+    # СБП появится только при одностадийной оплате и без принудительного способа оплаты
+    assert body["capture"] is True and "payment_method_data" not in body and body["amount"]["value"] == "490.00"
+    assert await ph.process_links(yk) == 0  # ещё не оплачено
+    async with maker() as s:
+        assert (await s.get(User, 70)).plan == "free"
+    yk.payments["yk-1"].update(status="succeeded", paid=True)
+    assert await ph.process_links(yk) == 1
+    assert await ph.process_links(yk) == 0  # повторно не засчитывается
+    async with maker() as s:
+        u = await s.get(User, 70)
+        pay = await s.scalar(select(Payment).where(Payment.user_id == 70))
+    assert u.plan == "full" and timedelta(days=29, hours=23) < u.plan_until - now() < timedelta(days=30, hours=1)
+    assert pay.provider_id == "yk-1" and pay.amount == 49000  # номер ЮKassa сохранён — возврат кнопкой возможен
+    assert any("Оплата получена" in t for t in tgbot.texts(70)) and any("Оплата:" in t for t in tgbot.texts(ADMIN_ID))
+
+
+async def test_link_canceled_and_expired(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    await set_price(maker, 30, 490)
+    await make_user(maker, 71)
+    yk = FakeYK()
+    async with maker() as s:
+        await payments.create_link(s, 71, 30, "https://t.me/x", api=yk)
+        await payments.create_link(s, 71, 30, "https://t.me/x", api=yk)
+    yk.payments["yk-1"]["status"] = "canceled"
+    assert await ph.process_links(yk) == 0
+    async with maker() as s:
+        rows = {r.yk_id: r.done for r in (await s.scalars(select(PendingLink))).all()}
+        assert rows == {"yk-1": True, "yk-2": False}
+        (await s.get(PendingLink, 2)).created_at = now() - timedelta(hours=5)
+        await s.commit()
+    assert await ph.process_links(yk) == 0
+    async with maker() as s:
+        assert all(r.done for r in (await s.scalars(select(PendingLink))).all())  # просроченные закрыты
+        assert (await s.get(User, 71)).plan == "free"
+
+
+async def test_link_requires_keys_and_price(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "")
+    c = cbq("lnk:30")
+    await ph.link_pay(c, SimpleNamespace(tg_id=5))
+    assert "не подключена" in c.answer.call_args.args[0]
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    c = cbq("lnk:30")
+    c.bot.me = AsyncMock(return_value=SimpleNamespace(username="bot"))
+    await ph.link_pay(c, SimpleNamespace(tg_id=5))  # цена 0 — пакет недоступен
+    assert "недоступен" in c.answer.call_args.args[0]
