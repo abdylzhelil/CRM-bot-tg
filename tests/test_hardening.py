@@ -243,3 +243,16 @@ async def test_weekly_backup_is_sent_to_admin(maker, tgbot, tmp_path, monkeypatc
     assert await backup.send_latest(tgbot, [ADMIN_ID], folder) == 1
     assert docs[0][0] == ADMIN_ID and "копия базы" in docs[0][1]
     assert await backup.send_latest(tgbot, [ADMIN_ID], tmp_path / "нет") == 0  # копий нет — ничего не шлём
+
+
+def test_main_background_loops_defined():
+    """Все фоновые задачи, запускаемые в main(), существуют (иначе бот падает на старте с NameError)."""
+    import ast
+    import inspect
+
+    from app import main as m
+
+    src = inspect.getsource(m.main)
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.endswith("_loop"):
+            assert hasattr(m, node.func.id), node.func.id

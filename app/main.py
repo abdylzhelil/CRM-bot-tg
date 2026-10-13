@@ -12,7 +12,7 @@ from app.db import Session, engine, init_db
 from app.migrate import migrate_data, upgrade_schema
 from app.feed import server as feed_server
 from app.models import Client, Reminder, now
-from app.services import backup, heartbeat, public_stats, quiet, settings
+from app.services import backup, cleanup, heartbeat, public_stats, quiet, receipts, settings
 from app.scout.channels import channel_loop
 from app.scout.joiner import join_loop, rotation_loop, search_loop
 from app.scout.manager import ScoutManager
@@ -123,6 +123,42 @@ async def expiry_loop() -> None:
         except Exception:
             log.exception("expiry_loop")
             await notify.alert_once("expiry_loop", "В фоновой задаче expiry_loop ошибка (см. логи сервера).")
+        await asyncio.sleep(3600)
+
+
+async def _try_send(user_id: int, text: str, markup=None) -> bool:
+    try:
+        await notify._bot.send_message(user_id, text, reply_markup=markup, disable_web_page_preview=True)
+        return True
+    except Exception:
+        return False
+
+
+async def cleanup_loop() -> None:
+    """Пустые аккаунты (не закончили регистрацию): сначала предупреждение, потом удаление."""
+    while True:
+        try:
+            async with Session() as s:
+                await cleanup.warn_due(s, _try_send)
+            async with Session() as s:
+                await cleanup.auto_cleanup(s)
+        except Exception:
+            log.exception("cleanup_loop")
+            await notify.alert_once("cleanup_loop", "В фоновой задаче cleanup_loop ошибка (см. логи сервера).")
+        await asyncio.sleep(6 * 3600)
+
+
+async def receipts_loop() -> None:
+    """Раз в месяц напоминает владельцу про чеки в «Мой налог»."""
+    while True:
+        try:
+            async with Session() as s:
+                text = await receipts.due_message(s)
+            if text:
+                await notify._send(text)
+        except Exception:
+            log.exception("receipts_loop")
+            await notify.alert_once("receipts_loop", "В фоновой задаче receipts_loop ошибка (см. логи сервера).")
         await asyncio.sleep(3600)
 
 
