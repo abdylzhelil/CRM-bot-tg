@@ -276,6 +276,9 @@ class Payment(Base):
     amount: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(8), default="RUB")
     charge_id: Mapped[str] = mapped_column(String(128), unique=True)  # id платежа Telegram — защита от повторов
+    provider_id: Mapped[str] = mapped_column(String(128), default="")  # id платежа в ЮKassa — нужен для возврата
+    refunded: Mapped[bool] = mapped_column(Boolean, default=False)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 

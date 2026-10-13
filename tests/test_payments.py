@@ -23,7 +23,8 @@ def paid_msg(user_id, days, amount, charge="ch1"):
     m = MagicMock()
     m.answer = AsyncMock()
     m.successful_payment = SimpleNamespace(invoice_payload=f"plan:{days}", total_amount=amount, currency="RUB",
-                                           telegram_payment_charge_id=charge)
+                                           telegram_payment_charge_id=charge,
+                                           provider_payment_charge_id="yk-" + charge)
     return m, SimpleNamespace(tg_id=user_id, name=f"u{user_id}")
 
 
@@ -112,3 +113,85 @@ async def test_prices_visible_before_payments_connected(maker, tgbot, monkeypatc
     shown = cb.answer.call_args
     text, markup = shown.args[0], shown.kwargs["reply_markup"]
     assert "990" in str(markup) and "подключаем" in text
+
+
+# ---------- возврат ----------
+async def _paid_user(maker, uid=60, days=30, charge="chR"):
+    await make_user(maker, uid)
+    m, user = paid_msg(uid, days, 99000, charge)
+    await ph.paid(m, user)
+    async with maker() as s:
+        return await s.scalar(select(Payment).where(Payment.charge_id == charge))
+
+
+def cbq(data, admin=True):
+    c = MagicMock()
+    c.data = data
+    c.answer = AsyncMock()
+    c.message.answer, c.message.edit_text = AsyncMock(), AsyncMock()
+    c.bot.send_message = AsyncMock()
+    return c
+
+
+async def test_refund_money_and_tariff(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1492675")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "secret")
+    pay = await _paid_user(maker)
+    assert pay.provider_id == "yk-chR"
+    calls = []
+
+    async def fake_yookassa(payment_id, amount, currency, key):
+        calls.append((payment_id, amount, currency, key))
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(payments, "_yookassa_refund", fake_yookassa)
+    admin = SimpleNamespace(tg_id=ADMIN_ID, is_admin=True)
+    await ph.refund_ask(cbq(f"rf:ask:{pay.id}"), admin)
+    c = cbq(f"rf:money:{pay.id}")
+    await ph.refund_do(c, admin)
+    assert calls == [("yk-chR", 99000, "RUB", f"refund-{pay.id}")]
+    async with maker() as s:
+        u, p = await s.get(User, 60), await s.get(Payment, pay.id)
+    assert p.refunded and u.plan == "free" and u.plan_until is None  # дни платежа сняты
+    c.bot.send_message.assert_awaited()  # человеку сообщили
+    again = cbq(f"rf:money:{pay.id}")
+    await ph.refund_do(again, admin)  # повторно нельзя
+    assert "уже возвращён" in again.answer.call_args.args[0] and len(calls) == 1
+
+
+async def test_refund_only_tariff_keeps_other_days(maker, tgbot):
+    pay = await _paid_user(maker, uid=61, days=30, charge="chA")
+    m, user = paid_msg(61, 90, 129000, "chB")  # вторая оплата: 90 дней
+    async with maker() as s:
+        await settings.put(s, "price_90", "1290")
+    await ph.paid(m, user)
+    admin = SimpleNamespace(tg_id=ADMIN_ID, is_admin=True)
+    await ph.refund_do(cbq(f"rf:tariff:{pay.id}"), admin)  # снимаем только первые 30 дней
+    async with maker() as s:
+        u = await s.get(User, 61)
+    assert timedelta(days=89) < u.plan_until - now() < timedelta(days=91)
+
+
+async def test_refund_failures_and_access(maker, tgbot, monkeypatch):
+    pay = await _paid_user(maker, uid=62, charge="chF")
+    admin = SimpleNamespace(tg_id=ADMIN_ID, is_admin=True)
+    c = cbq(f"rf:money:{pay.id}")
+    await ph.refund_do(c, admin)  # ключей нет
+    assert "Ключи ЮKassa" in c.answer.call_args.args[0]
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+
+    async def refuse(*a):
+        return {"status": "canceled", "description": "Insufficient funds"}
+
+    monkeypatch.setattr(payments, "_yookassa_refund", refuse)
+    c = cbq(f"rf:money:{pay.id}")
+    await ph.refund_do(c, admin)
+    assert "отказала" in c.answer.call_args.args[0]
+    async with maker() as s:
+        assert not (await s.get(Payment, pay.id)).refunded  # при отказе тариф не снят
+        assert (await s.get(User, 62)).plan == "full"
+    c = cbq(f"rf:tariff:{pay.id}")  # обычный пользователь не может
+    await ph.refund_do(c, SimpleNamespace(tg_id=62, is_admin=False))
+    async with maker() as s:
+        assert not (await s.get(Payment, pay.id)).refunded
