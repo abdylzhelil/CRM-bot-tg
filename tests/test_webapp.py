@@ -562,3 +562,20 @@ async def test_saving_niches_keeps_own_pending_niche(client, maker):
     async with maker() as s:
         ids = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == 62))).all())
     assert pending_id in ids and other in ids  # своя ниша не потерялась, выбранная добавилась
+
+
+async def test_healthz_checks_database_and_allows_head(client, monkeypatch):
+    r = await client.get("/healthz")
+    assert r.status == 200 and (await r.json()) == {"ok": True}
+    assert (await client.head("/healthz")).status == 200  # многие сервисы проверки шлют HEAD
+
+    class Broken:
+        async def __aenter__(self):
+            raise RuntimeError("база недоступна")
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(web_server, "Session", lambda: Broken())
+    r = await client.get("/healthz")
+    assert r.status == 503 and (await r.json())["ok"] is False

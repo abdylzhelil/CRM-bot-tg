@@ -144,6 +144,13 @@ async def me(request: web.Request) -> web.Response:
 
 
 async def health(request: web.Request) -> web.Response:
+    """Для внешнего «сторожа»: бот жив и база отвечает. Без авторизации, данных пользователей не отдаёт."""
+    try:
+        async with Session() as s:
+            await s.execute(select(1))
+    except Exception:
+        log.exception("healthz: база не отвечает")
+        return web.json_response({"ok": False, "error": "db"}, status=503)
     return web.json_response({"ok": True})
 
 
