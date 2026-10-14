@@ -27,11 +27,13 @@ async def invoice(cb: CallbackQuery, user: User) -> None:
         price = await payments.price_of(s, days)
     if not price:
         return await cb.answer("Этот пакет сейчас недоступен", show_alert=True)
+    extra = {"photo_url": f"{config.WEBAPP_URL}/app/invoice.png", "photo_width": 640, "photo_height": 360} if config.WEBAPP_URL else {}
     await cb.bot.send_invoice(
         chat_id=cb.from_user.id, title=f"💎 Полный тариф на {days} дн.",
-        description="Заявки приходят сразу и без дневного лимита.",
+        description="📡 КлиентРадар: заявки от клиентов приходят сразу и без дневного лимита, своя CRM и кабинет в Telegram. "
+                    "Тариф включится сам сразу после оплаты.",
         payload=f"plan:{days}", provider_token=config.PAYMENT_PROVIDER_TOKEN, currency=config.PAYMENT_CURRENCY,
-        prices=[LabeledPrice(label=f"{days} дн.", amount=price * 100)],
+        prices=[LabeledPrice(label=f"Полный тариф, {days} дн.", amount=price * 100)], **extra,
     )
     await cb.answer()
 
