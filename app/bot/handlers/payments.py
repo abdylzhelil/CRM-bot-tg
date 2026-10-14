@@ -61,7 +61,9 @@ async def paid(m: Message, user: User) -> None:
 async def _announce(row, name: str, days: int, amount: int, currency: str, pay_id, share, reply) -> None:
     """Сообщения после успешной оплаты: человеку, администратору (с кнопкой возврата), пригласившему."""
     until = f" до {row.plan_until:%d.%m.%Y}" if row.plan_until else " бессрочно"
-    await reply(f"✅ Оплата получена. 💎 Полный тариф{until}. Спасибо!")
+    from app.bot import effects
+
+    await effects.send(reply, f"✅ Оплата получена. 💎 Полный тариф{until}. Спасибо!")
     await notify._send(f"💰 Оплата: {esc(name)} — {amount / 100:.0f} {currency}, +{days} дн.\n🧾 Не забудьте чек в «Мой налог».",
                        kb([[("↩️ Вернуть и снять тариф", f"rf:ask:{pay_id}")]]))
     if share:

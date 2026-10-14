@@ -59,3 +59,15 @@ input[type=text], textarea { width: 100%; border: 1px solid color-mix(in srgb, v
 [hidden] { display: none !important; }
 .card.me { outline: 2px solid var(--accent); }
 .grid .btn { margin-top: 0; }
+/* анимации: лёгкие, только CSS; у тех, кто отключил движение в системе, их нет */
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes pop { 0% { transform: scale(.96); } 60% { transform: scale(1.02); } 100% { transform: scale(1); } }
+main > * { animation: rise .28s ease-out both; }
+main > *:nth-child(2) { animation-delay: .03s; } main > *:nth-child(3) { animation-delay: .06s; }
+main > *:nth-child(4) { animation-delay: .09s; } main > *:nth-child(5) { animation-delay: .12s; }
+main > *:nth-child(n+6) { animation-delay: .15s; }
+.btn, .chip, .card.tap, .stat.tap { transition: transform .12s, opacity .12s; }
+.btn:active, .chip:active, .card.tap:active, .stat.tap:active { transform: scale(.97); }
+nav button { transition: color .15s; }
+nav button[aria-current="true"] div:first-child { animation: pop .3s ease-out; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

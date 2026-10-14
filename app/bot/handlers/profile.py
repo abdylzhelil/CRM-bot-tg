@@ -161,7 +161,9 @@ async def finish_onboarding(target, user: User) -> None:
     if referrer_id:
         from app.bot import notify
 
-        await msg.answer(f"🎁 Вы пришли по приглашению — дарим +{days} дн. 💎 Полного тарифа!")
+        from app.bot import effects
+
+        await effects.send(msg.answer, f"🎁 Вы пришли по приглашению — дарим +{days} дн. 💎 Полного тарифа!")
         try:
             await notify._bot.send_message(referrer_id, f"🤝 По вашей ссылке пришёл новый пользователь — вам +{days} дн. 💎!")
         except Exception:
