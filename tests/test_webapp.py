@@ -579,3 +579,20 @@ async def test_healthz_checks_database_and_allows_head(client, monkeypatch):
     monkeypatch.setattr(web_server, "Session", lambda: Broken())
     r = await client.get("/healthz")
     assert r.status == 503 and (await r.json())["ok"] is False
+
+
+async def test_cabinet_shows_card_and_unbinds_it(client, maker, monkeypatch):
+    from app import config as cfg
+    from app.models import User
+
+    await make_user(maker, 63, plan="full", renew_method="pm-1", renew_card="Mir •••• 4242", renew_days=30)
+    plans = await (await client.get("/api/plans", headers=tma(63))).json()
+    assert plans["renew"] == {"card": "Mir •••• 4242", "days": 30}
+    assert (await client.post("/api/renew/off")).status == 401
+    r = await client.post("/api/renew/off", headers=tma(63))
+    assert r.status == 200 and "отвязана" in (await r.json())["message"]
+    async with maker() as s:
+        u = await s.get(User, 63)
+        assert (u.renew_method, u.renew_card) == ("", "") and u.plan == "full"
+    assert (await (await client.get("/api/plans", headers=tma(63))).json())["renew"] is None
+    assert (await client.post("/api/renew/off", headers=tma(63))).status == 404  # повторно — нечего отвязывать

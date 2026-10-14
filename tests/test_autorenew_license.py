@@ -33,11 +33,11 @@ async def test_link_with_autorenew_saves_card_and_renews(maker, tgbot, monkeypat
     async with maker() as s:
         await payments.create_link(s, 70, 30, "https://t.me/x", api=yk, auto=True)
     assert yk.calls[0][2]["save_payment_method"] is True  # карта запоминается только по согласию
-    yk.payments["yk-1"].update(status="succeeded", paid=True, payment_method={"id": "pm-1", "saved": True})
+    yk.payments["yk-1"].update(status="succeeded", paid=True, payment_method={"id": "pm-1", "saved": True, "card": {"last4": "1234", "card_type": "MasterCard"}})
     assert await ph.process_links(yk) == 1
     async with maker() as s:
         u = await s.get(User, 70)
-        assert u.renew_method == "pm-1" and u.renew_days == 30
+        assert u.renew_method == "pm-1" and u.renew_days == 30 and u.renew_card == "Mastercard •••• 1234"  # номер целиком не храним
         u.plan_until = now() + timedelta(hours=5)  # тариф кончается меньше чем через сутки
         await s.commit()
     # продление: ЮKassa списывает с сохранённой карты
@@ -153,3 +153,12 @@ async def test_license_http_answer_and_admin_buttons(maker, tgbot, monkeypatch):
         assert (await s.get(Group, gid)).license_off
     req.query = {"chat_id": "-900"}
     assert b'"active": false' in (await license_status(req)).body  # отключённая вручную не считается действующей
+
+
+# ---------- привязанная карта: показ и отвязка (требование ЮKassa к интерфейсу) ----------
+def test_card_label_shows_type_and_last4_only():
+    assert payments.card_label({"card": {"last4": "4242", "card_type": "Mir"}}) == "Mir •••• 4242"
+    assert payments.card_label({"card": {"last4": "9999", "card_type": "MasterCard", "first6": "555555"}}) == "Mastercard •••• 9999"
+    assert payments.card_label({"card": {"last4": "1111"}}) == "Карта •••• 1111"
+    assert payments.card_label({"title": "Bank card *1234"}) == "Bank card *1234"
+    assert payments.card_label({}) == "Банковская карта"

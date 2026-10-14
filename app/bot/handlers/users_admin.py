@@ -162,3 +162,26 @@ async def forget_do(cb: CallbackQuery) -> None:
     await reply(cb, f"✅ Удалено: заявок {st['leads']}, доставок {st['deliveries']}; карточек CRM обезличено: {st['crm']}"
                 f"{'; запись в чёрном списке удалена' if st['blacklist'] else ''}.", kb([[("◀️ К пользователям", "us:menu")]]))
     await cb.answer("Готово")
+
+
+# ---------- демо привязанной карты — только чтобы снять скриншоты интерфейса для ЮKassa ----------
+@router.message(Command("demo_card"))
+async def demo_card(m: Message, command: CommandObject) -> None:
+    """/demo_card — показать у себя экран привязанной карты (без реальной карты и списаний); /demo_card off — убрать.
+
+    Автосписания у администраторов не выполняются никогда (renew_due пропускает админов), реальных денег это не трогает.
+    """
+    from app.services import payments
+
+    off = (command.args or "").strip().lower() in ("off", "выкл", "0")
+    async with Session() as s:
+        u = await s.get(User, m.from_user.id)
+        if off:
+            payments.disable_renew(u)
+            text = "Демо-карта убрана."
+        else:
+            u.renew_method, u.renew_card, u.renew_days = "demo", "Mir •••• 4242", 30
+            text = ("Демо включено (карты и списаний нет, это только экран). Откройте: 👤 Профиль → 💎 Тариф — там «Привязанная карта» "
+                    "и кнопка «🗑 Отвязать карту». Снимите полноэкранные скриншоты, потом отправьте /demo_card off")
+        await s.commit()
+    await m.answer(text)

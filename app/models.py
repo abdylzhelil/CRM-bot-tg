@@ -238,6 +238,7 @@ class User(Base):
     verified: Mapped[bool] = mapped_column(Boolean, default=True)  # прошёл проверку «я не бот» (у старых — да)
     warned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда предупредили об удалении
     renew_method: Mapped[str] = mapped_column(String(64), default="")  # сохранённый способ оплаты ЮKassa (автопродление)
+    renew_card: Mapped[str] = mapped_column(String(64), default="")  # как показываем карту человеку: «Mir •••• 1234» (номер не храним)
     renew_days: Mapped[int] = mapped_column(Integer, default=0)  # на сколько дней продлевать
     renew_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, для которого уже была попытка
     expiry_notice: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, о котором уже напомнили

@@ -329,3 +329,72 @@ async def test_aitest_command_confirmation_and_no_key_spends_nothing(app_bot, ma
     await dp.feed_update(bot, text_update(504, "/aitest"))
     await dp.feed_update(bot, cb_update(504, "ait:go:3"))
     assert len(claude.calls) == before
+
+
+# ---------- привязанная карта: показ и отвязка (требование ЮKassa к интерфейсу) ----------
+
+async def test_unbind_card_flow_in_bot(app_bot, maker):
+    from datetime import timedelta
+
+    from app.models import User as U, now
+    from tests.conftest import make_user
+
+    bot, dp, api = app_bot
+    await make_user(maker, 80, plan="full", plan_until=now() + timedelta(days=10), renew_method="pm-9", renew_card="Mir •••• 4242", renew_days=30)
+    await dp.feed_update(bot, cb_update(80, "pf:plan"))
+    shown = api.texts(80)[-1]
+    assert "Привязанная карта" in shown and "Mir •••• 4242" in shown and "Отвязать карту можно в любой момент" in shown
+    await dp.feed_update(bot, cb_update(80, "ren:ask"))
+    assert "Отвязать карту?" in api.texts(80)[-1]
+    async with maker() as s:
+        assert (await s.get(U, 80)).renew_method == "pm-9"  # пока не подтвердили — ничего не изменилось
+    await dp.feed_update(bot, cb_update(80, "ren:off"))
+    assert "Карта отвязана" in api.texts(80)[-1]
+    async with maker() as s:
+        u = await s.get(U, 80)
+        assert (u.renew_method, u.renew_card, u.renew_days, u.renew_for) == ("", "", 0, None)
+        assert u.plan == "full"  # оплаченный тариф остаётся
+    await dp.feed_update(bot, cb_update(80, "pf:plan"))
+    assert "Привязанная карта" not in api.texts(80)[-1]  # карты больше нет
+    await dp.feed_update(bot, cb_update(80, "ren:ask"))  # повторно — «Карта не привязана», без ошибки
+
+
+
+async def test_demo_card_for_screenshots_is_admin_only_and_never_charged(app_bot, maker, monkeypatch):
+    from datetime import timedelta
+
+    from app import config as cfg
+    from app.models import User as U, now
+    from app.services import payments, settings
+    from tests.conftest import make_user
+
+    bot, dp, api = app_bot
+    monkeypatch.setattr(cfg, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(cfg, "YOOKASSA_SECRET_KEY", "k")
+    async with maker() as s:
+        await settings.put(s, "autorenew", "1")
+        await settings.put(s, "price_30", "490")
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/demo_card"))
+    assert "Демо включено" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "pf:plan"))
+    assert "Mir •••• 4242" in api.texts(ADMIN_ID)[-1]
+    called = []
+
+    async def forbidden(*a, **k):
+        called.append(a)
+        return {}
+
+    async with maker() as s:
+        admin = await s.get(U, ADMIN_ID)
+        admin.plan_until = now() + timedelta(hours=2)  # срок «горит» — но админа не списываем
+        await s.commit()
+        assert await payments.renew_due(s, api=forbidden) == 0
+    assert not called  # ни одного запроса в ЮKassa
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/demo_card off"))
+    async with maker() as s:
+        assert (await s.get(U, ADMIN_ID)).renew_method == ""
+    # обычному пользователю команда недоступна
+    await make_user(maker, 81)
+    await dp.feed_update(bot, text_update(81, "/demo_card"))
+    async with maker() as s:
+        assert (await s.get(U, 81)).renew_method == ""

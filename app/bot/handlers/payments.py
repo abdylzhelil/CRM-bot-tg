@@ -125,7 +125,7 @@ async def process_links(api=None) -> int:
             u = await s.get(User, link.user_id)
             method = data.get("payment_method") or {}
             if link.auto and u is not None and method.get("saved") and method.get("id"):
-                u.renew_method, u.renew_days = method["id"], link.days
+                u.renew_method, u.renew_days, u.renew_card = method["id"], link.days, payments.card_label(method)
             pay_id = await s.scalar(select(Payment.id).where(Payment.charge_id == f"yk:{link.yk_id}"))
             await s.commit()
         if not new or u is None:
@@ -139,13 +139,32 @@ async def process_links(api=None) -> int:
     return done
 
 
+@router.callback_query(F.data == "ren:ask")
+async def renew_ask(cb: CallbackQuery, user: User) -> None:
+    """Подтверждение отвязки карты (чтобы не отвязать случайным нажатием)."""
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+    if not row or not row.renew_method:
+        return await cb.answer("Карта не привязана", show_alert=True)
+    from app.bot.common import reply
+
+    await reply(cb, (f"🗑 <b>Отвязать карту?</b>\n💳 {row.renew_card or 'Банковская карта'}\n\n"
+                     "После отвязки автопродление отключится, деньги с карты больше списываться не будут. "
+                     "Оплаченный тариф продолжит действовать до конца срока."),
+                kb([[("✅ Да, отвязать карту", "ren:off")], [("Отмена", "pf:plan")]]))
+
+
 @router.callback_query(F.data == "ren:off")
 async def renew_off(cb: CallbackQuery, user: User) -> None:
+    from app.bot.common import reply
+
     async with Session() as s:
         row = await s.get(User, user.tg_id)
         payments.disable_renew(row)
         await s.commit()
-    await cb.answer("Автопродление отключено, карта больше не списывается", show_alert=True)
+    await cb.answer("Карта отвязана")
+    await reply(cb, "✅ <b>Карта отвязана.</b>\nАвтопродление отключено, деньги с карты больше списываться не будут. "
+                "Оплаченный тариф действует до конца срока. Продлить вручную: 💎 Тариф.", kb([[("💎 Тариф", "pf:plan")]]))
 
 
 async def renew_once() -> int:

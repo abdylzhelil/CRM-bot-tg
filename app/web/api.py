@@ -344,7 +344,20 @@ async def plans_get(request: web.Request) -> web.Response:
         "packages": [{"days": d, "price": p} for d, p in offers],
         "can_pay": payments.links_enabled() and bool(offers) and not row.is_admin,
         "refund": refund_line(refund_days),
+        "renew": {"card": row.renew_card or "Банковская карта", "days": row.renew_days} if row.renew_method else None,
     })
+
+
+async def renew_off(request: web.Request) -> web.Response:
+    """Отвязать карту: автопродление отключается, списаний больше нет (так же, как в боте)."""
+    user: User = request[USER_KEY]
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+        if not row.renew_method:
+            return err("not_found", "Карта не привязана", 404)
+        payments.disable_renew(row)
+        await s.commit()
+    return web.json_response({"ok": True, "message": "Карта отвязана, автопродление отключено"})
 
 
 async def pay_create(request: web.Request) -> web.Response:

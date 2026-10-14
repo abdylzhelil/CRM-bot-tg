@@ -170,8 +170,18 @@ def autorenew_on(s_value: str) -> bool:
     return s_value == "1" and links_enabled()
 
 
+def card_label(method: dict) -> str:
+    """Как показать привязанную карту человеку: «Mir •••• 1234» (только тип и последние 4 цифры из ответа ЮKassa)."""
+    card = method.get("card") or {}
+    last4 = str(card.get("last4") or "")[-4:]
+    if last4:
+        kind = str(card.get("card_type") or "").replace("MasterCard", "Mastercard") or "Карта"
+        return f"{kind} •••• {last4}"[:64]
+    return str(method.get("title") or "Банковская карта")[:64]
+
+
 def disable_renew(user: User) -> None:
-    user.renew_method, user.renew_days, user.renew_for = "", 0, None
+    user.renew_method, user.renew_card, user.renew_days, user.renew_for = "", "", 0, None
 
 
 async def renew_due(s: AsyncSession, api=None, notify_user=None, notify_admin=None) -> int:

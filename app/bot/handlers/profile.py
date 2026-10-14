@@ -361,12 +361,15 @@ async def pf_plan(cb: CallbackQuery, user: User) -> None:
     if offers and not payments.enabled():
         how += f"\n⏳ Онлайн-оплату подключаем. Пока можно оплатить, написав {contact}."
     if user.renew_method:
-        how += f"\n\n🔁 <b>Автопродление включено</b> ({user.renew_days} дн.). Отключить можно кнопкой ниже."
+        card = getattr(user, "renew_card", "") or "Банковская карта"
+        how += (f"\n\n💳 <b>Привязанная карта:</b> {card}\n🔁 <b>Автопродление включено</b> ({user.renew_days} дн.): "
+                "перед окончанием тарифа спишем стоимость пакета (за 3 дня предупредим). "
+                "Отвязать карту можно в любой момент кнопкой ниже.")
     rows = [[(f"💳 {d} дн. — {price} ₽", f"pay:{d}")] for d, price in offers]
     if offers and payments.links_enabled():
         rows.append([("📱 Оплатить через СБП / по ссылке", "lnk:menu")])
     if user.renew_method:
-        rows.append([("⛔ Отключить автопродление", "ren:off")])
+        rows.append([("🗑 Отвязать карту", "ren:ask")])
     await reply(cb, (
         f"💎 <b>Тариф</b>\nСейчас: {line}\n\n"
         f"{PLANS['full']}: заявки приходят сразу (а заявка живёт минуты!), без дневного лимита, "

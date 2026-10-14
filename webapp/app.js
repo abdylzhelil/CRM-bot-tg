@@ -458,6 +458,17 @@
         el("p", { text: r.intro }),
         r.paid ? el("p", { class: "muted", text: r.until ? "Действует до " + new Date(r.until).toLocaleDateString("ru-RU") : "Бессрочно" }) : null
       ])];
+      if (r.renew) {
+        parts.push(el("h2", { text: "Привязанная карта" }), el("div", { class: "card" }, [
+          el("b", { text: "💳 " + r.renew.card }),
+          el("p", { class: "muted", text: "Автопродление: каждые " + r.renew.days + " дн. Перед окончанием тарифа спишем стоимость пакета (за 3 дня предупредим). Отвязать карту можно в любой момент." }),
+          el("button", { class: "btn small", text: "🗑 Отвязать карту", onclick: function () {
+            confirmAsk("Отвязать карту " + r.renew.card + "? Автопродление отключится, списаний больше не будет. Оплаченный тариф останется до конца срока.", function () {
+              api("POST", "/api/renew/off").then(function (x) { toast(x.message); renderPlans(); }).catch(function (e) { toast(e.message, true); });
+            });
+          } })
+        ]));
+      }
       if (r.packages.length && r.can_pay) {
         parts.push(el("h2", { text: "Продлить или купить" }));
         r.packages.forEach(function (p) {
