@@ -234,6 +234,7 @@ class User(Base):
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)  # заблокировал бота или забанен
     referred_by: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # кто пригласил
     ref_rewarded: Mapped[bool] = mapped_column(Boolean, default=False)  # награда за приглашение выдана
+    source: Mapped[str] = mapped_column(String(24), default="")  # откуда пришёл: метка из ссылки ?start=src_<метка> (сайт и т. п.)
     level: Mapped[int] = mapped_column(Integer, default=0)  # уровень автора групп (services/levels.py)
     verified: Mapped[bool] = mapped_column(Boolean, default=True)  # прошёл проверку «я не бот» (у старых — да)
     warned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда предупредили об удалении

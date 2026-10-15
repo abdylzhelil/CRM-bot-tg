@@ -65,6 +65,7 @@ async def answer(cb: CallbackQuery, user: User) -> None:
         referrer = referrals.parse_payload(param)
         if referrer:
             await referrals.attach(s, row, referrer)
+        await referrals.attach_source(s, row, param)
     user.verified = True
     await cb.answer("✅ Проверка пройдена")
     await cb.message.delete()

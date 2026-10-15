@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.bot.handlers.stats import funnel_text
 from app.bot.setup import delete_yes, deleteme
 from app.models import Client, Delivery, Group, Payment, User, UserCategory, now
-from app.services import erase, heartbeat, intake
+from app.services import erase, heartbeat, intake, referrals
 from app.services.antispam import AuthorInfo
 from app.services.pipeline import Incoming
 from tests.conftest import ADMIN_ID, make_user
@@ -91,3 +91,28 @@ async def test_funnel_counts(maker, tgbot):
         await s.commit()
     text = await funnel_text()
     assert "Зашли: 3" in text and "прошли проверку: 2" in text and "завершили регистрацию: 1" in text and "оплатили: 1" in text
+
+
+def test_source_tag_parsing():
+    assert referrals.parse_source("src_site") == "site"
+    assert referrals.parse_source("src_Site_2") == "site_2"
+    assert referrals.parse_source("src_") == "" and referrals.parse_source("ref_5") == "" and referrals.parse_source(None) == ""
+    assert referrals.parse_source("src_" + "a" * 25) == "" and referrals.parse_source("src_ёж") == "" and referrals.parse_source("src_a-b") == ""
+
+
+async def test_source_saved_once_and_shown_in_funnel(maker, tgbot):
+    async with maker() as s:
+        s.add(User(tg_id=81, verified=True, onboarded=False))
+        s.add(User(tg_id=82, verified=True, onboarded=False))
+        await s.commit()
+    for uid, payload in ((81, "src_site"), (81, "src_other"), (82, "src_site"), (82, None)):
+        async with maker() as s:
+            await referrals.attach_source(s, await s.get(User, uid), payload)
+    async with maker() as s:
+        assert (await s.get(User, 81)).source == "site"  # второй заход источник не меняет
+    await make_user(maker, 83, source="site")  # уже зарегистрированный: считается как «зарегистрировался»
+    text = await funnel_text()
+    assert "site 3/1" in text
+    async with maker() as s:  # зарегистрированному метку уже не ставим
+        await referrals.attach_source(s, await s.get(User, 83), "src_new")
+        assert (await s.get(User, 83)).source == "site"

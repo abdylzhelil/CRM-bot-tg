@@ -18,6 +18,25 @@ def parse_payload(payload: str | None) -> int | None:
     return None
 
 
+def parse_source(payload: str | None) -> str:
+    """Метка источника из ссылки t.me/бот?start=src_site → «site» (только латиница, цифры, «_», до 24 знаков)."""
+    if payload and payload.startswith("src_"):
+        tag = payload[4:]
+        if tag and len(tag) <= 24 and all(ch.isascii() and (ch.isalnum() or ch == "_") for ch in tag):
+            return tag.lower()
+    return ""
+
+
+async def attach_source(s: AsyncSession, user: User, payload: str | None) -> None:
+    """Запомнить источник один раз — при первом заходе, пока человек не зарегистрирован."""
+    tag = parse_source(payload)
+    if not tag or user.onboarded or user.source:
+        return
+    row = await s.get(User, user.tg_id)
+    row.source = user.source = tag
+    await s.commit()
+
+
 async def attach(s: AsyncSession, user: User, referrer_id: int) -> bool:
     """Запомнить, кто пригласил. Только для ещё не зарегистрированных и не самого себя."""
     if user.onboarded or user.referred_by or referrer_id == user.tg_id:

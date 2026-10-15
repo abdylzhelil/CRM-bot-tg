@@ -131,9 +131,11 @@ base = Router()
 async def start(m: Message, state: FSMContext, user: User, command: CommandObject) -> None:
     await state.clear()
     referrer = referrals.parse_payload(command.args)
-    if referrer and not user.onboarded:
+    if not user.onboarded:
         async with Session() as s:
-            await referrals.attach(s, user, referrer)
+            if referrer:
+                await referrals.attach(s, user, referrer)
+            await referrals.attach_source(s, user, command.args)
     if not user.onboarded:
         return await profile.show_niches(m, user)
     await m.answer("📡 Главное меню — выберите раздел:", reply_markup=menu_keyboard(user))

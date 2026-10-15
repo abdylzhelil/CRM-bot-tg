@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from aiogram import F, Router
 from aiogram.types import Message
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.bot.common import esc
 from app.bot.handlers.leads import category_name
@@ -101,12 +101,17 @@ async def funnel_text() -> str:
         done = await count(User.onboarded)
         referred = await count(User.onboarded, User.referred_by != 0)
         buyers = await s.scalar(select(func.count(func.distinct(Payment.user_id))).where(~Payment.refunded)) or 0
+        sources = (await s.execute(select(User.source, func.count(), func.sum(case((User.onboarded, 1), else_=0)))
+                                   .where(User.is_admin == False, User.source != "")  # noqa: E712
+                                   .group_by(User.source).order_by(func.count().desc()).limit(8))).all()
     if not entered:
         return ""
+    src = ("\nПо меткам ссылок (зашли / зарегистрировались): "
+           + ", ".join(f"{name} {n}/{int(done_n or 0)}" for name, n, done_n in sources)) if sources else ""
     return ("\n\n<b>Воронка</b>\n"
             f"Зашли: {entered} → прошли проверку: {verified} → выбрали ниши: {chose or 0} → "
             f"завершили регистрацию: {done} → оплатили: {buyers}\n"
-            f"Из завершивших по приглашению: {referred}")
+            f"Из завершивших по приглашению: {referred}" + src)
 
 
 @router.message(F.text == "📊 Статистика")
