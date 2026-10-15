@@ -27,6 +27,9 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
             Group.status == "joined", Group.account_id.is_(None), Group.kind == "group"))
         pending = await catalog.pending_count(s)
         paused = await settings.get(s, "scout_paused") == "1"
+    from app.bot.handlers import adposts as adposts_h
+
+    ad_orders, ad_groups = await adposts_h.counts()
     me = await target.bot.me()
     privacy = "" if me.can_read_all_group_messages else (
         "\n⚠️ Privacy mode включён — бот не видит сообщения в группах, где он не админ. "
@@ -48,6 +51,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"), ("🏆 Рейтинг вступивших", "gr:list:joined")],
         [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли {cnt.get('left', 0)}", "gr:list:left")],
         [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
+        [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
 

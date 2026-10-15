@@ -144,6 +144,31 @@ async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str,
     return url
 
 
+async def create_ad_link(s: AsyncSession, order, return_url: str, api=None) -> str:
+    """Ссылка на оплату заказа рекламы (цена берётся из заказа на сервере). Тариф не продлевается."""
+    import uuid
+
+    if order.price <= 0:
+        raise RefundError("Этот заказ бесплатный.")
+    body = {
+        "amount": {"value": f"{order.price:.2f}", "currency": config.PAYMENT_CURRENCY},
+        "capture": True,
+        "confirmation": {"type": "redirect", "return_url": return_url},
+        "description": f"Реклама в группах, заказ №{order.id} (Telegram {order.user_id})",
+        "metadata": {"user_id": str(order.user_id), "order_id": str(order.id)},
+    }
+    try:
+        data = await (api or _api)("POST", "/payments", body, str(uuid.uuid4()))
+    except Exception:
+        raise RefundError("ЮKassa не ответила. Попробуйте позже.") from None
+    url = (data.get("confirmation") or {}).get("confirmation_url")
+    if not url or not data.get("id"):
+        raise RefundError(f"ЮKassa отказала: {data.get('description') or data.get('_http')}")
+    s.add(PendingLink(yk_id=data["id"], user_id=order.user_id, days=0, amount=order.price * 100, order_id=order.id))
+    await s.commit()
+    return url
+
+
 async def check_links(s: AsyncSession, api=None, max_age_h: int = 3) -> list[tuple[PendingLink, dict]]:
     """Опросить ЮKassa по ожидающим платежам; вернуть оплаченные (ещё не обработанные)."""
     rows = (await s.scalars(select(PendingLink).where(~PendingLink.done))).all()

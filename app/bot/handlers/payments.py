@@ -125,6 +125,15 @@ async def process_links(api=None) -> int:
             if link is None or link.done:
                 continue
             link.done = True
+            if link.order_id:  # оплата рекламы, а не тарифа
+                from app.services import adposts
+
+                order = await adposts.mark_paid(s, link.order_id, link.yk_id)
+                await s.commit()
+                if order is not None:
+                    await _ad_paid(order.id, order.user_id, link.amount)
+                    done += 1
+                continue
             amount = int(round(float((data.get("amount") or {}).get("value", link.amount / 100)) * 100))
             new, share = await payments.apply(s, link.user_id, link.days, amount, (data.get("amount") or {}).get("currency", "RUB"),
                                               f"yk:{link.yk_id}", link.yk_id)
@@ -143,6 +152,15 @@ async def process_links(api=None) -> int:
         await _announce(u, u.name or str(u.tg_id), link.days, amount, "RUB", pay_id, share, reply)
         done += 1
     return done
+
+
+async def _ad_paid(order_id: int, user_id: int, amount: int) -> None:
+    try:
+        await notify._bot.send_message(user_id, f"✅ Оплата получена. Заказ рекламы №{order_id} поставлен в очередь: "
+                                       "когда посты выйдут, пришлю ссылки.")
+    except Exception:
+        pass
+    await notify._send(f"💰 Оплачена реклама, заказ №{order_id}: {amount / 100:.0f} ₽.\n🧾 Не забудьте чек в «Мой налог».")
 
 
 @router.callback_query(F.data == "ren:ask")

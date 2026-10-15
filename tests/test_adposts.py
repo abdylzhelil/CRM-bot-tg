@@ -1,0 +1,265 @@
+"""Реклама в группах: заказ → проверка админом → (оплата) → публикация разведчиком с лимитами."""
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from sqlalchemy import select
+from telethon.errors import ChatWriteForbiddenError, FloodWaitError, PeerFloodError
+
+from app import config
+from app.bot.handlers import adposts as ah
+from app.bot.handlers import payments as ph
+from app.models import AdOrder, AdPost, Group, ScoutAccount, User, now
+from app.scout import publisher
+from app.services import adposts, payments, settings
+from tests.conftest import ADMIN_ID, make_user
+
+TEXT = "Ремонт квартир под ключ в Махачкале, звоните: 8-900-000-00-00"
+
+
+async def setup_group(maker, allowed=True, on=True, price=0, gid=-100):
+    async with maker() as s:
+        s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        s.add(Group(tg_id=gid, username="barakholka", title="Барахолка", members=5000, status="joined", kind="group",
+                    account_id=1, ads_allowed=allowed, city="Махачкала"))
+        await settings.put(s, "adpost_enabled", "1" if on else "0")
+        await settings.put(s, "adpost_price", str(price))
+        await s.commit()
+
+
+def manager(send=None, acc=1):
+    client = AsyncMock()
+    client.get_entity = AsyncMock(return_value=object())
+    client.send_message = send or AsyncMock(return_value=SimpleNamespace(id=555))
+    return SimpleNamespace(clients={acc: client}), client
+
+
+async def make_order(maker, user_id=70, price_per=0):
+    async with maker() as s:
+        order = await adposts.new_draft(s, user_id, TEXT)
+        gid = (await s.scalar(select(Group))).id
+        await adposts.toggle_group(s, order, gid)
+        await adposts.submit(s, order)
+        return order.id
+
+
+async def test_free_order_published_and_user_gets_links(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        order = await s.get(AdOrder, oid)
+        assert order.status == "pending" and order.price == 0
+        assert await adposts.approve(s, order) == "running"
+    mgr, client = manager()
+    assert await publisher.publish_one(mgr) is True
+    sent_text = client.send_message.await_args.args[1]
+    assert sent_text.startswith(TEXT) and sent_text.endswith("Реклама")  # подпись-пометка под постом
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
+        order = await s.get(AdOrder, oid)
+    assert post.status == "sent" and post.link == "https://t.me/barakholka/555" and order.status == "done"
+    assert any("выполнен" in t and "barakholka/555" in t for t in tgbot.texts(70))
+
+
+async def test_paid_order_waits_for_payment(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    from tests.test_payments import FakeYK
+
+    await setup_group(maker, price=300)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        order = await s.get(AdOrder, oid)
+        assert order.price == 300  # цена зафиксирована на сервере
+        assert await adposts.approve(s, order) == "approved"
+    mgr, client = manager()
+    assert await publisher.publish_one(mgr) is False  # пока не оплачено — не публикуем
+    yk = FakeYK()
+    async with maker() as s:
+        url = await payments.create_ad_link(s, await s.get(AdOrder, oid), "https://t.me/b", api=yk)
+    assert url.startswith("https://yookassa.ru/pay/") and yk.calls[0][2]["amount"]["value"] == "300.00"
+    assert await ph.process_links(yk) == 0
+    yk.payments["yk-1"].update(status="succeeded", paid=True)
+    assert await ph.process_links(yk) == 1
+    assert await ph.process_links(yk) == 0  # повторно не засчитывается
+    async with maker() as s:
+        assert (await s.get(AdOrder, oid)).status == "running"
+        assert (await s.get(User, 70)).plan == "free"  # тариф оплата рекламы не продлевает
+    assert any("Оплата получена" in t for t in tgbot.texts(70)) and any("Оплачена реклама" in t for t in tgbot.texts(ADMIN_ID))
+    assert await publisher.publish_one(mgr) is True
+
+
+async def test_daily_limit_and_gap(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    async with maker() as s:
+        await settings.put(s, "adpost_daily_limit", "5")
+        await settings.put(s, "adpost_gap_min", "10")
+        s.add(Group(tg_id=-101, username="g2", title="Вторая", members=100, status="joined", kind="group", account_id=1, ads_allowed=True))
+        await s.commit()
+        order = await adposts.new_draft(s, 70, TEXT)
+        for g in (await s.scalars(select(Group))).all():
+            await adposts.toggle_group(s, order, g.id)
+        await adposts.submit(s, order)
+        await adposts.approve(s, order)
+    mgr, client = manager()
+    assert await publisher.publish_one(mgr) is True
+    assert await publisher.publish_one(mgr) is False  # пауза между постами аккаунта ещё не прошла
+    async with maker() as s:
+        last = await s.scalar(select(AdPost).where(AdPost.status == "sent"))
+        last.sent_at = now() - timedelta(minutes=11)
+        await s.commit()
+    assert await publisher.publish_one(mgr) is True
+    async with maker() as s:
+        await settings.put(s, "adpost_daily_limit", "2")
+        assert (await s.scalar(select(AdOrder))).status == "done"
+    # суточный лимит: 2 уже отправлено сегодня
+    async with maker() as s:
+        o2 = await adposts.new_draft(s, 70, TEXT + " ещё")
+        await adposts.toggle_group(s, o2, (await s.scalar(select(Group))).id)
+        await adposts.submit(s, o2)
+        await adposts.approve(s, o2)
+        for p in (await s.scalars(select(AdPost).where(AdPost.status == "sent"))).all():
+            p.sent_at = now() - timedelta(minutes=30)
+        await s.commit()
+    assert await publisher.publish_one(mgr) is False
+
+
+async def test_forbidden_group_marks_failed_and_can_retry(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    mgr, client = manager(send=AsyncMock(side_effect=ChatWriteForbiddenError(request=None)))
+    assert await publisher.publish_one(mgr) is True
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
+        order = await s.get(AdOrder, oid)
+        assert post.status == "failed" and "запрещено" in post.error and order.status == "done"
+        assert await adposts.retry_failed(s, order) == 1
+        assert order.status == "running" and (await s.scalar(select(AdPost))).status == "queued"
+    assert any("не вышло" in t for t in tgbot.texts(ADMIN_ID)) and any("выполнен" in t for t in tgbot.texts(70))
+
+
+async def test_floodwait_reschedules_and_peerflood_limits_account(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    mgr, _ = manager(send=AsyncMock(side_effect=FloodWaitError(request=None, capture=120)))
+    assert await publisher.publish_one(mgr) is True
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
+        assert post.status == "queued" and post.scheduled_at > now() + timedelta(seconds=100)
+        post.scheduled_at = now() - timedelta(seconds=1)
+        await s.commit()
+    mgr2, _ = manager(send=AsyncMock(side_effect=PeerFloodError(request=None)))
+    await publisher.publish_one(mgr2)
+    async with maker() as s:
+        assert (await s.get(ScoutAccount, 1)).status == "limited"
+        assert (await s.scalar(select(AdPost))).scheduled_at > now() + timedelta(hours=20)  # отложено на сутки
+    assert any("PeerFlood" in t for t in tgbot.texts(ADMIN_ID))
+
+
+async def test_disabled_service_and_closed_group(maker, tgbot):
+    await setup_group(maker, on=False)
+    await make_user(maker, 70)
+    async with maker() as s:
+        with pytest.raises(adposts.AdError):
+            await adposts.new_draft(s, 70, TEXT)  # сервис выключен
+        await settings.put(s, "adpost_enabled", "1")
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        g = await s.scalar(select(Group))
+        g.ads_allowed = False  # админ закрыл группу после заказа
+        await s.commit()
+    mgr, client = manager()
+    await publisher.publish_one(mgr)
+    client.send_message.assert_not_called()
+    async with maker() as s:
+        assert (await s.scalar(select(AdPost))).status == "failed"
+
+
+async def test_validation_and_limits(maker):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    async with maker() as s:
+        with pytest.raises(adposts.AdError):
+            await adposts.new_draft(s, 70, "коротко")
+        for i in range(3):
+            await adposts.new_draft(s, 70, TEXT + str(i))
+        with pytest.raises(adposts.AdError, match="3 незавершённых"):
+            await adposts.new_draft(s, 70, TEXT)
+        order = (await s.scalars(select(AdOrder))).first()
+        with pytest.raises(adposts.AdError, match="хотя бы одну"):
+            await adposts.submit(s, order)
+        order.group_ids = "999"
+        with pytest.raises(adposts.AdError, match="недоступны"):
+            await adposts.submit(s, order)  # чужая/закрытая группа не пройдёт
+
+
+async def test_cancel_and_reject(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        order = await s.get(AdOrder, oid)
+        await adposts.reject(s, order)
+        assert order.status == "rejected"
+        with pytest.raises(adposts.AdError):
+            await adposts.approve(s, order)
+    oid2 = await make_order(maker)
+    async with maker() as s:
+        o2 = await s.get(AdOrder, oid2)
+        await adposts.approve(s, o2)
+        assert await adposts.cancel(s, o2) == 1 and o2.status == "canceled"
+    mgr, client = manager()
+    assert await publisher.publish_one(mgr) is False and client.send_message.call_count == 0
+
+
+def cbq(data, uid=70):
+    c = MagicMock()
+    c.data = data
+    c.answer, c.message.edit_text, c.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    c.from_user.id = uid
+    return c
+
+
+async def test_screens_user_and_admin(maker, tgbot, monkeypatch):
+    sent = AsyncMock()
+    monkeypatch.setattr(ah, "reply", sent)
+    await setup_group(maker, price=100)
+    u = await make_user(maker, 70, city="Махачкала")
+    await ah.ap_menu(cbq("ap:menu"), u)
+    menu_markup = sent.await_args.args[2]
+    assert "ap:new" in str(menu_markup) and "ap:mine" in str(menu_markup)
+    async with maker() as s:
+        order = await adposts.new_draft(s, 70, TEXT)
+        gid = (await s.scalar(select(Group))).id
+    await ah.ap_toggle(cbq(f"ap:t:{order.id}:{gid}"), u)
+    assert "✅" in str(sent.await_args.args[2])  # группа отмечена
+    await ah.ap_review(cbq(f"ap:review:{order.id}"), u)
+    assert "Итого: 100 ₽" in sent.await_args.args[1]
+    await ah.ap_send(cbq(f"ap:send:{order.id}"), u)
+    assert any("Новый заказ рекламы" in t and f"№{order.id}" in t for t in tgbot.texts(ADMIN_ID))
+    # чужой заказ открыть нельзя
+    other = cbq(f"ap:o:{order.id}", uid=71)
+    stranger = await make_user(maker, 71)
+    await ah.ap_open(other, stranger)
+    assert other.answer.await_args.kwargs.get("show_alert") is True
+    # админ одобряет → заказчик получает просьбу оплатить
+    await ah.adm_act(cbq(f"apa:ok:{order.id}", uid=ADMIN_ID))
+    assert any("Оплатите 100" in t for t in tgbot.texts(70))
+    await ah.adm_list(cbq("apa:list", uid=ADMIN_ID))
+    assert f"apa:o:{order.id}" in str(sent.await_args.args[2])
+    await ah.groups_for_ads(cbq("apg:list", uid=ADMIN_ID))
+    assert "apg:tog" in str(sent.await_args.args[2])
+    await ah.groups_toggle(cbq(f"apg:tog:{gid}", uid=ADMIN_ID))
+    async with maker() as s:
+        assert (await s.get(Group, gid)).ads_allowed is False

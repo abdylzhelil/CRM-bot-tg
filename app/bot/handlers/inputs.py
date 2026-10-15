@@ -5,6 +5,7 @@ from aiogram.types import Message
 from sqlalchemy import select
 
 from app.bot.common import Ask, esc, kb, split_words
+from app.bot.handlers import adposts as adposts_h
 from app.bot.handlers import clients as clients_h
 from app.db import Session
 from app.models import BlacklistEntry, Category, Keyword, ScoutAccount, SearchQuery
@@ -265,6 +266,7 @@ HANDLERS = {
     "bc_text": bc_text,
     "niche_propose": niche_propose,
     "pass_to": pass_to,
+    "ap_text": adposts_h.ap_text,
     "grp_link": grp_link,
     "grp_city": grp_city,
     "us_find": us_find,

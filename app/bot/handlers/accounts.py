@@ -36,11 +36,13 @@ async def open_acc(cb: CallbackQuery) -> None:
     text = (
         f"<b>{esc(a.name)}</b> {ICON.get(a.status, '')} {a.status}\nТелефон: {esc(a.phone)}\n"
         f"Прокси: {esc(a.proxy) or '—'}\nВступлений сегодня: {a.joined_today}/{a.daily_join_limit}\n"
-        f"Лимит групп: {a.max_groups}\nВключён: {'да' if a.enabled else 'нет'}"
+        f"Лимит групп: {a.max_groups}\nВключён: {'да' if a.enabled else 'нет'}\n"
+        f"Публикует рекламу: {'да' if a.can_post else 'нет'}"
     )
     await reply(cb, text, kb([
         [("⏯ Вкл/выкл", f"acc:tog:{a.id}"), ("🔁 Перезапустить", f"acc:restart:{a.id}")],
         [("📈 Лимит в сутки", f"acc:limit:{a.id}"), ("🌐 Прокси", f"acc:proxy:{a.id}")],
+        [(("🔇 Не публиковать рекламу" if a.can_post else "📣 Разрешить публиковать рекламу"), f"acc:post:{a.id}")],
         [("📁 Разложить группы по папкам", f"acc:folders:{a.id}")],
         [("◀️ Назад", "acc:list")],
     ]))
@@ -59,6 +61,15 @@ async def toggle(cb: CallbackQuery) -> None:
             await manager.attach(a)
         else:
             await manager.detach(a.id)
+    await open_acc(cb)
+
+
+@router.callback_query(F.data.startswith("acc:post:"))
+async def toggle_post(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        a = await s.get(ScoutAccount, int(cb.data.split(":")[2]))
+        a.can_post = not a.can_post
+        await s.commit()
     await open_acc(cb)
 
 

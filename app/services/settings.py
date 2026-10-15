@@ -15,6 +15,11 @@ DEFAULTS: dict[str, str] = {
     "rotation_days": "30",
     "join_retry_days": "3",
     "join_retry_max": "4",
+    "adpost_enabled": "0",
+    "adpost_price": "0",
+    "adpost_daily_limit": "5",
+    "adpost_gap_min": "10",
+    "adpost_footer": "Реклама",
     "quiet_hours": "",
     "report_hour": "21",
     "max_recipients": "5",
@@ -65,6 +70,11 @@ LABELS: dict[str, str] = {
     "rotation_days": "Выходить из групп без заявок за N дней",
     "join_retry_days": "Повторять заявку на вступление через N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
+    "adpost_enabled": "Реклама в группах через разведчиков (1/0)",
+    "adpost_price": "Реклама в группах: цена за одну группу, ₽ (0 — бесплатно)",
+    "adpost_daily_limit": "Реклама в группах: постов в сутки с одного аккаунта",
+    "adpost_gap_min": "Реклама в группах: пауза между постами аккаунта, мин",
+    "adpost_footer": "Реклама в группах: подпись под постом (- без подписи)",
     "report_hour": "Час вечернего отчёта",
     "max_recipients": "Сколько пользователей получают одну заявку",
     "free_daily_limit": "Бесплатный тариф: заявок в день",
@@ -128,7 +138,8 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
-                        "rotation_days", "join_retry_days", "join_retry_max"]),
+                        "rotation_days", "join_retry_days", "join_retry_max",
+                        "adpost_enabled", "adpost_price", "adpost_daily_limit", "adpost_gap_min", "adpost_footer"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
@@ -150,6 +161,8 @@ SHORT: dict[str, str] = {
     "rotation_days": "Выход из тихих групп, дн",
     "join_retry_days": "Повтор заявки, дн",
     "join_retry_max": "Попыток вступить",
+    "adpost_enabled": "Реклама вкл (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
+    "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
@@ -171,6 +184,11 @@ HINTS: dict[str, str] = {
     "rotation_days": "Группу без заявок столько дней разведчик покидает и ищет новую.",
     "join_retry_days": "Если админ группы не одобрил заявку на вступление, разведчик отправит её снова через столько дней.",
     "join_retry_max": "Сколько всего раз разведчик пробует вступить в группу, где нужно одобрение админа. После этого группа пропускается.",
+    "adpost_enabled": "Включает заказ рекламы пользователями и публикацию постов разведчиками в разрешённых группах. 0 — ничего не публикуется.",
+    "adpost_price": "Сколько рублей стоит один пост в одной группе. 0 — реклама бесплатна (только с одобрением админа).",
+    "adpost_daily_limit": "Сколько рекламных постов в сутки публикует один аккаунт-разведчик. Меньше — безопаснее для аккаунта.",
+    "adpost_gap_min": "Минимальная пауза между рекламными постами одного аккаунта. Слишком частые посты — риск блокировки.",
+    "adpost_footer": "Текст под каждым рекламным постом (например, «Реклама. ИП …, erid …» по требованиям закона). «-» — без подписи.",
     "report_hour": "Во сколько вам приходит вечерний отчёт.",
     "max_recipients": "Больше людей на одну заявку — меньше шанс, что клиент ответит каждому.",
     "free_daily_limit": "Сколько заявок в день видит бесплатный пользователь.",
@@ -256,14 +274,15 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),          # 0 — заявки перестали бы доходить до людей
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
-    "join_retry_days": (1, 60), "join_retry_max": (1, 20),  # 0 — заявку не пробовали бы вовсе
+    "join_retry_days": (1, 60), "join_retry_max": (1, 20), "adpost_price": (0, 100_000), "adpost_daily_limit": (1, 50),
+    "adpost_gap_min": (1, 1440),  # 0 — заявку не пробовали бы вовсе
     "spam_suspicious": (0, 100), "spam_block": (0, 100),
     "ref_percent": (0, 100), "bonus_leads": (1, 1000), "free_delay_min": (0, 1440), "free_daily_limit": (0, 1000),
     "share_gap_min": (0, 60), "refund_days": (0, 60), "ad_days": (1, 365), "license_days": (1, 365),
@@ -288,6 +307,10 @@ def validate(key: str, text: str) -> str:
 
         if text not in MODELS:
             raise SettingError("Допустимо: " + ", ".join(MODELS))
+    elif key == "adpost_footer":
+        if len(text) > 200:
+            raise SettingError("Не длиннее 200 знаков")
+        return "" if text == "-" else text
     elif key in FLAGS:
         if text not in ("0", "1"):
             raise SettingError("Нужно 0 (выключено) или 1 (включено)")

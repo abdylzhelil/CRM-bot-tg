@@ -25,6 +25,9 @@ async def catalog_menu(target: Message | CallbackQuery, user: User) -> None:
     async with Session() as s:
         per = await settings.get_int(s, "bonus_leads")
         groups_n, leads_n = await levels.stats(s, user.tg_id)
+        from app.bot.handlers import adposts as adposts_h
+
+        ad_rows = await adposts_h.menu_rows(s)
     level = levels.level_of(groups_n, leads_n)
     await reply(target, (
         "🌐 <b>Каталог групп</b>\n\n"
@@ -38,7 +41,7 @@ async def catalog_menu(target: Message | CallbackQuery, user: User) -> None:
         [("📚 Каталог по моим нишам", "cg:browse:mine"), ("🌍 Весь каталог", "cg:browse:all")],
         [("➕ Добавить группу или канал", "cg:add")],
         [("📂 Мои группы и бонусы", "cg:my"), ("🏆 Рейтинг", "cg:top:mine")],
-    ]))
+    ] + ad_rows))
 
 
 @router.callback_query(F.data == "cg:menu")

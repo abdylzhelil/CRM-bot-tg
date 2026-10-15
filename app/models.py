@@ -36,6 +36,7 @@ class ScoutAccount(Base):
     max_groups: Mapped[int] = mapped_column(Integer, default=500)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(32), default="new")  # new/ok/limited/dead
+    can_post: Mapped[bool] = mapped_column(Boolean, default=True)  # аккаунту разрешено публиковать заказанную рекламу
 
 
 class Group(Base):
@@ -70,6 +71,7 @@ class Group(Base):
     license_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # лицензия бота модерации до
     license_off: Mapped[bool] = mapped_column(Boolean, default=False)  # владелец отключил лицензию вручную
     license_rewarded: Mapped[int] = mapped_column(Integer, default=0)  # заявок уже учтено в лицензии
+    ads_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # админ разрешил публиковать рекламу разведчиком
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
 
@@ -310,6 +312,7 @@ class PendingLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auto: Mapped[bool] = mapped_column(Boolean, default=False)  # человек согласился на автопродление
+    order_id: Mapped[int] = mapped_column(Integer, default=0)  # не 0 — это оплата заказа рекламы, а не тарифа
 
 
 class AiCall(Base):
@@ -331,3 +334,37 @@ class SpamVote(Base):
     author_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class AdOrder(Base):
+    """Заказ рекламы: пользователь шлёт текст и выбирает группы, разведчики публикуют.
+
+    draft -> pending (ждёт проверки админом) -> approved (ждёт оплаты; бесплатно — сразу running) -> running -> done
+    | rejected | canceled
+    """
+
+    __tablename__ = "ad_orders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    group_ids: Mapped[str] = mapped_column(Text, default="")  # выбранные группы (id через запятую), пока заказ черновик
+    price: Mapped[int] = mapped_column(Integer, default=0)  # итого, ₽ (0 — бесплатно)
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    yk_id: Mapped[str] = mapped_column(String(64), default="")  # платёж ЮKassa
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AdPost(Base):
+    """Одна публикация заказа в одной группе."""
+
+    __tablename__ = "ad_posts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("ad_orders.id"), index=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)  # queued / sent / failed / canceled
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    message_id: Mapped[int] = mapped_column(Integer, default=0)
+    link: Mapped[str] = mapped_column(String(255), default="")
+    error: Mapped[str] = mapped_column(String(255), default="")

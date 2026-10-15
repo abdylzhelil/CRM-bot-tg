@@ -16,6 +16,7 @@ from app.models import Client, Reminder, now
 from app.services import backup, cleanup, heartbeat, public_stats, quiet, receipts, retention, settings
 from app.scout.channels import channel_loop
 from app.scout.joiner import join_loop, rotation_loop, search_loop
+from app.scout.publisher import publish_loop
 from app.scout.manager import ScoutManager
 from app.seed import seed
 
@@ -207,7 +208,7 @@ async def main() -> None:
     await manager.start()
     tasks = [
         asyncio.create_task(c)
-        for c in (manager.watchdog(), join_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
+        for c in (manager.watchdog(), join_loop(manager), publish_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
           backup.backup_loop(), expiry_loop(), payments_h.link_loop(), cleanup_loop(), retention_loop(), receipts_loop(), heartbeat.heartbeat_loop())
     ]
     await setup_profile(bot)
