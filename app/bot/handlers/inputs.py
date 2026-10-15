@@ -16,7 +16,7 @@ router = Router()
 
 
 # действия, которые доступны только администратору
-ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_")
+ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_", "apa_", "apg_")
 
 
 @router.message(Ask.value, F.text)
@@ -267,6 +267,9 @@ HANDLERS = {
     "niche_propose": niche_propose,
     "pass_to": pass_to,
     "ap_text": adposts_h.ap_text,
+    "apa_reason": adposts_h.apa_reason,
+    "apa_price": adposts_h.apa_price,
+    "apg_price": adposts_h.apg_price,
     "grp_link": grp_link,
     "grp_city": grp_city,
     "us_find": us_find,

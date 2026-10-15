@@ -72,6 +72,8 @@ class Group(Base):
     license_off: Mapped[bool] = mapped_column(Boolean, default=False)  # владелец отключил лицензию вручную
     license_rewarded: Mapped[int] = mapped_column(Integer, default=0)  # заявок уже учтено в лицензии
     ads_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # админ разрешил публиковать рекламу разведчиком
+    ad_price: Mapped[int] = mapped_column(Integer, default=0)  # цена поста именно здесь, ₽ (0 — общая adpost_price)
+    ad_account_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # кто публикует (для каналов — аккаунт-админ канала)
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
 
@@ -354,6 +356,7 @@ class AdOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reminded: Mapped[bool] = mapped_column(Boolean, default=False)  # напомнили об оплате
+    reason: Mapped[str] = mapped_column(String(300), default="")  # причина отказа/отмены (её видит заказчик)
 
 
 class AdPost(Base):

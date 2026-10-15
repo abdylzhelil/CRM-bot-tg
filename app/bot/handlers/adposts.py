@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import AdOrder, Group, User
+from app.models import AdOrder, Group, ScoutAccount, User
 from app.services import adposts, payments, settings
 
 router = Router()        # пользователи
@@ -39,11 +39,11 @@ async def ap_menu(cb: CallbackQuery, user: User) -> None:
         price = await settings.get_int(s, "adpost_price")
         groups = len(await adposts.eligible_groups(s))
         mine = await s.scalar(select(func.count()).select_from(AdOrder).where(AdOrder.user_id == user.tg_id, AdOrder.status != "draft"))
-    cost = f"{price} ₽ за одну группу" if price else "бесплатно (после проверки администратором)"
+    cost = "у каждой группы и канала своя (смотрите в списке)" if groups else "—"
     await reply(cb, (
-        "📣 <b>Реклама в группах</b>\n\n"
-        "Вы присылаете текст, выбираете группы — мы публикуем ваше объявление в этих группах.\n\n"
-        f"💰 Стоимость: {cost}\n👥 Доступно групп: {groups}\n\n"
+        "📣 <b>Реклама в группах и каналах</b>\n\n"
+        "Вы присылаете текст, выбираете группы или каналы — мы публикуем ваше объявление там.\n\n"
+        f"💰 Стоимость: {cost}\n👥 Доступно мест: {groups}\n\n"
         f"Не принимаем: {FORBIDDEN}. Каждый заказ проверяет администратор; под постом будет пометка «Реклама»."
     ), kb(([[("➕ Новый заказ", "ap:new")], [("📋 Куда можно разместить (список и цены)", "ap:list")]] if groups else [])
           + [[(f"🧾 Мои заказы ({mine})", "ap:mine")], [("◀️ Назад", "cg:menu")]]))
@@ -51,20 +51,24 @@ async def ap_menu(cb: CallbackQuery, user: User) -> None:
 
 @router.callback_query(F.data == "ap:list")
 async def ap_list(cb: CallbackQuery, user: User) -> None:
-    """Список групп с числом участников и ценой — посмотреть до заказа."""
+    """Список групп и каналов с числом участников и ценой — посмотреть до заказа."""
     async with Session() as s:
         if not await adposts.enabled(s):
             return await cb.answer("Реклама в группах пока не подключена", show_alert=True)
         groups = await adposts.eligible_groups(s, user.city)
-        price = await settings.get_int(s, "adpost_price")
+        default = await settings.get_int(s, "adpost_price")
     if not groups:
         return await cb.answer("Пока нет групп, доступных для рекламы", show_alert=True)
-    cost = f"{price} ₽ за пост в одной группе" if price else "бесплатно (после проверки)"
-    lines = [(f"• <a href=\"https://t.me/{esc(g.username)}\">{esc(g.title[:44])}</a>" if g.username else f"• {esc(g.title[:44])}")
-             + f" — {g.members} уч." + (f", {esc(g.city)}" if g.city else "") for g in groups[:30]]
+
+    def line(g: Group) -> str:
+        price = adposts.group_price(g, default)
+        name = f"<a href=\"https://t.me/{esc(g.username)}\">{esc(g.title[:44])}</a>" if g.username else esc(g.title[:44])
+        return (f"• {KIND.get(g.kind, '')} {name} — {g.members} уч." + (f", {esc(g.city)}" if g.city else "")
+                + f" — <b>{price} ₽</b>" if price else f"• {KIND.get(g.kind, '')} {name} — {g.members} уч. — бесплатно")
+
     total = sum(g.members for g in groups[:30])
-    await reply(cb, (f"📋 <b>Где можно разместить рекламу</b>\n💰 {cost}\n\n" + "\n".join(lines)
-                     + f"\n\nВсего: {len(groups)} групп, около {total} участников.\nВыберите нужные при оформлении заказа."),
+    await reply(cb, ("📋 <b>Где можно разместить рекламу</b> (цена за один пост)\n\n" + "\n".join(line(g) for g in groups[:30])
+                     + f"\n\nВсего: {len(groups)}, около {total} участников.\nВыберите нужные при оформлении заказа."),
                 kb([[("➕ Новый заказ", "ap:new")], [("◀️ Назад", "ap:menu")]]))
 
 
@@ -86,13 +90,19 @@ async def ap_text(s, m: Message, d, text):
     await show_picker(m, s, order, user.city if user else "")
 
 
+KIND = {"group": "👥", "channel": "📢"}
+
+
 async def show_picker(target, s, order: AdOrder, city: str) -> None:
     groups = (await adposts.eligible_groups(s, city))[:20]
+    default = await settings.get_int(s, "adpost_price")
     chosen = set(adposts.selected(order))
-    rows = [[(("✅ " if g.id in chosen else "▫️ ") + f"{g.title[:34]} · {g.members}", f"ap:t:{order.id}:{g.id}")] for g in groups]
+    rows = [[(("✅ " if g.id in chosen else "▫️ ") + f"{KIND.get(g.kind, '')} {g.title[:26]} · {g.members} · "
+              + (f"{adposts.group_price(g, default)} ₽" if adposts.group_price(g, default) else "бесплатно"), f"ap:t:{order.id}:{g.id}")]
+            for g in groups]
     rows.append([(f"Готово ({len(chosen)})", f"ap:review:{order.id}")])
     rows.append([("❌ Отмена", f"ap:cancel:{order.id}")])
-    await reply(target, f"Выберите группы (до {adposts.MAX_GROUPS}), нажимая на них:", kb(rows))
+    await reply(target, f"Выберите, где разместить рекламу (группы 👥 и каналы 📢, до {adposts.MAX_GROUPS}), нажимая на них:", kb(rows))
 
 
 async def _own(s, cb: CallbackQuery, user: User, order_id: int) -> AdOrder | None:
@@ -137,7 +147,8 @@ async def summary(s, order: AdOrder, admin: bool = False) -> str:
                  + (f' (<a href="{p.link}">пост</a>)' if p.link else "") for p, g in posts]
     else:
         groups = (await s.scalars(select(Group).where(Group.id.in_(adposts.selected(order))))).all()
-        lines = [f"▫️ {esc(g.title[:40])}" for g in groups]
+        default = await settings.get_int(s, "adpost_price")
+        lines = [f"▫️ {KIND.get(g.kind, '')} {esc(g.title[:40])} — {adposts.group_price(g, default)} ₽" for g in groups]
     who = ""
     if admin:
         u = await s.get(User, order.user_id)
@@ -156,9 +167,9 @@ async def ap_review(cb: CallbackQuery, user: User) -> None:
         n = len(adposts.selected(order))
         if not n:
             return await cb.answer("Выберите хотя бы одну группу", show_alert=True)
-        per = await settings.get_int(s, "adpost_price")
+        total = await adposts.price_of_groups(s, adposts.selected(order))
         text = await summary(s, order)
-    cost = f"\n\nИтого: {per * n} ₽ ({n} × {per})" if per else "\n\nИтого: бесплатно"
+    cost = f"\n\nИтого: {total} ₽" if total else "\n\nИтого: бесплатно"
     await reply(cb, text + cost + "\n\nОтправить заказ на проверку администратору?",
                 kb([[("📨 Отправить на проверку", f"ap:send:{order.id}")], [("✏️ Изменить группы", f"ap:pick:{order.id}")],
                     [("❌ Отмена", f"ap:cancel:{order.id}")]]))
@@ -264,47 +275,46 @@ async def adm_open(cb: CallbackQuery) -> None:
     await show_order(cb, int(cb.data.split(":")[2]))
 
 
+async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
+    failed = await s.scalar(select(func.count()).select_from(adposts.AdPost).where(
+        adposts.AdPost.order_id == order.id, adposts.AdPost.status == "failed"))
+    rows = []
+    if order.status == "pending":
+        rows.append([("✅ Одобрить", f"apa:ok:{order.id}"), ("❌ Отклонить", f"apa:no:{order.id}")])
+        rows.append([("💰 Изменить цену", f"apa:price:{order.id}")])
+    if failed:
+        rows.append([(f"🔁 Повторить неудачные ({failed})", f"apa:retry:{order.id}")])
+    if order.status in ("approved", "running", "pending"):
+        rows.append([("🚫 Отменить заказ (с причиной)", f"apa:cancel:{order.id}")])
+    return rows
+
+
 async def show_order(cb: CallbackQuery, order_id: int) -> None:
     async with Session() as s:
         order = await s.get(AdOrder, order_id)
         if order is None:
             return await cb.answer("Заказ не найден", show_alert=True)
         text = await summary(s, order, admin=True)
-        failed = await s.scalar(select(func.count()).select_from(adposts.AdPost).where(
-            adposts.AdPost.order_id == order.id, adposts.AdPost.status == "failed"))
-    rows = []
-    if order.status == "pending":
-        rows.append([("✅ Одобрить", f"apa:ok:{order.id}"), ("❌ Отклонить", f"apa:no:{order.id}")])
-    if failed:
-        rows.append([(f"🔁 Повторить неудачные ({failed})", f"apa:retry:{order.id}")])
-    if order.status in ("approved", "running", "pending"):
-        rows.append([("🚫 Отменить заказ", f"apa:cancel:{order.id}")])
+        if order.reason:
+            text += f"\n\nПричина: {esc(order.reason)}"
+        rows = await order_buttons(s, order)
     await reply(cb, text, kb(rows + [[("◀️ К заказам", "apa:list")]]))
 
 
-@admin_router.callback_query(F.data.regexp(r"^apa:(ok|no|cancel|retry):\d+$"))
+@admin_router.callback_query(F.data.regexp(r"^apa:(ok|retry):\d+$"))
 async def adm_act(cb: CallbackQuery) -> None:
     _, op, oid = cb.data.split(":")
     async with Session() as s:
         order = await s.get(AdOrder, int(oid))
         if order is None:
             return await cb.answer("Заказ не найден", show_alert=True)
-        user_id, markup = order.user_id, None
+        user_id, markup, msg = order.user_id, None, ""
         try:
             if op == "ok":
                 status = await adposts.approve(s, order)
                 msg, markup = approved_message(order.id, order.price, status)
-            elif op == "no":
-                await adposts.reject(s, order)
-                msg = f"❌ Заказ рекламы №{order.id} отклонён администратором."
-            elif op == "cancel":
-                await adposts.cancel(s, order)
-                msg = (f"🚫 Заказ рекламы №{order.id} отменён администратором. Если вы уже платили — напишите, вернём деньги за "
-                       "неопубликованное.") if order.price else f"🚫 Заказ рекламы №{order.id} отменён администратором."
             else:
-                n = await adposts.retry_failed(s, order)
-                msg = ""
-                if not n:
+                if not await adposts.retry_failed(s, order):
                     return await cb.answer("Нечего повторять", show_alert=True)
         except adposts.AdError as e:
             return await cb.answer(str(e), show_alert=True)
@@ -317,31 +327,148 @@ async def adm_act(cb: CallbackQuery) -> None:
     await show_order(cb, int(oid))
 
 
+@admin_router.callback_query(F.data.regexp(r"^apa:(no|cancel|price):\d+$"))
+async def adm_ask(cb: CallbackQuery, state: FSMContext) -> None:
+    """Отказ и отмена — с причиной (её увидит заказчик); цена — своя для этого заказа."""
+    _, op, oid = cb.data.split(":")
+    async with Session() as s:
+        order = await s.get(AdOrder, int(oid))
+    if order is None:
+        return await cb.answer("Заказ не найден", show_alert=True)
+    if op == "price":
+        return await ask(cb, state, "apa_price", f"Итоговая цена заказа №{oid} в ₽ (сейчас {order.price}):", order_id=int(oid))
+    what = "отклоняете" if op == "no" else "отменяете"
+    await ask(cb, state, "apa_reason", f"Вы {what} заказ №{oid}. Напишите причину (её получит заказчик) или «-», чтобы без причины:",
+              order_id=int(oid), op=op)
+
+
+async def apa_reason(s, m: Message, d, text):
+    order = await s.get(AdOrder, d["order_id"])
+    if order is None:
+        return await m.answer("Заказ не найден")
+    reason = "" if text.strip() == "-" else text.strip()
+    try:
+        if d["op"] == "no":
+            await adposts.reject(s, order, reason)
+            msg = f"❌ Заказ рекламы №{order.id} отклонён." + (f"\nПричина: {esc(reason)}" if reason else "")
+        else:
+            await adposts.cancel(s, order, reason)
+            msg = (f"🚫 Заказ рекламы №{order.id} отменён администратором." + (f"\nПричина: {esc(reason)}" if reason else "")
+                   + ("\nЕсли вы уже платили — напишите, вернём деньги за неопубликованное." if order.price else ""))
+    except adposts.AdError as e:
+        return await m.answer(str(e))
+    try:
+        await notify._bot.send_message(order.user_id, msg)
+    except Exception:
+        pass
+    await m.answer(f"✔ Готово. Заказчик получил сообщение.", reply_markup=kb([[("◀️ К заказам", "apa:list")]]))
+
+
+async def apa_price(s, m: Message, d, text):
+    if not text.strip().isdigit():
+        await m.answer("Нужно число (рубли), например 1500")
+        return False
+    order = await s.get(AdOrder, d["order_id"])
+    if order is None:
+        return await m.answer("Заказ не найден")
+    try:
+        await adposts.set_order_price(s, order, int(text))
+    except adposts.AdError as e:
+        return await m.answer(str(e))
+    await m.answer(f"✔ Цена заказа №{order.id}: {order.price} ₽", reply_markup=kb([[("Открыть заказ", f"apa:o:{order.id}")]]))
+
+
+# ---- группы и каналы для рекламы: разрешение, цена, кто публикует
 @admin_router.callback_query(F.data == "apg:list")
 async def groups_for_ads(cb: CallbackQuery) -> None:
     async with Session() as s:
-        groups = (await s.scalars(select(Group).where(Group.status == "joined", Group.kind == "group", Group.account_id.is_not(None))
-                                  .order_by(Group.ads_allowed.desc(), Group.members.desc()).limit(25))).all()
+        groups = (await s.scalars(select(Group).where(Group.status == "joined", Group.username != "")
+                                  .order_by(Group.ads_allowed.desc(), Group.members.desc()).limit(30))).all()
+        default = await settings.get_int(s, "adpost_price")
     if not groups:
-        return await cb.answer("Разведчик пока ни в одной группе", show_alert=True)
-    rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{g.title[:36]} · {g.members}", f"apg:tog:{g.id}")] for g in groups]
-    await reply(cb, ("📢 Группы для рекламы. ✅ — разведчик может публиковать там рекламные посты (нажмите, чтобы переключить). "
-                     "Разрешайте только там, где реклама допустима по правилам группы:"), kb(rows + [[("◀️ Назад", "gr:menu")]]))
+        return await cb.answer("Пока нет подходящих групп и каналов", show_alert=True)
+    rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{KIND.get(g.kind, '')} {g.title[:28]} · {adposts.group_price(g, default)} ₽", f"apg:o:{g.id}")]
+            for g in groups]
+    await reply(cb, ("📢 Группы и каналы для рекламы. ✅ — разрешено (покупатель видит и может выбрать). "
+                     "Нажмите на любую, чтобы разрешить/запретить и поставить цену:"), kb(rows + [[("◀️ Назад", "gr:menu")]]))
+
+
+async def show_group_card(cb: CallbackQuery, gid: int) -> None:
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        if g is None:
+            return await cb.answer("Не найдено", show_alert=True)
+        default = await settings.get_int(s, "adpost_price")
+        acc_id = g.ad_account_id or g.account_id
+        acc = await s.get(ScoutAccount, acc_id) if acc_id else None
+    own = f"{g.ad_price} ₽ (своя)" if g.ad_price > 0 else f"{default} ₽ (общая из ⚙️)"
+    who = esc(acc.name) if acc else "— не назначен"
+    note = ("\n⚠️ Чтобы публиковать в канал, аккаунт-публикатор должен быть админом канала с правом писать посты."
+            if g.kind == "channel" else "")
+    rows = [[("⏸ Запретить рекламу" if g.ads_allowed else "✅ Разрешить рекламу", f"apg:tog:{g.id}")],
+            [("💰 Цена за пост", f"apg:price:{g.id}")]]
+    if g.kind == "channel":
+        rows.append([("👤 Сменить аккаунт-публикатор", f"apg:acc:{g.id}")])
+    await reply(cb, (f"{KIND.get(g.kind, '')} <b>{esc(g.title)}</b> — {g.members} уч.\n"
+                     f"Реклама: {'✅ разрешена' if g.ads_allowed else '⏸ запрещена'}\n💰 Цена за пост: {own}\n"
+                     f"👤 Публикует: {who}{note}"), kb(rows + [[("◀️ К списку", "apg:list")]]))
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:o:\d+$"))
+async def group_card(cb: CallbackQuery) -> None:
+    await show_group_card(cb, int(cb.data.split(":")[2]))
 
 
 @admin_router.callback_query(F.data.regexp(r"^apg:tog:\d+$"))
 async def groups_toggle(cb: CallbackQuery) -> None:
+    gid = int(cb.data.split(":")[2])
     async with Session() as s:
-        g = await s.get(Group, int(cb.data.split(":")[2]))
+        g = await s.get(Group, gid)
         if g is None:
             return await cb.answer("Группа не найдена", show_alert=True)
+        if not g.ads_allowed and not (g.ad_account_id or g.account_id):
+            return await cb.answer("Сначала назначьте аккаунт-публикатор (кнопка «👤 Сменить аккаунт-публикатор»)", show_alert=True)
         g.ads_allowed = not g.ads_allowed
         await s.commit()
-    await groups_for_ads(cb)
+    await show_group_card(cb, gid)
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:price:\d+$"))
+async def group_price_ask(cb: CallbackQuery, state: FSMContext) -> None:
+    gid = int(cb.data.split(":")[2])
+    await ask(cb, state, "apg_price", "Цена за один пост здесь, ₽ (число). «0» — брать общую цену из ⚙️:", gid=gid)
+
+
+async def apg_price(s, m: Message, d, text):
+    if not text.strip().isdigit() or int(text) > 1_000_000:
+        await m.answer("Нужно число (рубли), например 500")
+        return False
+    g = await s.get(Group, d["gid"])
+    if g is None:
+        return await m.answer("Группа не найдена")
+    g.ad_price = int(text)
+    await s.commit()
+    await m.answer(f"✔ Цена за пост в «{esc(g.title)}»: {g.ad_price or 'общая'} ₽", reply_markup=kb([[("Открыть", f"apg:o:{g.id}")]]))
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:acc:\d+$"))
+async def group_account_cycle(cb: CallbackQuery) -> None:
+    """Следующий включённый аккаунт-разведчик (для каналов: тот, кого вы сделали админом канала)."""
+    gid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        accs = (await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled, ScoutAccount.can_post).order_by(ScoutAccount.id))).all()
+        if g is None or not accs:
+            return await cb.answer("Нет подходящих аккаунтов-разведчиков", show_alert=True)
+        ids = [a.id for a in accs]
+        cur = g.ad_account_id or g.account_id
+        g.ad_account_id = ids[(ids.index(cur) + 1) % len(ids)] if cur in ids else ids[0]
+        await s.commit()
+    await show_group_card(cb, gid)
 
 
 async def counts() -> tuple[int, int]:
-    """(открытых заказов, групп, разрешённых для рекламы) — для меню 🔍 Группы."""
+    """(открытых заказов, групп и каналов, разрешённых для рекламы) — для меню 🔍 Группы."""
     async with Session() as s:
         orders = await s.scalar(select(func.count()).select_from(AdOrder).where(AdOrder.status.in_(adposts.OPEN_STATUSES))) or 0
         allowed = await s.scalar(select(func.count()).select_from(Group).where(Group.ads_allowed)) or 0

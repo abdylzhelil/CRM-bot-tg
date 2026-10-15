@@ -259,7 +259,9 @@ async def test_screens_user_and_admin(maker, tgbot, monkeypatch):
     await ah.adm_list(cbq("apa:list", uid=ADMIN_ID))
     assert f"apa:o:{order.id}" in str(sent.await_args.args[2])
     await ah.groups_for_ads(cbq("apg:list", uid=ADMIN_ID))
-    assert "apg:tog" in str(sent.await_args.args[2])
+    assert f"apg:o:{gid}" in str(sent.await_args.args[2])
+    await ah.group_card(cbq(f"apg:o:{gid}", uid=ADMIN_ID))
+    assert f"apg:tog:{gid}" in str(sent.await_args.args[2]) and f"apg:price:{gid}" in str(sent.await_args.args[2])
     await ah.groups_toggle(cbq(f"apg:tog:{gid}", uid=ADMIN_ID))
     async with maker() as s:
         assert (await s.get(Group, gid)).ads_allowed is False
@@ -360,10 +362,111 @@ async def test_buyer_can_view_group_list_before_ordering(maker, tgbot, monkeypat
     u = await make_user(maker, 70, city="Махачкала")
     await ah.ap_list(cbq("ap:list"), u)
     text = sent.await_args.args[1]
-    assert "Барахолка" in text and "5000 уч." in text and "500 ₽" in text and "Всего: 1 групп" in text
+    assert "Барахолка" in text and "5000 уч." in text and "500 ₽" in text and "Всего: 1," in text
     assert "ap:new" in str(sent.await_args.args[2])
     async with maker() as s:
         await settings.put(s, "adpost_enabled", "0")
     off = cbq("ap:list")
     await ah.ap_list(off, u)
     assert off.answer.await_args.kwargs.get("show_alert") is True  # сервис выключен — списка нет
+
+
+def msg(uid=ADMIN_ID):
+    m = MagicMock()
+    m.from_user.id = uid
+    m.answer = AsyncMock()
+    return m
+
+
+async def test_prices_per_group_and_channel_with_own_publisher(maker, tgbot):
+    await setup_group(maker, price=100)
+    await make_user(maker, 70)
+    async with maker() as s:
+        s.add(ScoutAccount(id=2, name="chan_admin", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        s.add(Group(tg_id=-200, username="newschan", title="Новости", members=9000, status="joined", kind="channel",
+                    ads_allowed=True, ad_price=1500, ad_account_id=2))
+        # канал без назначенного аккаунта и группа без разрешения не доступны
+        s.add(Group(tg_id=-201, username="nochan", title="Без аккаунта", members=50, status="joined", kind="channel", ads_allowed=True))
+        await s.commit()
+        names = [g.title for g in await adposts.eligible_groups(s)]
+        assert names == ["Новости", "Барахолка"]  # группа и канал, отсортированы по участникам
+        order = await adposts.new_draft(s, 70, TEXT)
+        for g in await adposts.eligible_groups(s):
+            await adposts.toggle_group(s, order, g.id)
+        await adposts.submit(s, order)
+        assert order.price == 1500 + 100  # у канала своя цена, у группы общая
+        await adposts.approve(s, order)  # платный → ждёт оплаты; для проверки публикации ставим вручную
+        order.price = 0
+        await adposts.start(s, order) if order.status == "pending" else None
+    # публикация в канал идёт от назначенного аккаунта (админа канала)
+    async with maker() as s:
+        o = await s.scalar(select(AdOrder))
+        o.status = "running"
+        for g in await adposts.eligible_groups(s):
+            s.add(AdPost(order_id=o.id, group_id=g.id))
+        await s.commit()
+    chan_client = AsyncMock()
+    chan_client.get_entity = AsyncMock(return_value=object())
+    chan_client.send_message = AsyncMock(return_value=SimpleNamespace(id=77))
+    mgr = SimpleNamespace(clients={2: chan_client, 1: AsyncMock()})
+    assert await publisher.publish_one(mgr) is True
+    chan_client.send_message.assert_awaited_once()
+    async with maker() as s:
+        post = await s.scalar(select(AdPost).where(AdPost.status == "sent"))
+        assert post.link == "https://t.me/newschan/77"
+
+
+async def test_admin_sets_group_price_and_order_price(maker, tgbot):
+    await setup_group(maker, price=100)
+    await make_user(maker, 70)
+    async with maker() as s:
+        gid = (await s.scalar(select(Group))).id
+    m = msg()
+    async with maker() as s:
+        assert await ah.apg_price(s, m, {"gid": gid}, "двести") is False  # не число — переспросит
+        await ah.apg_price(s, m, {"gid": gid}, "750")
+        assert (await s.get(Group, gid)).ad_price == 750
+    oid = await make_order(maker)
+    async with maker() as s:
+        assert (await s.get(AdOrder, oid)).price == 750
+        await ah.apa_price(s, msg(), {"order_id": oid}, "1200")
+        assert (await s.get(AdOrder, oid)).price == 1200  # админ поставил свою цену заказа
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        with pytest.raises(adposts.AdError):
+            await adposts.set_order_price(s, await s.get(AdOrder, oid), 10)  # после одобрения цену не меняем
+
+
+async def test_reject_and_cancel_require_reason_text_for_buyer(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await ah.apa_reason(s, msg(), {"order_id": oid, "op": "no"}, "Нужно название компании и телефон")
+        o = await s.get(AdOrder, oid)
+        assert o.status == "rejected" and o.reason == "Нужно название компании и телефон"
+    assert any("отклонён" in t and "Причина: Нужно название компании" in t for t in tgbot.texts(70))
+    oid2 = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid2))
+        await ah.apa_reason(s, msg(), {"order_id": oid2, "op": "cancel"}, "-")  # без причины
+        assert (await s.get(AdOrder, oid2)).status == "canceled"
+    assert any("отменён администратором" in t and "Причина" not in t for t in tgbot.texts(70))
+
+
+async def test_group_card_toggle_and_channel_needs_publisher(maker, tgbot, monkeypatch):
+    sent = AsyncMock()
+    monkeypatch.setattr(ah, "reply", sent)
+    async with maker() as s:
+        s.add(ScoutAccount(id=3, name="a3", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        s.add(Group(tg_id=-300, username="ch", title="Канал", members=10, status="joined", kind="channel"))
+        await s.commit()
+        gid = (await s.scalar(select(Group))).id
+    c = cbq(f"apg:tog:{gid}", uid=ADMIN_ID)
+    await ah.groups_toggle(c)
+    assert c.answer.await_args.kwargs.get("show_alert") is True  # без аккаунта-публикатора нельзя разрешить
+    await ah.group_account_cycle(cbq(f"apg:acc:{gid}", uid=ADMIN_ID))
+    await ah.groups_toggle(cbq(f"apg:tog:{gid}", uid=ADMIN_ID))
+    async with maker() as s:
+        g = await s.get(Group, gid)
+        assert g.ad_account_id == 3 and g.ads_allowed
+    assert "админом канала" in sent.await_args.args[1]

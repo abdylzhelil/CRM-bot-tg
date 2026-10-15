@@ -44,7 +44,8 @@ async def publish_one(manager) -> bool:
         chosen = None
         for post in await adposts.due_posts(s):
             g = await s.get(Group, post.group_id)
-            acc = await s.get(ScoutAccount, g.account_id) if g and g.account_id else None
+            acc_id = (g.ad_account_id or g.account_id) if g else None
+            acc = await s.get(ScoutAccount, acc_id) if acc_id else None
             client = manager.clients.get(acc.id) if acc else None
             if not g or not g.ads_allowed or acc is None or not acc.enabled or not acc.can_post or client is None:
                 if g and not g.ads_allowed:  # админ закрыл группу для рекламы после заказа

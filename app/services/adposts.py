@@ -42,14 +42,29 @@ async def enabled(s: AsyncSession) -> bool:
     return await settings.get(s, "adpost_enabled") == "1"
 
 
+def publisher_id():
+    """Аккаунт, который публикует: назначенный вручную (каналы) или тот, что состоит в группе."""
+    return func.coalesce(Group.ad_account_id, Group.account_id)
+
+
 async def eligible_groups(s: AsyncSession, city: str = "") -> list[Group]:
-    """Группы, куда можно заказать рекламу: админ разрешил, разведчик в группе есть, включён и может публиковать."""
+    """Группы и каналы, куда можно заказать рекламу: админ разрешил, есть включённый аккаунт-публикатор."""
     rows = (await s.scalars(
-        select(Group).join(ScoutAccount, ScoutAccount.id == Group.account_id)
-        .where(Group.status == "joined", Group.kind == "group", Group.ads_allowed, ScoutAccount.enabled, ScoutAccount.can_post)
+        select(Group).join(ScoutAccount, ScoutAccount.id == publisher_id())
+        .where(Group.status == "joined", Group.ads_allowed, ScoutAccount.enabled, ScoutAccount.can_post)
         .order_by(Group.members.desc()))).all()
     # группы города пользователя — вперёд
     return sorted(rows, key=lambda g: 0 if city and g.city.lower() == city.lower() else 1)
+
+
+def group_price(g: Group, default: int) -> int:
+    return g.ad_price if g.ad_price > 0 else default
+
+
+async def price_of_groups(s: AsyncSession, ids: list[int]) -> int:
+    default = await settings.get_int(s, "adpost_price")
+    groups = (await s.scalars(select(Group).where(Group.id.in_(ids)))).all() if ids else []
+    return sum(group_price(g, default) for g in groups)
 
 
 def selected(order: AdOrder) -> list[int]:
@@ -98,7 +113,7 @@ async def submit(s: AsyncSession, order: AdOrder) -> AdOrder:
     allowed = {g.id for g in await eligible_groups(s)}
     if not set(ids) <= allowed:
         raise AdError("Некоторые группы больше недоступны для рекламы — выберите заново.")
-    order.price = total_price(await settings.get_int(s, "adpost_price"), len(ids))
+    order.price = await price_of_groups(s, ids)
     order.status = "pending"
     await s.commit()
     return order
@@ -133,10 +148,10 @@ async def stale_unpaid(s: AsyncSession) -> tuple[list[AdOrder], list[AdOrder]]:
     return remind, expire
 
 
-async def reject(s: AsyncSession, order: AdOrder) -> None:
+async def reject(s: AsyncSession, order: AdOrder, reason: str = "") -> None:
     if order.status != "pending":
         raise AdError("Заказ уже обработан.")
-    order.status, order.decided_at = "rejected", now()
+    order.status, order.decided_at, order.reason = "rejected", now(), reason[:300]
     await s.commit()
 
 
@@ -167,7 +182,17 @@ async def mark_paid(s: AsyncSession, order_id: int, yk_id: str, amount_kop: int 
     return order, pay
 
 
-async def cancel(s: AsyncSession, order: AdOrder) -> int:
+async def set_order_price(s: AsyncSession, order: AdOrder, price: int) -> None:
+    """Админ меняет итоговую цену заказа (пока он на проверке)."""
+    if order.status != "pending":
+        raise AdError("Цену можно менять только пока заказ на проверке.")
+    if not 0 <= price <= 1_000_000:
+        raise AdError("Цена от 0 до 1 000 000 ₽.")
+    order.price = price
+    await s.commit()
+
+
+async def cancel(s: AsyncSession, order: AdOrder, reason: str = "") -> int:
     """Отмена: неопубликованные посты снимаются. Возвращает число снятых."""
     if order.status not in ("draft", "pending", "approved", "running"):
         raise AdError("Этот заказ уже нельзя отменить.")
@@ -175,6 +200,8 @@ async def cancel(s: AsyncSession, order: AdOrder) -> int:
     for p in posts:
         p.status = "canceled"
     order.status = "canceled"
+    if reason:
+        order.reason = reason[:300]
     await s.commit()
     return len(posts)
 
@@ -201,12 +228,12 @@ async def compose(s: AsyncSession, order: AdOrder) -> str:
 async def sent_today(s: AsyncSession, account_id: int) -> int:
     start_of_day = now().replace(hour=0, minute=0, second=0, microsecond=0)
     return await s.scalar(select(func.count()).select_from(AdPost).join(Group, Group.id == AdPost.group_id).where(
-        Group.account_id == account_id, AdPost.status == "sent", AdPost.sent_at >= start_of_day)) or 0
+        publisher_id() == account_id, AdPost.status == "sent", AdPost.sent_at >= start_of_day)) or 0
 
 
 async def last_sent(s: AsyncSession, account_id: int):
     return await s.scalar(select(func.max(AdPost.sent_at)).join(Group, Group.id == AdPost.group_id).where(
-        Group.account_id == account_id, AdPost.status == "sent"))
+        publisher_id() == account_id, AdPost.status == "sent"))
 
 
 async def account_ready(s: AsyncSession, account_id: int) -> bool:
