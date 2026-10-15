@@ -974,8 +974,8 @@ async def test_probe_group_rights(maker, tgbot):
     nopics = SimpleNamespace(left=False, broadcast=False, creator=False, admin_rights=None, banned_rights=None,
                              default_banned_rights=ChatBannedRights(until_date=None, send_media=True))
     client.get_entity = AsyncMock(return_value=nopics)
-    level, text, no_media = await publisher.probe(mgr, g)
-    assert level == "warn" and no_media and "картинки" in text
+    level, text, no_media, closed = await publisher.probe(mgr, g)
+    assert level == "warn" and no_media and "картинки" in text and not closed
     channel = SimpleNamespace(left=False, broadcast=True, creator=False, admin_rights=None)
     client.get_entity = AsyncMock(return_value=channel)
     assert (await publisher.probe(mgr, g))[0] == "bad"
@@ -998,3 +998,61 @@ async def test_estimate_text(maker):
         ids = list((await s.scalars(select(Group.id))).all())
         assert "2 дн" in await adposts.estimate(s, ids)
         assert await adposts.estimate(s, ids[:1]) == "в течение часа"
+
+
+async def test_closed_group_locked_for_buyers_and_reopens(maker, tgbot):
+    """Группа закрыта сейчас: покупатель видит её с 🔒, но выбрать не может; открылась — снова доступна;
+    закрыта больше 2 суток — реклама в ней выключается сама."""
+    from telethon.tl.types import ChatBannedRights
+
+    await setup_group(maker)
+    await make_user(maker, 70)
+    mgr, client = manager()
+    closed = SimpleNamespace(left=False, broadcast=False, creator=False, admin_rights=None, banned_rights=None,
+                             default_banned_rights=ChatBannedRights(until_date=None, send_messages=True))
+    client.get_entity = AsyncMock(return_value=closed)
+    async with maker() as s:
+        gid = (await s.scalar(select(Group))).id
+    assert (await publisher.recheck_groups(mgr)) == []  # ни разу не проверенную — проверили фоном
+    async with maker() as s:
+        assert (await s.get(Group, gid)).ad_closed_at is not None
+        assert await adposts.eligible_groups(s) == [] and len(await adposts.closed_groups(s)) == 1
+        order = await adposts.new_draft(s, 70, TEXT)
+        order.group_ids = str(gid)  # выбрал, пока была открыта
+        await s.commit()
+    # открылась
+    client.get_entity = AsyncMock(return_value=SimpleNamespace(left=False, broadcast=False, creator=False, admin_rights=None,
+                                                               banned_rights=None, default_banned_rights=None))
+    async with maker() as s:
+        (await s.get(Group, gid)).ad_checked_at = now() - timedelta(hours=3)
+        await s.commit()
+    await publisher.recheck_groups(mgr)
+    async with maker() as s:
+        assert (await s.get(Group, gid)).ad_closed_at is None and len(await adposts.eligible_groups(s)) == 1
+    # снова закрыта, и уже больше 2 суток
+    client.get_entity = AsyncMock(return_value=closed)
+    async with maker() as s:
+        g = await s.get(Group, gid)
+        g.ad_closed_at, g.ad_checked_at = now() - timedelta(hours=49), now() - timedelta(hours=3)
+        await s.commit()
+    assert await publisher.recheck_groups(mgr) == ["Барахолка"]
+    async with maker() as s:
+        assert not (await s.get(Group, gid)).ads_allowed
+    assert any("выключена" in t for t in tgbot.texts(ADMIN_ID))
+
+
+async def test_picker_drops_closed_selected_group(maker, tgbot, monkeypatch):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        order = await adposts.new_draft(s, 70, TEXT)
+        order.group_ids = str(g.id)
+        g.ad_closed_at = now()
+        await s.commit()
+        shown = AsyncMock()
+        monkeypatch.setattr(ah, "reply", shown)
+        await ah.show_picker(MagicMock(), s, order, "")
+        assert order.group_ids == ""
+    buttons = [b.callback_data for row in shown.call_args.args[2].inline_keyboard for b in row]
+    assert f"ap:locked:{g.id}" in buttons and f"ap:t:{order.id}:{g.id}" not in buttons

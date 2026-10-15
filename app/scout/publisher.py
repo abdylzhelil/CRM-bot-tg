@@ -120,6 +120,7 @@ async def publish_one(manager) -> bool:
                 msg = await client.send_message(entity, text, link_preview=False, parse_mode=None)
             post.status, post.sent_at, post.message_id = "sent", now(), msg.id
             post.link = post_link(g, msg.id)
+            g.ad_closed_at = None  # раз вышло — группа открыта
         except (FloodWaitError, SlowModeWaitError) as e:
             post.scheduled_at = now() + timedelta(seconds=e.seconds + random.randint(30, 300))
             log.warning("реклама: ожидание %s с в %s", e.seconds, g.title)
@@ -133,6 +134,7 @@ async def publish_one(manager) -> bool:
             post.scheduled_at = now() + timedelta(days=1)
             problem = f"Telegram ограничил аккаунт «{acc.name}» за спам (PeerFlood). Публикации с него отложены на сутки."
         except CLOSED:
+            g.ad_closed_at = g.ad_closed_at or now()  # новым покупателям её пока не предлагаем
             if g.kind == "channel":  # в канал пишут только админы — ждать бесполезно
                 post.status, post.error = "failed", "аккаунт не админ канала (нет права публиковать)"
                 switched_off = True
@@ -166,40 +168,40 @@ async def publish_one(manager) -> bool:
     return True
 
 
-async def probe(manager, g: Group) -> tuple[str, str, bool]:
+async def probe(manager, g: Group) -> tuple[str, str, bool, bool]:
     """«🔎 Проверить группу»: может ли аккаунт-публикатор сейчас писать сюда. Ничего не публикует.
 
-    (итог: ok / warn / bad, пояснение, картинки запрещены). bad — реклама здесь не выйдет, warn — выйдет с оговоркой."""
+    (итог: ok / warn / bad, пояснение, картинки запрещены, закрыта сейчас). bad — реклама здесь не выйдет, warn — с оговоркой."""
     acc_id = g.ad_account_id or g.account_id
     client = manager.clients.get(acc_id) if acc_id else None
     if client is None:
-        return "bad", "аккаунт-публикатор не назначен или не подключён", False
+        return "bad", "аккаунт-публикатор не назначен или не подключён", False, False
     try:
         ent = await client.get_entity(await resolve(client, g))
     except (ChannelPrivateError, UserBannedInChannelError):
-        return "bad", "группа закрыта или аккаунт из неё удалён", False
+        return "bad", "группа закрыта или аккаунт из неё удалён", False, False
     except Exception as e:
-        return "warn", f"не удалось проверить ({type(e).__name__}) — попробуйте позже", False
+        return "warn", f"не удалось проверить ({type(e).__name__}) — попробуйте позже", False, False
     if getattr(ent, "left", False):
-        return "bad", "аккаунт не состоит в группе", False
+        return "bad", "аккаунт не состоит в группе", False, False
     rights = getattr(ent, "admin_rights", None)
     creator = bool(getattr(ent, "creator", False))
     if getattr(ent, "broadcast", False):  # канал: пишут только админы с правом постов
         if creator or (rights is not None and getattr(rights, "post_messages", False)):
-            return "ok", "аккаунт — админ канала, можно публиковать", False
-        return "bad", "аккаунт не админ канала с правом публиковать посты", False
+            return "ok", "аккаунт — админ канала, можно публиковать", False, False
+        return "bad", "аккаунт не админ канала с правом публиковать посты", False, False
     if creator or rights is not None:
-        return "ok", "аккаунт — админ группы, ограничений нет", False
+        return "ok", "аккаунт — админ группы, ограничений нет", False, False
     limits = [r for r in (getattr(ent, "banned_rights", None), getattr(ent, "default_banned_rights", None)) if r is not None]
 
     def banned(name: str) -> bool:
         return any(getattr(r, name, False) for r in limits)
 
     if banned("send_messages") or banned("send_plain"):
-        return "warn", "сейчас писать нельзя (закрыта на время или новичкам нельзя) — бот будет пробовать до суток", False
+        return "warn", "сейчас писать нельзя (закрыта на время или новичкам нельзя) — выбрать её нельзя, проверяю каждые 2 ч", False, True
     no_media = banned("send_media") or banned("send_photos")
     notes = (["картинки запрещены — только текст"] if no_media else []) + (["ссылки запрещены"] if banned("embed_links") else [])
-    return ("warn", ", ".join(notes), no_media) if notes else ("ok", "можно публиковать", False)
+    return ("warn", ", ".join(notes), no_media, False) if notes else ("ok", "можно публиковать", False, False)
 
 
 async def check_group(manager, gid: int) -> tuple[str, str]:
@@ -208,14 +210,44 @@ async def check_group(manager, gid: int) -> tuple[str, str]:
         g = await s.get(Group, gid)
         if g is None:
             return "bad", "группа не найдена"
-        level, text, no_media = await probe(manager, g)
+        level, text, no_media, closed = await probe(manager, g)
         g.ad_check = ({"ok": "✅ ", "warn": "⚠️ ", "bad": "⛔ "}[level] + text)[:160]
         g.ad_checked_at = now()
         g.no_media = no_media or (g.no_media and level != "ok")
+        if closed and g.ad_hours and not adposts.in_hours(g):
+            pass  # закрыта вне своих часов («9-21») — так и задумано, покупателям её не прячем
+        elif closed:
+            g.ad_closed_at = g.ad_closed_at or now()
+        elif level != "warn" or "не удалось" not in text:  # проверка прошла и группа открыта
+            g.ad_closed_at = None
         if level == "bad":
             g.ads_allowed = False
         await s.commit()
     return level, text
+
+
+async def recheck_groups(manager) -> list[str]:
+    """Фоном: проверить ни разу не проверенные группы и перепроверить закрытые (раз в 2 ч).
+    Закрыта дольше 48 ч — значит, писать там нельзя совсем: выключаем рекламу. Возвращает названия выключенных."""
+    async with Session() as s:
+        ids = await adposts.due_rechecks(s)
+    off = []
+    for gid in ids:
+        level, _ = await check_group(manager, gid)
+        async with Session() as s:
+            g = await s.get(Group, gid)
+            if g is not None and g.ads_allowed and g.ad_closed_at and now() - g.ad_closed_at >= adposts.CLOSED_GIVE_UP:
+                g.ads_allowed = False
+                off.append((g.id, g.title))
+                await s.commit()
+            elif g is not None and level == "bad":
+                off.append((g.id, g.title))
+    for gid, title in off:
+        await notify._send(f"⛔ Реклама в «{html.escape(title)}» выключена: писать туда нельзя (закрыта больше 2 суток "
+                           "или аккаунт потерял доступ). Покупатели её больше не видят.",
+                           notify.InlineKeyboardMarkup(inline_keyboard=[[
+                               notify.InlineKeyboardButton(text="📢 Карточка группы", callback_data=f"apg:o:{gid}")]]))
+    return [t for _, t in off]
 
 
 async def check_posts(manager) -> int:
@@ -353,6 +385,8 @@ async def publish_loop(manager) -> None:
         try:
             did = await publish_one(manager)
             await check_posts(manager)
+            if ticks % 5 == 0:  # ~раз в 5 минут — по 2 группы, чтобы не дёргать Telegram
+                await recheck_groups(manager)
             ticks += 1
             if ticks % 30 == 0:  # примерно раз в 30 минут
                 await nudge_unpaid()

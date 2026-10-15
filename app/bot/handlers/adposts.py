@@ -97,8 +97,12 @@ async def ap_list(cb: CallbackQuery, user: User) -> None:
                 + (f" — <b>{price} ₽</b>" if price else " — бесплатно") + hours)
 
     total = sum(g.members for g in groups[:30])
+    async with Session() as s:
+        locked = await adposts.closed_groups(s)
+    closed_txt = ("\n\n🔒 Сейчас закрыты (откроются — станут доступны):\n"
+                  + "\n".join(f"• {esc(g.title[:44])}" for g in locked[:10])) if locked else ""
     await reply(cb, ("📋 <b>Где можно разместить рекламу</b> (цена за один пост)\n\n" + "\n".join(line(g) for g in groups[:30])
-                     + f"\n\nВсего: {len(groups)}, около {total} участников.\nВыберите нужные при оформлении заказа."),
+                     + f"\n\nВсего: {len(groups)}, около {total} участников.{closed_txt}\nВыберите нужные при оформлении заказа."),
                 kb([[("➕ Новый заказ", "ap:new")], [("◀️ Назад", "ap:menu")]]))
 
 
@@ -126,10 +130,18 @@ KIND = {"group": "👥", "channel": "📢"}
 async def show_picker(target, s, order: AdOrder, city: str) -> None:
     groups = (await adposts.eligible_groups(s, city, photo=bool(order.photo)))[:20]
     default = await settings.get_int(s, "adpost_price")
+    ok_ids = {g.id for g in groups}
     chosen = set(adposts.selected(order))
+    if chosen - ok_ids:  # выбранная группа закрылась или стала недоступна — убираем, чтобы не мешала отправке
+        chosen &= ok_ids
+        order.group_ids = ",".join(str(i) for i in adposts.selected(order) if i in chosen)
+        await s.commit()
     rows = [[(("✅ " if g.id in chosen else "▫️ ") + f"{KIND.get(g.kind, '')} {g.title[:26]} · {g.members} · "
               + (f"{adposts.group_price(g, default)} ₽" if adposts.group_price(g, default) else "бесплатно"), f"ap:t:{order.id}:{g.id}")]
             for g in groups]
+    # закрытые сейчас группы видны, но выбрать их нельзя (кнопка только объясняет почему)
+    rows += [[(f"🔒 {KIND.get(g.kind, '')} {g.title[:26]} · сейчас закрыта", f"ap:locked:{g.id}")]
+             for g in (await adposts.closed_groups(s))[:5]]
     rows.append([(f"Готово ({len(chosen)})", f"ap:review:{order.id}")])
     rows.append([("❌ Отмена", f"ap:cancel:{order.id}")])
     await reply(target, f"Выберите, где разместить рекламу (группы 👥 и каналы 📢, до {adposts.MAX_GROUPS}), нажимая на них:", kb(rows))
@@ -141,6 +153,12 @@ async def _own(s, cb: CallbackQuery, user: User, order_id: int) -> AdOrder | Non
         await cb.answer("Заказ не найден", show_alert=True)
         return None
     return order
+
+
+@router.callback_query(F.data.regexp(r"^ap:locked:\d+$"))
+async def ap_locked(cb: CallbackQuery) -> None:
+    await cb.answer("🔒 Эта группа сейчас закрыта для сообщений (ночной режим или правила группы), поэтому выбрать её нельзя. "
+                    "Бот проверяет её каждые 2 часа — как откроется, она станет доступна.", show_alert=True)
 
 
 @router.callback_query(F.data.regexp(r"^ap:pick:\d+$"))
@@ -558,7 +576,7 @@ async def groups_for_ads(cb: CallbackQuery) -> None:
     if not groups:
         return await cb.answer("Пока нет подходящих групп и каналов", show_alert=True)
     rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{KIND.get(g.kind, '')} {g.title[:28]} · {adposts.group_price(g, default)} ₽"
-               + (" · 🕘" if g.ad_hours else "") + (" · 📝" if g.ad_note else ""), f"apg:o:{g.id}")]
+               + (" · 🕘" if g.ad_hours else "") + (" · 📝" if g.ad_note else "") + (" · 🔒" if g.ad_closed_at else ""), f"apg:o:{g.id}")]
             for g in groups]
     bulk = [[("💰 Одна цена всем", "apg:allprice"), ("📈 Цена по размеру (от–до)", "apg:algo")],
             [("✅ Разрешить везде", "apg:allow:1"), ("⏸ Запретить везде", "apg:allow:0")],
@@ -592,7 +610,9 @@ async def show_group_card(cb: CallbackQuery, gid: int) -> None:
                      f"🕘 Публиковать: {hours}\n📝 Условия: {esc(g.ad_note) or '—'}\n"
                      + (f"🔎 Проверка {quiet.to_local(g.ad_checked_at):%d.%m %H:%M}: {esc(g.ad_check)}\n" if g.ad_checked_at
                         else "🔎 Ещё не проверяли — нажмите «🔎 Проверить группу»\n")
-                     + ("🖼 Картинки запрещены — только текстовая реклама\n" if g.no_media else "") +
+                     + ("🖼 Картинки запрещены — только текстовая реклама\n" if g.no_media else "")
+                     + (f"🔒 Закрыта для сообщений с {quiet.to_local(g.ad_closed_at):%d.%m %H:%M} — покупатели видят её, "
+                        "но выбрать не могут; проверяю каждые 2 ч, через 2 суток выключу\n" if g.ad_closed_at else "") +
                      f"👤 Публикует: {who}{note}"), kb(rows + [[("◀️ К списку", "apg:list")]]))
 
 

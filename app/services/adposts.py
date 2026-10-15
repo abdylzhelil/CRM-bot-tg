@@ -60,12 +60,32 @@ async def eligible_groups(s: AsyncSession, city: str = "", photo: bool = False) 
     Группа, где публикация не получилась (бан, закрыта, пост удалили), выключается сама и сюда не попадает;
     для рекламы с картинкой не показываем группы, где картинки запрещены."""
     q = (select(Group).join(ScoutAccount, ScoutAccount.id == publisher_id())
-         .where(Group.status == "joined", Group.ads_allowed, ScoutAccount.enabled, ScoutAccount.can_post))
+         .where(Group.status == "joined", Group.ads_allowed, ScoutAccount.enabled, ScoutAccount.can_post,
+                Group.ad_closed_at.is_(None)))  # закрытую сейчас группу выбрать нельзя (покажем с 🔒)
     if photo:
         q = q.where(~Group.no_media)
     rows = (await s.scalars(q.order_by(Group.members.desc()))).all()
     # группы города пользователя — вперёд
     return sorted(rows, key=lambda g: 0 if city and g.city.lower() == city.lower() else 1)
+
+
+CLOSED_GIVE_UP = timedelta(hours=48)  # закрыта дольше — значит, навсегда: выключаем рекламу в группе
+RECHECK_EVERY = timedelta(hours=2)
+
+
+async def closed_groups(s: AsyncSession) -> list[Group]:
+    """Разрешённые для рекламы группы, которые сейчас закрыты для сообщений (покупателю — с 🔒, выбрать нельзя)."""
+    return list((await s.scalars(select(Group).where(
+        Group.status == "joined", Group.ads_allowed, Group.ad_closed_at.is_not(None)).order_by(Group.members.desc()))).all())
+
+
+async def due_rechecks(s: AsyncSession, limit: int = 2) -> list[int]:
+    """Какие группы пора (пере)проверить: ни разу не проверенные и закрытые, проверенные больше 2 ч назад."""
+    rows = (await s.scalars(select(Group.id).where(
+        Group.status == "joined", Group.ads_allowed,
+        Group.ad_checked_at.is_(None) | (Group.ad_closed_at.is_not(None) & (Group.ad_checked_at < now() - RECHECK_EVERY)))
+        .order_by(Group.ad_checked_at.is_not(None), Group.ad_checked_at).limit(limit))).all()
+    return list(rows)
 
 
 def group_price(g: Group, default: int) -> int:

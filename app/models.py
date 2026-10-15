@@ -80,6 +80,7 @@ class Group(Base):
     no_media: Mapped[bool] = mapped_column(Boolean, default=False)  # картинки в группе запрещены — только текстовая реклама
     ad_check: Mapped[str] = mapped_column(String(160), default="")  # итог «🔎 Проверить группу»: можно ли писать, что запрещено
     ad_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ad_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # с какого момента группа закрыта для сообщений
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
 
