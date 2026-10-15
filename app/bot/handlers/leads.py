@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.bot import notify
 from app.bot.common import ask, esc, kb
 from app.db import Session
-from app.models import Category, Delivery, Lead, User, now
+from app.models import Category, Client, Delivery, Lead, User, now
 from app.services import ai, draft, lead_actions, referrals, settings
 from app.services.distribute import day_start, root_category
 
@@ -31,27 +31,83 @@ async def send_card(msg: Message, s, d: Delivery, lead: Lead, user: User) -> Non
     )
 
 
+LISTS = (("new", "🆕 Новые"), ("postponed", "⏰ Отложенные"), ("taken", "✅ В работе"),
+         ("rejected", "❌ Отказ"), ("spam", "🚫 Спам"))
+PAGE = 5
+
+
+async def status_counts(s, user_id: int) -> dict:
+    return dict((await s.execute(
+        select(Delivery.status, func.count()).where(Delivery.user_id == user_id, Delivery.sent).group_by(Delivery.status)
+    )).all())
+
+
+def lists_keyboard(cnt: dict):
+    rows = [[(f"{label} · {cnt.get(st, 0)}", f"ll:{st}:0")] for st, label in LISTS]
+    return kb([rows[0] + rows[1], rows[2] + rows[3], rows[4]])
+
+
+def card_keyboard(lead: Lead, d: Delivery, user: User, client_id: int | None = None):
+    """Кнопки под карточкой в зависимости от статуса: из «Отказа» и «Спама» можно вернуть."""
+    if d.status in ("new", "postponed"):
+        return notify.lead_keyboard(lead, d.id, user.is_admin)
+    if d.status == "taken":
+        return kb([[("👤 Открыть клиента", f"cl:open:{client_id}")]]) if client_id else None
+    return kb([[("✍️ Написать", f"url:{lead_actions.contact_url(lead)}"), ("↩️ Вернуть в новые", f"lead:restore:{d.id}")]])
+
+
+async def send_card(msg: Message, s, d: Delivery, lead: Lead, user: User) -> None:
+    client_id = None
+    if d.status == "taken":
+        client_id = await s.scalar(select(Client.id).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
+    await msg.answer(
+        notify.lead_text(lead, await category_name(s, lead.category_id)),
+        reply_markup=card_keyboard(lead, d, user, client_id), disable_web_page_preview=True,
+    )
+
+
 @router.message(F.text == "📥 Заявки")
 async def leads_menu(m: Message, user: User) -> None:
     async with Session() as s:
         mine = Delivery.user_id == user.tg_id
-        cnt = dict((await s.execute(
-            select(Delivery.status, func.count()).where(mine, Delivery.sent).group_by(Delivery.status)
-        )).all())
+        cnt = await status_counts(s, user.tg_id)
         waiting = await s.scalar(select(func.count()).select_from(Delivery).where(mine, ~Delivery.sent))
         rows = (await s.execute(
             select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
             .where(mine, Delivery.sent, Delivery.status.in_(["new", "postponed"]))
-            .order_by(Delivery.id.desc()).limit(5)
+            .order_by(Delivery.id.desc()).limit(PAGE)
         )).all()
         await m.answer(
-            f"📥 Заявки: новых {cnt.get('new', 0)}, отложено {cnt.get('postponed', 0)}, "
-            f"в работе {cnt.get('taken', 0)}, отказ {cnt.get('rejected', 0)}"
+            "📥 Заявки по спискам — нажмите, чтобы открыть:"
             + (f"\n⏳ Ещё придут: {waiting}" if waiting else "")
-            + ("\nПоследние:" if rows else "\nНовых заявок пока нет — пришлю, как только появятся.")
+            + ("\nПоследние новые и отложенные ниже." if rows else "\nНовых заявок пока нет — пришлю, как только появятся."),
+            reply_markup=lists_keyboard(cnt),
         )
         for d, lead in rows:
             await send_card(m, s, d, lead, user)
+
+
+@router.callback_query(F.data.regexp(r"^ll:(new|postponed|taken|rejected|spam):\d{1,18}$"))
+async def leads_list(cb: CallbackQuery, user: User) -> None:
+    """Список заявок одного статуса, по 5, от новых к старым; «Ещё» — следующая страница."""
+    _, status, raw = cb.data.split(":")
+    before = int(raw)
+    async with Session() as s:
+        q = (select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
+             .where(Delivery.user_id == user.tg_id, Delivery.sent, Delivery.status == status))
+        if before:
+            q = q.where(Delivery.id < before)
+        rows = (await s.execute(q.order_by(Delivery.id.desc()).limit(PAGE + 1))).all()
+        label = dict(LISTS)[status]
+        if not rows:
+            await cb.answer()
+            return await cb.message.answer(f"{label}: пусто.")
+        await cb.message.answer(f"{label}:" if not before else f"{label} (дальше):")
+        for d, lead in rows[:PAGE]:
+            await send_card(cb.message, s, d, lead, user)
+    if len(rows) > PAGE:
+        await cb.message.answer("Есть ещё.", reply_markup=kb([[("⬇️ Показать ещё", f"ll:{status}:{rows[PAGE - 1][0].id}")]]))
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("lead:"))
@@ -77,10 +133,14 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
             return await cb.answer("Клиент в CRM")
         try:
             note = await lead_actions.apply_status(s, user, d, lead, action)
-        except lead_actions.ActionError:
-            return await cb.answer()
+        except lead_actions.ActionError as e:
+            return await cb.answer(str(e), show_alert=action == "restore")
         await s.commit()
-    await cb.message.edit_reply_markup(reply_markup=kb([[(f"✔ {note}", "noop")]]))
+    if action == "restore":
+        markup = notify.lead_keyboard(lead, d.id, user.is_admin)  # снова все кнопки, как у новой
+    else:  # не тупик: ошибся кнопкой — можно вернуть
+        markup = kb([[(f"✔ {note}", "noop"), ("↩️ Вернуть", f"lead:restore:{d.id}")]])
+    await cb.message.edit_reply_markup(reply_markup=markup)
     await cb.answer(note)
 
 

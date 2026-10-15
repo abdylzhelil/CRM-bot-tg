@@ -94,13 +94,21 @@ async def test_reject_and_duplicates_and_limits(maker, tgbot):
     await submissions.decide(cb(f"up:no:{g.id}", ADMIN_ID))
     async with maker() as s:
         assert (await s.get(Group, g.id)).status == "rejected"
-    # повторно ту же группу уже нельзя — она в базе
+    # другой человек ту же группу подать не может — она в базе
+    await make_user(maker, 51)
     tgbot.chats = {"@web_chat": chat(-1001, "web_chat")}
-    m = text_msg()
+    m = text_msg(51)
     m.bot = tgbot
     async with maker() as s:
         await ch.grp_link(s, m, {}, "@web_chat")
     assert "уже есть" in m.answer.call_args.args[0]
+    # а автор может исправить и подать снова
+    m = text_msg()
+    m.bot = tgbot
+    async with maker() as s:
+        await ch.grp_link(s, m, {}, "@web_chat")
+        assert (await s.get(Group, g.id)).status == "draft"
+    assert "К какой нише" in m.answer.call_args.args[0]
     # суточный лимит: 3 группы в сутки
     for i in range(3):
         await submit_group(maker, tgbot, tg_id=-2000 - i, username=f"chat_numb{i}")
@@ -190,3 +198,21 @@ async def test_channel_polling_makes_leads(maker, tgbot):
         lead = (await s.execute(select(__import__("app.models", fromlist=["Lead"]).Lead))).scalar_one()
     assert lead.username == "salon_owner" and lead.link == "https://t.me/ads_channel/13"
     assert any("salon_owner" in t for t in tgbot.texts(ADMIN_ID))
+
+
+async def test_admin_restores_rejected_and_user_drops_draft(maker, tgbot):
+    from app.models import User as U
+
+    await make_user(maker, 50)
+    g = await submit_group(maker, tgbot)
+    await submissions.decide(cb(f"up:no:{g.id}", ADMIN_ID))
+    await submissions.restore(cb(f"up:rok:{g.id}", ADMIN_ID))  # передумал — одобрил
+    async with maker() as s:
+        assert (await s.get(Group, g.id)).catalog
+    g2 = await submit_group(maker, tgbot, tg_id=-1500, username="chat_two")
+    await submissions.decide(cb(f"up:no:{g2.id}", ADMIN_ID))
+    async with maker() as s:
+        user = await s.get(U, 50)
+        from app.services import catalog
+        assert await catalog.drop_draft(s, await s.get(Group, g2.id), user)
+        assert (await s.get(Group, g2.id)).submitted_by == 0

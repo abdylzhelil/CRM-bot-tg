@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.bot.common import Ask, esc, kb, split_words
 from app.bot.handlers import adposts as adposts_h
+from app.bot.handlers import blacklist as blacklist_h
 from app.bot.handlers import clients as clients_h
 from app.db import Session
 from app.models import BlacklistEntry, Category, Keyword, ScoutAccount, SearchQuery
@@ -143,7 +144,7 @@ async def query_add(s, m, d, text):
 
 
 async def bl_add(s, m, d, text):
-    if not text.lstrip("-").isdigit():
+    if not (text.lstrip("-").isascii() and text.lstrip("-").isdigit()) or len(text) > 19:
         return await m.answer("Нужен числовой ID") and False
     uid = int(text)
     if not await s.get(BlacklistEntry, uid):
@@ -293,8 +294,9 @@ HANDLERS = {
     "kw_add": kw_add,
     "kw_del": kw_del,
     "bl_add": bl_add,
+    "bl_find": lambda s, m, d, t: blacklist_h.bl_find(s, m, d, t),
 }
-for _f in ("note", "budget", "phone"):
+for _f in ("note", "budget", "phone", "name"):
     HANDLERS[f"client_{_f}"] = lambda s, m, d, t, _f=_f: client_field(s, m, d, t, _f)
 for _f in ("add", "ren", "tpl", "prices", "city"):
     HANDLERS[f"cat_{_f}"] = lambda s, m, d, t, _f=_f: cat_field(s, m, d, t, _f)

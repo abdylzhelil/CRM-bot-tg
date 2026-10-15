@@ -596,3 +596,41 @@ async def test_cabinet_shows_card_and_unbinds_it(client, maker, monkeypatch):
         assert (u.renew_method, u.renew_card) == ("", "") and u.plan == "full"
     assert (await (await client.get("/api/plans", headers=tma(63))).json())["renew"] is None
     assert (await client.post("/api/renew/off", headers=tma(63))).status == 404  # повторно — нечего отвязывать
+
+
+async def test_crm_rename_cancel_reminder_and_delete(client, maker):
+    await make_user(maker, 33)
+    await make_user(maker, 34)
+    cid = (await (await client.post("/api/clients", json={"phone": "+79005556677"}, headers=tma(33))).json())["id"]
+    url = f"/api/clients/{cid}"
+    card = await (await client.patch(url, json={"name": "Ирина", "remind_days": 3}, headers=tma(33))).json()
+    assert card["name"] == "Ирина" and card["reminder"]
+    card = await (await client.patch(url, json={"remind_off": True}, headers=tma(33))).json()
+    assert card["reminder"] is None  # напоминание можно отменить
+    assert (await client.delete(url, headers=tma(34))).status == 404  # чужого не удалить
+    assert (await client.delete(url, headers=tma(33))).status == 200
+    assert (await client.get(url, headers=tma(33))).status == 404
+
+
+async def test_lead_restore_from_spam_and_spam_tab(client, maker):
+    from sqlalchemy import select
+
+    from app.models import BlacklistEntry, Delivery, Lead, SpamVote
+
+    await make_user(maker, 35)
+    async with maker() as s:
+        lead = Lead(group_id=0, group_title="Г", author_id=777, text="Нужен сайт", text_hash="h")
+        s.add(lead)
+        await s.commit()
+        d = Delivery(lead_id=lead.id, user_id=35, deliver_after=lead.created_at, sent=True)
+        s.add(d)
+        await s.commit()
+    assert (await client.post(f"/api/leads/{d.id}/spam", headers=tma(35))).status == 200
+    spam = await (await client.get("/api/leads?status=spam", headers=tma(35))).json()
+    assert [x["id"] for x in spam["items"]] == [d.id]  # вкладка «Спам» в кабинете
+    r = await (await client.post(f"/api/leads/{d.id}/restore", headers=tma(35))).json()
+    assert r["status"] == "new"
+    async with maker() as s:
+        assert await s.scalar(select(SpamVote).where(SpamVote.author_id == 777)) is None  # голос снят
+        assert await s.get(BlacklistEntry, 777) is None
+    assert (await client.post(f"/api/leads/{d.id}/restore", headers=tma(35))).status == 403  # новую «возвращать» нечего

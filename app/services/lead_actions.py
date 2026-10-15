@@ -6,7 +6,8 @@ from app.services import draft, settings, templates
 from app.services.distribute import root_category
 
 STATUS_NOTES = {"later": ("postponed", "Отложено"), "reject": ("rejected", "Отказ")}
-ACTIONS = ("take", "later", "reject", "spam", "client")
+ACTIONS = ("take", "later", "reject", "spam", "client", "restore")
+RESTORABLE = ("postponed", "rejected", "spam")
 
 
 class ActionError(Exception):
@@ -60,11 +61,34 @@ async def apply_status(s, user: User, d: Delivery, lead: Lead, action: str) -> s
         d.status = "spam"
         await vote_spam(s, lead, user)
         return "Это спам — автор больше не придёт"
+    if action == "restore":
+        return await restore(s, user, d, lead)
     if action == "client" and user.is_admin:
         await blacklist(s, lead, "client", "отмечено администратором")
         lead.suspicious = False
         return "В белом списке"
     raise ActionError("Действие недоступно")
+
+
+async def restore(s, user: User, d: Delivery, lead: Lead) -> str:
+    """↩️ Вернуть в новые (после «Отложить», «Отказ» или «Спам» по ошибке).
+
+    Для «спама» снимаем голос этого пользователя; если автор попал в общий чёрный список из-за голосов
+    и голосов стало меньше порога (или вернул администратор) — убираем его оттуда."""
+    if d.status not in RESTORABLE:
+        raise ActionError("Эту заявку вернуть нельзя")
+    if d.status == "spam":
+        vote = await s.get(SpamVote, (lead.author_id, user.tg_id))
+        if vote is not None:
+            await s.delete(vote)
+            await s.flush()
+        entry = await s.get(BlacklistEntry, lead.author_id)
+        if entry is not None and entry.status == "spam":
+            votes = await s.scalar(select(func.count()).select_from(SpamVote).where(SpamVote.author_id == lead.author_id))
+            if user.is_admin or votes < await settings.get_int(s, "spam_votes_to_ban"):
+                await s.delete(entry)
+    d.status = "new"
+    return "Вернул в новые"
 
 
 async def own_delivery(s, user: User, delivery_id: int):

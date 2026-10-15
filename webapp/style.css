@@ -7,6 +7,7 @@
   --accent-text: var(--tg-theme-button-text-color, #ffffff);
   --ok: #2e9d57;
   --warn: #d98a00;
+  --danger: #c62828;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -52,6 +53,7 @@ input[type=text], textarea { width: 100%; border: 1px solid color-mix(in srgb, v
 #toast.show { opacity: 1; transform: none; }
 #toast.bad { background: #b3261e; }
 .card .btn.ghost { background: var(--bg); }
+.btn.ghost.danger { color: var(--danger); margin-top: 8px; }
 .btn.small { flex: 1 1 42%; }
 .card.tap { cursor: pointer; }
 .tabs.scroll { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }

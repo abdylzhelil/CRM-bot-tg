@@ -129,7 +129,7 @@
   }
 
   // ---------- Заявки ----------
-  var TABS = [["new", "Новые"], ["postponed", "Отложено"], ["taken", "В работе"], ["rejected", "Отказ"]];
+  var TABS = [["new", "Новые"], ["postponed", "Отложено"], ["taken", "В работе"], ["rejected", "Отказ"], ["spam", "Спам"]];
 
   function renderLeads() {
     var list = el("div", { id: "leadlist" });
@@ -200,6 +200,10 @@
       row.push(act("reject", "❌ Отказ"), act("spam", "🚫 Спам"));
       card.appendChild(el("div", { class: "row" }, row));
       if (it.suspicious && state.me.role === "admin") card.appendChild(el("div", { class: "row" }, [act("client", "👍 Это клиент")]));
+    }
+    if (state.leadsStatus === "rejected" || state.leadsStatus === "spam") {
+      // ошибся кнопкой — заявка возвращается в «Новые» (для «спама» снимается и голос)
+      card.appendChild(el("div", { class: "row" }, [act("restore", "↩️ Вернуть в новые")]));
     }
     return card;
   }
@@ -318,7 +322,7 @@
   }
 
   function clientRow(c, names) {
-    var who = c.name || (c.username ? "@" + c.username : "Без имени");
+    var who = c.name || (c.username ? "@" + c.username : "") || c.phone || "Без имени";
     var sub = [names[c.stage] || c.stage, c.budget ? c.budget.toLocaleString("ru-RU") + " ₽" : "", c.source].filter(Boolean).join(" · ");
     return el("div", { class: "card tap", onclick: function () { renderClient(c.id); } }, [el("b", { text: who }), el("div", { class: "muted", text: sub })]);
   }
@@ -355,6 +359,7 @@
     }));
     var budget = el("input", { type: "text", inputmode: "numeric", value: c.budget ? String(c.budget) : "", placeholder: "Бюджет, ₽" });
     var phone = el("input", { type: "text", maxlength: "32", value: c.phone, placeholder: "Телефон" });
+    var name = el("input", { type: "text", maxlength: "255", value: c.name, placeholder: "Имя" });
     var note = el("textarea", { rows: "2", maxlength: "1000", placeholder: "Новая заметка" });
     var rem = [1, 3, 7].map(function (d) { return el("button", { class: "btn small ghost", text: "⏰ " + d + " дн", onclick: function () { patch({ remind_days: d }, "Напоминание поставлено"); } }); });
     show(
@@ -363,21 +368,28 @@
       el("h2", { text: "Этап" }), stageChips,
       c.contact ? el("div", { class: "row" }, [el("button", { class: "btn small", text: "✍️ Написать", onclick: function () { openContact(c.contact); } })]) : null,
       el("h2", { text: "Данные" }),
-      field("Бюджет", budget), field("Телефон", phone),
+      field("Имя", name), field("Бюджет", budget), field("Телефон", phone),
       el("button", { class: "btn small", text: "Сохранить данные", onclick: function () {
         var body = {}; if (budget.value.trim()) body.budget = budget.value; if (phone.value.trim()) body.phone = phone.value;
+        if (name.value.trim() && name.value.trim() !== c.name) body.name = name.value;
         patch(body);
       } }),
       el("h2", { text: "Напоминание" }),
       c.reminder ? el("div", { class: "muted", text: "Ближайшее: " + fmtDate(c.reminder) }) : el("div", { class: "muted", text: "Не поставлено" }),
-      el("div", { class: "row" }, rem),
+      el("div", { class: "row" }, rem.concat(c.reminder ? [el("button", { class: "btn small ghost", text: "🔕 Убрать", onclick: function () { patch({ remind_off: true }, "Напоминание отменено"); } })] : [])),
       el("h2", { text: "Заметки" }),
       c.notes ? el("pre", { class: "replytext", text: c.notes }) : el("div", { class: "muted", text: "Пока пусто" }),
       note,
       el("button", { class: "btn small", text: "Добавить заметку", onclick: function () { if (note.value.trim()) patch({ note: note.value }, "Заметка добавлена"); } }),
       el("h2", { text: "История" }),
       el("div", {}, c.events.map(function (e) { return el("div", { class: "muted", text: fmtDate(e.at) + " · " + e.text }); })),
-      el("button", { class: "btn ghost", text: "◀️ К списку", onclick: renderClients })
+      el("button", { class: "btn ghost", text: "◀️ К списку", onclick: renderClients }),
+      el("button", { class: "btn ghost danger", text: "🗑 Удалить клиента", onclick: function () {
+        confirmAsk("Удалить клиента вместе с историей и напоминаниями? Вернуть будет нельзя.", function () {
+          api("DELETE", "/api/clients/" + c.id).then(function () { toast("Клиент удалён"); renderClients(); })
+            .catch(function (e) { toast(e.message, true); });
+        });
+      } })
     );
   }
 

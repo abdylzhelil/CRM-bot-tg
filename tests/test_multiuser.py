@@ -254,3 +254,50 @@ async def test_pass_to_rejects_wildcards(maker, tgbot):
         await leads.pass_to(s, m, {"did": d.id}, "%")
     async with maker() as s:
         assert not await s.scalar(select(Delivery).where(Delivery.user_id == 43))  # «%» не значит «кто угодно»
+
+
+async def test_bot_lists_by_status_and_restore_button(maker, tgbot):
+    await make_user(maker, 44)
+    async with maker() as s:
+        lead = Lead(group_id=0, group_title="Г", author_id=558, text="Нужен сайт", text_hash="h", category_id=None)
+        s.add(lead)
+        await s.commit()
+        d = Delivery(lead_id=lead.id, user_id=44, deliver_after=now(), sent=True, status="rejected")
+        s.add(d)
+        await s.commit()
+        user = await s.get(User, 44)
+    c = MagicMock()
+    c.data, c.from_user.id = "ll:rejected:0", 44
+    c.answer, c.message.answer = AsyncMock(), AsyncMock()
+    await leads.leads_list(c, user)
+    markup = c.message.answer.call_args.kwargs["reply_markup"]
+    assert any(b.callback_data == f"lead:restore:{d.id}" for row in markup.inline_keyboard for b in row)
+    c.data = f"lead:restore:{d.id}"
+    c.message.edit_reply_markup = AsyncMock()
+    await leads.lead_action(c, user)
+    async with maker() as s:
+        assert (await s.get(Delivery, d.id)).status == "new"
+
+
+async def test_blacklist_remove_clears_votes_and_crm_delete(maker, tgbot):
+    from app.bot.handlers import blacklist
+    from app.models import SpamVote
+    from app.services import crm
+
+    async with maker() as s:
+        s.add(BlacklistEntry(user_id=900, username="spamer", status="spam", reason="голосов"))
+        s.add_all([SpamVote(author_id=900, user_id=uid) for uid in (1, 2, 3)])
+        await s.commit()
+    c = MagicMock()
+    c.data, c.from_user.id = "bl:rm:900", ADMIN_ID
+    c.answer, c.message.edit_text, c.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    await blacklist.remove(c)
+    async with maker() as s:
+        assert await s.get(BlacklistEntry, 900) is None
+        assert not (await s.scalars(select(SpamVote).where(SpamVote.author_id == 900))).all()
+        cl = await crm.create_client(s, 45, phone="+7900")
+        assert crm.display_name(cl) == "+7900"  # не «None»
+        await crm.add_reminder(s, cl, 1)
+        assert await crm.cancel_reminders(s, cl) == 1
+        await crm.delete_client(s, cl)
+        assert await s.get(Client, cl.id) is None

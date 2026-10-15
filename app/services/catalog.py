@@ -76,7 +76,7 @@ async def start_submission(s: AsyncSession, user: User, info: ChatInfo) -> Group
             raise SubmitError("На сегодня лимит добавленных групп исчерпан. Приходите завтра.")
     g = await s.scalar(select(Group).where(Group.tg_id == info.tg_id))
     if g is not None:
-        mine_draft = g.submitted_by == user.tg_id and g.status == "draft"
+        mine_draft = g.submitted_by == user.tg_id and g.status in ("draft", "rejected")  # отклонённую можно подать снова
         free_to_claim = g.submitted_by == 0 and g.status in ("candidate", "skipped")
         if not (mine_draft or free_to_claim):
             raise SubmitError("Эта группа уже есть в нашей базе 👍")
@@ -109,6 +109,28 @@ async def approve(s: AsyncSession, g: Group) -> None:
 async def reject(s: AsyncSession, g: Group) -> None:
     g.status, g.catalog = "rejected", False
     await s.commit()
+
+
+async def resume(s: AsyncSession, g: Group, user: User) -> bool:
+    """Продолжить черновик или подать отклонённую группу снова (снова ниша → город → проверка)."""
+    if g is None or g.submitted_by != user.tg_id or g.status not in ("draft", "rejected"):
+        return False
+    g.status = "draft"
+    await s.commit()
+    return True
+
+
+async def drop_draft(s: AsyncSession, g: Group, user: User) -> bool:
+    """Убрать свой черновик или отклонённую группу из «Мои группы»: группа освобождается (её сможет добавить кто угодно)."""
+    if g is None or g.submitted_by != user.tg_id or g.status not in ("draft", "rejected"):
+        return False
+    g.status, g.submitted_by, g.catalog = "skipped", 0, False
+    await s.commit()
+    return True
+
+
+async def rejected_count(s: AsyncSession) -> int:
+    return await s.scalar(select(func.count()).select_from(Group).where(Group.status == "rejected", Group.submitted_by != 0)) or 0
 
 
 async def pending_count(s: AsyncSession) -> int:

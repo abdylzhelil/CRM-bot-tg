@@ -171,6 +171,7 @@ def make_app() -> web.Application:
     app.router.add_post("/api/clients", api.client_create)
     app.router.add_get("/api/clients/{id}", api.client_get)
     app.router.add_patch("/api/clients/{id}", api.client_patch)
+    app.router.add_delete("/api/clients/{id}", api.client_delete)
     app.router.add_get("/api/referrals", api.referrals_get)
     app.router.add_get("/api/catalog", api.catalog_get)
     app.router.add_get("/api/catalog/my", api.catalog_my)

@@ -7,7 +7,7 @@ from app.bot.common import ask, esc, kb, reply
 from app.bot.handlers.leads import category_name
 from app.db import Session
 from app.models import STAGE_NAMES, STAGES, Client, ClientEvent, Reminder
-from app.services import crm
+from app.services import crm, quiet
 
 router = Router()
 PAGE = 20
@@ -36,7 +36,7 @@ async def show_list(target, stage: str, query: str = "") -> None:
     rows = [filters[i : i + 3] for i in range(0, len(filters), 3)]
     rows.append([(f"Все {sum(counts.values())}", "cl:list:all"), ("🔎 Поиск", "cl:find"), ("➕ Добавить", "cl:add")])
     for c in clients:
-        who = c.name or c.username or str(c.tg_id)
+        who = crm.display_name(c)
         rows.append([(f"{STAGE_NAMES[c.stage][:2]} {who}"[:60], f"cl:open:{c.id}")])
     title = "👥 Клиенты" + (f" · {STAGE_NAMES[stage]}" if stage != "all" else "") + (f" · «{esc(query)}»" if query else "")
     await reply(target, title if clients else title + "\nПусто.", kb(rows))
@@ -79,7 +79,7 @@ async def card(target, client_id: int) -> None:
         f"Источник: {esc(c.source) or '—'}",
     ]
     if rem:
-        lines.append(f"⏰ Напоминание: {rem.due_at:%d.%m %H:%M} (UTC)")
+        lines.append(f"⏰ Напоминание: {quiet.to_local(rem.due_at):%d.%m %H:%M}")
     if c.notes:
         lines.append(f"\n📝 {esc(c.notes[-500:])}")
     if events:
@@ -94,7 +94,9 @@ async def card(target, client_id: int) -> None:
     rows = [stage_btns[i : i + 2] for i in range(0, len(stage_btns), 2)]
     rows += [
         [("📝 Заметка", f"cl:note:{c.id}"), ("💰 Бюджет", f"cl:budget:{c.id}"), ("☎️ Телефон", f"cl:phone:{c.id}")],
-        [("⏰ 1 дн", f"cl:rem:{c.id}:1"), ("⏰ 3 дн", f"cl:rem:{c.id}:3"), ("⏰ 7 дн", f"cl:rem:{c.id}:7")],
+        [("⏰ 1 дн", f"cl:rem:{c.id}:1"), ("⏰ 3 дн", f"cl:rem:{c.id}:3"), ("⏰ 7 дн", f"cl:rem:{c.id}:7")]
+        + ([("🔕 Без напоминания", f"cl:unrem:{c.id}")] if rem else []),
+        [("✏️ Имя", f"cl:name:{c.id}"), ("🗑 Удалить", f"cl:del:{c.id}")],
         contact + [("◀️ К списку", "cl:list:all")],
     ]
     await reply(target, "\n".join(lines), kb(rows))
@@ -127,8 +129,45 @@ async def cb_rem(cb: CallbackQuery) -> None:
     await card(cb, int(cid))
 
 
-@router.callback_query(F.data.regexp(r"^cl:(note|budget|phone):\d+$"))
+@router.callback_query(F.data.regexp(r"^cl:unrem:\d+$"))
+async def cb_unrem(cb: CallbackQuery) -> None:
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        c = await owned(s, cid, cb.from_user.id)
+        if not c:
+            return await cb.answer("Клиент не найден")
+        await crm.cancel_reminders(s, c)
+    await cb.answer("Напоминание отменено")
+    await card(cb, cid)
+
+
+@router.callback_query(F.data.regexp(r"^cl:del:\d+$"))
+async def cb_del_ask(cb: CallbackQuery) -> None:
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        c = await owned(s, cid, cb.from_user.id)
+        if not c:
+            return await cb.answer("Клиент не найден")
+        who = crm.display_name(c)
+    await reply(cb, f"🗑 Удалить клиента «{esc(who)}» из CRM вместе с историей и напоминаниями? Вернуть будет нельзя.\n"
+                "Если сделка просто не состоялась — лучше поставьте этап «❌ Отказ», так статистика честнее.",
+                kb([[("🗑 Да, удалить", f"cl:delok:{cid}"), ("◀️ Нет", f"cl:open:{cid}")]]))
+
+
+@router.callback_query(F.data.regexp(r"^cl:delok:\d+$"))
+async def cb_del(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        c = await owned(s, int(cb.data.split(":")[2]), cb.from_user.id)
+        if not c:
+            return await cb.answer("Клиент уже удалён")
+        await crm.delete_client(s, c)
+    await cb.answer("Клиент удалён")
+    await show_list(cb, "all")
+
+
+@router.callback_query(F.data.regexp(r"^cl:(note|budget|phone|name):\d+$"))
 async def cb_edit(cb: CallbackQuery, state: FSMContext) -> None:
     _, field, cid = cb.data.split(":")
-    prompts = {"note": "Текст заметки:", "budget": "Бюджет клиента (число):", "phone": "Телефон клиента:"}
+    prompts = {"note": "Текст заметки:", "budget": "Бюджет клиента (число):", "phone": "Телефон клиента:",
+               "name": "Новое имя клиента:"}
     await ask(cb, state, f"client_{field}", prompts[field], id=int(cid))

@@ -1,7 +1,7 @@
 """CRM пользователя: клиенты, этапы, заметки, напоминания — общая логика для бота и мини-приложения."""
 from datetime import timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from app.models import STAGE_NAMES, Client, ClientEvent, Reminder, now
 
@@ -85,6 +85,12 @@ async def update_field(s, c: Client, field: str, value: str) -> None:
         c.budget = int(digits[:9])
     elif field == "phone":
         c.phone = value[:32]
+    elif field == "name":
+        if not value:
+            raise CrmError("Пустое имя")
+        old = c.name
+        c.name = value[:255]
+        s.add(ClientEvent(client_id=c.id, text=f"Имя: {old or '—'} → {c.name}"[:300]))
     else:
         raise CrmError("Неизвестное поле")
     await s.commit()
@@ -97,3 +103,27 @@ async def events(s, client_id: int, limit: int = 10) -> list[ClientEvent]:
 
 async def next_reminder(s, client_id: int) -> Reminder | None:
     return await s.scalar(select(Reminder).where(Reminder.client_id == client_id, ~Reminder.sent).order_by(Reminder.due_at))
+
+
+async def cancel_reminders(s, c: Client) -> int:
+    """Убрать все неотправленные напоминания по клиенту. Возвращает, сколько убрано."""
+    rows = (await s.scalars(select(Reminder).where(Reminder.client_id == c.id, ~Reminder.sent))).all()
+    for r in rows:
+        await s.delete(r)
+    if rows:
+        s.add(ClientEvent(client_id=c.id, text="Напоминание отменено"))
+    await s.commit()
+    return len(rows)
+
+
+async def delete_client(s, c: Client) -> None:
+    """Удалить клиента из своей CRM вместе с историей и напоминаниями (заявки остаются в 📥 Заявки)."""
+    await s.execute(delete(ClientEvent).where(ClientEvent.client_id == c.id))
+    await s.execute(delete(Reminder).where(Reminder.client_id == c.id))
+    await s.delete(c)
+    await s.commit()
+
+
+def display_name(c: Client) -> str:
+    """Как подписать клиента в списке: имя, @ник, телефон — что есть."""
+    return c.name or (f"@{c.username}" if c.username else "") or c.phone or "без имени"

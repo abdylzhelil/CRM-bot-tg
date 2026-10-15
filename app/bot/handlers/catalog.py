@@ -156,7 +156,7 @@ async def notify_admins(g: Group) -> None:
 @router.callback_query(F.data == "cg:my")
 async def my_groups(cb: CallbackQuery, user: User) -> None:
     async with Session() as s:
-        groups = (await s.scalars(select(Group).where(Group.submitted_by == user.tg_id, Group.status != "draft")
+        groups = (await s.scalars(select(Group).where(Group.submitted_by == user.tg_id)
                                   .order_by(Group.submitted_at.desc()).limit(30))).all()
         per = await settings.get_int(s, "bonus_leads")
     if not groups:
@@ -165,8 +165,33 @@ async def my_groups(cb: CallbackQuery, user: User) -> None:
              + (f", заявок: {g.leads_count}" if g.catalog else "") for g in groups]
     days = sum(catalog.bonus_days(g, per) for g in groups)
     ad_rows = [[(f"📢 Продвинуть мою группу: {g.title[:20]}", f"ad:ask:{g.id}")] for g in groups if g.catalog]
+    # не тупик: черновик можно дозаполнить, отклонённую — исправить и подать снова, лишнее — убрать
+    fix_rows = [[(("✏️ Дозаполнить: " if g.status == "draft" else "🔄 Подать снова: ") + g.title[:20], f"cg:resume:{g.id}"),
+                 ("🗑", f"cg:drop:{g.id}")] for g in groups if g.status in ("draft", "rejected")]
     await reply(cb, "📂 <b>Мои группы</b>\n\n" + "\n".join(lines) + f"\n\n🎁 Получено бонусных дней: {days}\n🏆 Уровень: {levels.name(user.level)}",
-                kb(ad_rows + [[("◀️ Назад", "cg:menu")]]))
+                kb(fix_rows + ad_rows + [[("◀️ Назад", "cg:menu")]]))
+
+
+@router.callback_query(F.data.regexp(r"^cg:resume:\d+$"))
+async def resume(cb: CallbackQuery, user: User) -> None:
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if not await catalog.resume(s, g, user):
+            return await cb.answer("Эта группа уже обработана", show_alert=True)
+        roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), Category.enabled).order_by(Category.id))).all()
+    rows = [[(f"{c.emoji} {c.name}", f"cg:cat:{g.id}:{c.id}")] for c in roots]
+    await reply(cb, f"{KIND[g.kind]} <b>{esc(g.title)}</b>\nК какой нише относится? (дальше — город и отправка на проверку)",
+                kb(rows + [[("◀️ Мои группы", "cg:my")]]))
+
+
+@router.callback_query(F.data.regexp(r"^cg:drop:\d+$"))
+async def drop(cb: CallbackQuery, user: User) -> None:
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if not await catalog.drop_draft(s, g, user):
+            return await cb.answer("Эта группа уже обработана", show_alert=True)
+    await cb.answer("Убрано из «Мои группы»")
+    await my_groups(cb, user)
 
 
 @router.callback_query(F.data.regexp(r"^ad:ask:\d+$"))

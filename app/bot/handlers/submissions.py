@@ -31,10 +31,12 @@ async def pending_list(cb: CallbackQuery) -> None:
     async with Session() as s:
         groups = (await s.scalars(select(Group).where(Group.status == "pending").order_by(Group.submitted_at).limit(5))).all()
         total = await catalog.pending_count(s)
+        rejected = await catalog.rejected_count(s)
+    rej_row = [(f"❌ Отклонённые {rejected}", "up:rej")]
     if not groups:
-        return await reply(cb, "📝 Новых групп от пользователей нет.", kb([[("◀️ Назад", "gr:menu")]]))
+        return await reply(cb, "📝 Новых групп от пользователей нет.", kb([rej_row, [("◀️ Назад", "gr:menu")]]))
     await cb.answer()
-    await cb.message.answer(f"📝 Группы на проверке: {total} (показаны первые {len(groups)})")
+    await cb.message.answer(f"📝 Группы на проверке: {total} (показаны первые {len(groups)})", reply_markup=kb([rej_row]))
     for g in groups:
         text, markup = await card(g)
         await cb.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
@@ -52,12 +54,48 @@ async def decide(cb: CallbackQuery) -> None:
             await catalog.approve(s, g)
         else:
             await catalog.reject(s, g)
-    await cb.message.edit_reply_markup(reply_markup=kb([[("✔ Одобрена" if action == "ok" else "✔ Отклонена", "noop")]]))
+    done = [("✔ Одобрена", "noop")] if action == "ok" else [("✔ Отклонена", "noop"), ("↩️ Всё-таки одобрить", f"up:rok:{gid}")]
+    await cb.message.edit_reply_markup(reply_markup=kb([done]))
     await cb.answer()
     text = (f"✅ Ваша группа «{esc(title)}» одобрена и добавлена в каталог. За заявки из неё вы получите бонусы 🎁"
-            if action == "ok" else f"❌ Группа «{esc(title)}» не прошла проверку.")
+            if action == "ok" else f"❌ Группа «{esc(title)}» не прошла проверку. Если что-то было не так (ниша, город) — "
+            "исправьте и подайте снова: 🌐 Каталог → 📂 Мои группы → 🔄 Подать снова.")
     try:
         await cb.bot.send_message(owner, text)
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "up:rej")
+async def rejected_list(cb: CallbackQuery) -> None:
+    """Отклонённые группы пользователей: можно передумать и одобрить."""
+    async with Session() as s:
+        groups = (await s.scalars(select(Group).where(Group.status == "rejected", Group.submitted_by != 0)
+                                  .order_by(Group.submitted_at.desc()).limit(10))).all()
+    if not groups:
+        return await reply(cb, "❌ Отклонённых групп нет.", kb([[("◀️ Назад", "up:list")]]))
+    await cb.answer()
+    await cb.message.answer(f"❌ Отклонённые группы (последние {len(groups)}). Пользователь может исправить и подать снова; "
+                            "вы — одобрить сразу:")
+    for g in groups:
+        text, _ = await card(g)
+        await cb.message.answer(text, reply_markup=kb([[("↩️ Одобрить", f"up:rok:{g.id}")]]), disable_web_page_preview=True)
+
+
+@router.callback_query(F.data.regexp(r"^up:rok:\d+$"))
+async def restore(cb: CallbackQuery) -> None:
+    """Передумал: отклонённая группа всё-таки идёт в каталог."""
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if g is None or g.status != "rejected" or not g.submitted_by:
+            return await cb.answer("Уже обработано", show_alert=True)
+        title, owner = g.title, g.submitted_by
+        await catalog.approve(s, g)
+    await cb.message.edit_reply_markup(reply_markup=kb([[("✔ Одобрена", "noop")]]))
+    await cb.answer()
+    try:
+        await cb.bot.send_message(owner, f"✅ Ваша группа «{esc(title)}» одобрена и добавлена в каталог. "
+                                  "За заявки из неё вы получите бонусы 🎁")
     except Exception:
         pass
 

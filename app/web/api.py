@@ -11,7 +11,7 @@ from app.services.distribute import is_paid
 from app.bot.handlers.leads import category_name
 from app.web.keys import USER_KEY
 
-STATUSES = ("new", "postponed", "taken", "rejected")
+STATUSES = ("new", "postponed", "taken", "rejected", "spam")
 PAGE = 20
 
 
@@ -223,7 +223,8 @@ async def client_create(request: web.Request) -> web.Response:
 
 
 async def client_patch(request: web.Request) -> web.Response:
-    """Меняет присланное: stage, budget, phone, note (дописывается), remind_days (добавляет напоминание)."""
+    """Меняет присланное: stage, budget, phone, name, note (дописывается), remind_days (добавляет напоминание),
+    remind_off (убирает напоминания)."""
     user: User = request[USER_KEY]
     data = await read_json(request)
     if data is None:
@@ -235,14 +236,26 @@ async def client_patch(request: web.Request) -> web.Response:
         try:
             if "stage" in data:
                 await crm.set_stage(s, c, str(data["stage"]))
-            for field in ("budget", "phone", "note"):
+            for field in ("budget", "phone", "note", "name"):
                 if field in data and str(data[field]).strip():
                     await crm.update_field(s, c, field, str(data[field]))
             if "remind_days" in data:
                 await crm.add_reminder(s, c, _int(data["remind_days"], -1))
+            if data.get("remind_off"):
+                await crm.cancel_reminders(s, c)
         except crm.CrmError as e:
             return err("invalid", str(e), 422)
         return web.json_response(await client_card(s, c))
+
+
+async def client_delete(request: web.Request) -> web.Response:
+    user: User = request[USER_KEY]
+    async with Session() as s:
+        c = await crm.owned(s, _int(request.match_info["id"]), user.tg_id)
+        if c is None:
+            return err("not_found", "Клиент не найден", 404)
+        await crm.delete_client(s, c)
+    return web.json_response({"ok": True})
 
 
 # ---------- друзья ----------
