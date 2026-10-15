@@ -139,8 +139,16 @@ async def test_forbidden_group_marks_failed_and_can_retry(maker, tgbot):
     assert await publisher.publish_one(mgr) is True
     async with maker() as s:
         post = await s.scalar(select(AdPost))
+        # группа закрыта сейчас (ночной режим и т. п.) — не сдаёмся сразу, пробуем через 1–2 часа
+        assert post.status == "queued" and post.scheduled_at > now() + timedelta(minutes=50) and "позже" in post.error
+        post.first_try_at = now() - timedelta(hours=25)  # прошли сутки, а группа всё закрыта
+        post.scheduled_at = now() - timedelta(seconds=1)
+        await s.commit()
+    assert await publisher.publish_one(mgr) is True
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
         order = await s.get(AdOrder, oid)
-        assert post.status == "failed" and "запрещено" in post.error and order.status == "done"
+        assert post.status == "failed" and "нельзя писать" in post.error and order.status == "done"
         assert await adposts.retry_failed(s, order) == 1
         assert order.status == "running" and (await s.scalar(select(AdPost))).status == "queued"
     assert any("не вышло" in t for t in tgbot.texts(ADMIN_ID)) and any("выполнен" in t for t in tgbot.texts(70))
@@ -766,3 +774,136 @@ async def test_photo_input_and_non_text_answer(maker, tgbot, tmp_path, monkeypat
     m2.photo, m2.answer = None, AsyncMock()
     await inputs.on_media(m2, state)
     assert "текстом" in m2.answer.call_args.args[0]
+
+
+async def test_group_hours_window(maker, tgbot, monkeypatch):
+    """У группы часы «9-21»: вне их разведчик ждёт, в них — публикует."""
+    from app.services import quiet
+
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        (await s.scalar(select(Group))).ad_hours = "9-21"
+        await s.commit()
+    mgr, client = manager()
+    monkeypatch.setattr(quiet, "local_now", lambda: now().replace(hour=23))
+    assert await publisher.publish_one(mgr) is False
+    monkeypatch.setattr(quiet, "local_now", lambda: now().replace(hour=12))
+    assert await publisher.publish_one(mgr) is True
+    client.send_message.assert_awaited_once()
+
+
+async def test_deleted_post_detected(maker, tgbot):
+    """Пост удалили правила/бот группы: через 15 минут бот это видит, выключает рекламу в группе и сообщает."""
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    mgr, client = manager()
+    await publisher.publish_one(mgr)
+    assert await publisher.check_posts(mgr) == 0  # 15 минут ещё не прошло
+    async with maker() as s:
+        (await s.scalar(select(AdPost))).sent_at = now() - timedelta(minutes=16)
+        await s.commit()
+    client.get_messages = AsyncMock(return_value=None)  # сообщения больше нет
+    assert await publisher.check_posts(mgr) == 1
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
+        assert post.status == "deleted" and post.checked
+        assert not (await s.scalar(select(Group))).ads_allowed
+    assert any("удалили" in t for t in tgbot.texts(ADMIN_ID)) and any("удалили" in t for t in tgbot.texts(70))
+    assert await publisher.check_posts(mgr) == 0  # второй раз не проверяем
+
+
+async def test_group_hours_and_note_inputs(maker, tgbot):
+    await setup_group(maker)
+    m = MagicMock()
+    m.answer = AsyncMock()
+    async with maker() as s:
+        gid = (await s.scalar(select(Group))).id
+        assert await ah.apg_hours(s, m, {"gid": gid}, "25-3") is False
+        await ah.apg_hours(s, m, {"gid": gid}, "9 - 21")
+        await ah.apg_note(s, m, {"gid": gid}, "подписка на @kanal — сделано")
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        assert g.ad_hours == "9-21" and "подписка" in g.ad_note
+
+
+def test_split_price_sums_exactly():
+    assert adposts.split_price(1000, [300, 300, 400]) == [300, 300, 400]
+    assert sum(adposts.split_price(1000, [1, 1, 1])) == 1000
+    assert adposts.split_price(500, [0, 0]) == [250, 250]
+
+
+async def test_partial_finish_refunds_unpublished_part(maker, tgbot, monkeypatch):
+    """Вышло в одной группе из двух: «✂️ Выполнен частично» снимает очередь и возвращает долю второй группы."""
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    from app.models import Payment
+
+    await setup_group(maker, price=300)
+    await make_user(maker, 70)
+    async with maker() as s:
+        s.add(Group(tg_id=-102, username="g3", title="Вторая", members=100, status="joined", kind="group",
+                    account_id=1, ads_allowed=True, ad_price=700))
+        await s.commit()
+        order = await adposts.new_draft(s, 70, TEXT)
+        for g in (await s.scalars(select(Group))).all():
+            await adposts.toggle_group(s, order, g.id)
+        await adposts.submit(s, order)
+        assert order.price == 1000
+        await adposts.approve(s, order)
+        await adposts.mark_paid(s, order.id, "yk-9", 100000)
+        oid = order.id
+    mgr, client = manager()
+    await publisher.publish_one(mgr)  # первый пост вышел, второй ждёт паузы
+    calls = []
+
+    async def fake_refund(pid, amount, cur, key):
+        calls.append((amount, key))
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(payments, "_yookassa_refund", fake_refund)
+    async with maker() as s:
+        order = await s.get(AdOrder, oid)
+        sent_group = (await s.scalar(select(AdPost).where(AdPost.status == "sent"))).group_id
+        expected = 700 if (await s.get(Group, sent_group)).ad_price != 700 else 300
+        assert await adposts.unpublished_value(s, order) == expected
+    c = MagicMock()
+    c.data, c.from_user.id = f"apa:pok:{oid}:1", ADMIN_ID
+    c.answer, c.message.edit_text, c.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(ah, "reply", AsyncMock())
+    await ah.partial_do(c)
+    async with maker() as s:
+        order = await s.get(AdOrder, oid)
+        pay = await s.scalar(select(Payment))
+        assert order.status == "done" and pay.refunded_amount == expected * 100 and not pay.refunded
+        assert (await s.scalar(select(AdPost).where(AdPost.status == "canceled"))) is not None
+        assert await adposts.unpublished_value(s, order) == 0  # второй раз вернуть то же нельзя
+    assert calls == [(expected * 100, f"refund-{pay.id}-part-0")]
+    assert any("выполнен частично" in t and f"вернули {expected}" in t for t in tgbot.texts(70))
+
+
+async def test_failed_group_switched_off_and_no_media(maker, tgbot):
+    """Аккаунт забанен в группе — группа сама уходит из списка для покупателей; картинки запрещены — только текст."""
+    from telethon.errors import ChatSendPhotosForbiddenError, UserBannedInChannelError
+
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    mgr, _ = manager(send=AsyncMock(side_effect=UserBannedInChannelError(request=None)))
+    await publisher.publish_one(mgr)
+    async with maker() as s:
+        assert not (await s.scalar(select(Group))).ads_allowed
+        assert await adposts.eligible_groups(s) == []
+        g = await s.scalar(select(Group))
+        g.ads_allowed, g.no_media = True, True
+        await s.commit()
+        assert len(await adposts.eligible_groups(s)) == 1
+        assert await adposts.eligible_groups(s, photo=True) == []  # с картинкой туда не предлагаем
+    assert ChatSendPhotosForbiddenError  # (ошибка «картинки запрещены» помечает группу no_media)

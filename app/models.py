@@ -75,6 +75,9 @@ class Group(Base):
     ads_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # админ разрешил публиковать рекламу разведчиком
     ad_price: Mapped[int] = mapped_column(Integer, default=0)  # цена поста именно здесь, ₽ (0 — общая adpost_price)
     ad_account_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # кто публикует (для каналов — аккаунт-админ канала)
+    ad_hours: Mapped[str] = mapped_column(String(16), default="")  # «9-21» — публиковать только в эти часы (местное время)
+    ad_note: Mapped[str] = mapped_column(String(255), default="")  # условия группы для рекламы (заметка админа)
+    no_media: Mapped[bool] = mapped_column(Boolean, default=False)  # картинки в группе запрещены — только текстовая реклама
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
 
@@ -313,6 +316,7 @@ class Payment(Base):
     charge_id: Mapped[str] = mapped_column(String(128), unique=True)  # id платежа Telegram — защита от повторов
     provider_id: Mapped[str] = mapped_column(String(128), default="")  # id платежа в ЮKassa — нужен для возврата
     refunded: Mapped[bool] = mapped_column(Boolean, default=False)
+    refunded_amount: Mapped[int] = mapped_column(Integer, default=0)  # уже возвращено, копейки (частичный возврат)
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -388,3 +392,6 @@ class AdPost(Base):
     message_id: Mapped[int] = mapped_column(Integer, default=0)
     link: Mapped[str] = mapped_column(String(255), default="")
     error: Mapped[str] = mapped_column(String(255), default="")
+    first_try_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # группа была закрыта — ждём до суток
+    price: Mapped[int] = mapped_column(Integer, default=0)  # доля цены заказа за эту группу, ₽ (для частичного возврата)
+    checked: Mapped[bool] = mapped_column(Boolean, default=False)  # через 15 мин проверили, что пост не удалён

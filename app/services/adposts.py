@@ -22,7 +22,10 @@ STATUS = {
     "draft": "✏️ черновик", "pending": "⏳ на проверке", "approved": "💳 ждёт оплаты", "running": "📤 публикуется",
     "done": "✅ готово", "rejected": "❌ отклонён", "canceled": "🚫 отменён",
 }
-POST_STATUS = {"queued": "⏳ в очереди", "sent": "✅ опубликовано", "failed": "⚠️ не вышло", "canceled": "🚫 отменено"}
+POST_STATUS = {"queued": "⏳ в очереди", "sent": "✅ опубликовано", "failed": "⚠️ не вышло", "canceled": "🚫 отменено",
+               "deleted": "🗑 удалён в группе"}
+CLOSED_WAIT = timedelta(hours=24)  # группа закрыта (ночной режим, «писать нельзя») — пробуем снова до суток
+CHECK_AFTER = timedelta(minutes=15)  # через сколько проверить, что пост не удалили правила/бот группы
 
 
 # основы слов, при которых заказ автоматически не одобряется (идёт к администратору на проверку)
@@ -51,12 +54,16 @@ def publisher_id():
     return func.coalesce(Group.ad_account_id, Group.account_id)
 
 
-async def eligible_groups(s: AsyncSession, city: str = "") -> list[Group]:
-    """Группы и каналы, куда можно заказать рекламу: админ разрешил, есть включённый аккаунт-публикатор."""
-    rows = (await s.scalars(
-        select(Group).join(ScoutAccount, ScoutAccount.id == publisher_id())
-        .where(Group.status == "joined", Group.ads_allowed, ScoutAccount.enabled, ScoutAccount.can_post)
-        .order_by(Group.members.desc()))).all()
+async def eligible_groups(s: AsyncSession, city: str = "", photo: bool = False) -> list[Group]:
+    """Группы и каналы, куда можно заказать рекламу: админ разрешил, есть включённый аккаунт-публикатор.
+
+    Группа, где публикация не получилась (бан, закрыта, пост удалили), выключается сама и сюда не попадает;
+    для рекламы с картинкой не показываем группы, где картинки запрещены."""
+    q = (select(Group).join(ScoutAccount, ScoutAccount.id == publisher_id())
+         .where(Group.status == "joined", Group.ads_allowed, ScoutAccount.enabled, ScoutAccount.can_post))
+    if photo:
+        q = q.where(~Group.no_media)
+    rows = (await s.scalars(q.order_by(Group.members.desc()))).all()
     # группы города пользователя — вперёд
     return sorted(rows, key=lambda g: 0 if city and g.city.lower() == city.lower() else 1)
 
@@ -155,7 +162,7 @@ async def submit(s: AsyncSession, order: AdOrder) -> AdOrder:
     ids = selected(order)
     if not ids:
         raise AdError("Выберите хотя бы одну группу.")
-    allowed = {g.id for g in await eligible_groups(s)}
+    allowed = {g.id for g in await eligible_groups(s, photo=bool(order.photo))}
     if not set(ids) <= allowed:
         raise AdError("Некоторые группы больше недоступны для рекламы — выберите заново.")
     order.price = await price_of_groups(s, ids)
@@ -207,10 +214,30 @@ async def start(s: AsyncSession, order: AdOrder) -> bool:
     """Поставить публикации в очередь (после одобрения/оплаты). False — заказ уже запущен/отменён кем-то другим."""
     if not await _claim(s, order, ("pending", "approved"), "running"):
         return False
-    for gid in selected(order):
-        s.add(AdPost(order_id=order.id, group_id=gid))
+    s.add_all(await _new_posts(s, order))
     await s.commit()
     return True
+
+
+async def _new_posts(s: AsyncSession, order: AdOrder) -> list[AdPost]:
+    """Посты заказа; каждому — его доля цены заказа (по ценам групп), чтобы можно было вернуть деньги за невышедшие."""
+    ids = selected(order)
+    default = await settings.get_int(s, "adpost_price")
+    groups = {g.id: g for g in (await s.scalars(select(Group).where(Group.id.in_(ids)))).all()} if ids else {}
+    weights = [group_price(groups[i], default) if i in groups else 0 for i in ids]
+    prices = split_price(order.price, weights)
+    return [AdPost(order_id=order.id, group_id=gid, price=p) for gid, p in zip(ids, prices)]
+
+
+def split_price(total: int, weights: list[int]) -> list[int]:
+    """Разделить сумму заказа по группам пропорционально их ценам (поровну, если цены нулевые); сумма сходится точно."""
+    if not weights:
+        return []
+    if sum(weights) <= 0:
+        weights = [1] * len(weights)
+    parts = [total * w // sum(weights) for w in weights]
+    parts[parts.index(max(parts))] += total - sum(parts)  # остаток от округления — самой дорогой группе
+    return parts
 
 
 async def mark_paid(s: AsyncSession, order_id: int, yk_id: str, amount_kop: int = 0, currency: str = "RUB"):
@@ -226,7 +253,7 @@ async def mark_paid(s: AsyncSession, order_id: int, yk_id: str, amount_kop: int 
     pay = Payment(user_id=order.user_id, days=0, amount=amount_kop or order.price * 100, currency=currency,
                   charge_id=f"yk:{yk_id}", provider_id=yk_id)  # days=0 — это реклама, тариф не трогаем
     s.add(pay)
-    s.add_all([AdPost(order_id=order.id, group_id=gid) for gid in selected(order)])
+    s.add_all(await _new_posts(s, order))
     await s.commit()  # оплата, статус и очередь постов — одним сохранением
     return order, pay
 
@@ -324,11 +351,79 @@ async def account_ready(s: AsyncSession, account_id: int) -> bool:
     return last is None or now() - last >= gap
 
 
+def in_hours(g: Group, hour: int | None = None) -> bool:
+    """Можно ли публиковать в группе сейчас: у группы могут быть часы «9-21» (пусто — в любое время)."""
+    from app.services import quiet
+
+    hours = quiet.parse_hours(g.ad_hours)
+    if not hours:
+        return True
+    return quiet.in_quiet(quiet.local_now().hour if hour is None else hour, hours)
+
+
+def closed_now(post: AdPost) -> bool:
+    """Группа закрыта для записи. True — ещё ждём (пост перенесён), False — сутки прошли, пора сдаваться."""
+    import random
+
+    if post.first_try_at is None:
+        post.first_try_at = now()
+    if now() - post.first_try_at >= CLOSED_WAIT:
+        return False
+    post.scheduled_at = now() + timedelta(minutes=random.randint(60, 120))
+    post.error = "группа сейчас закрыта для сообщений — попробую позже"
+    return True
+
+
+async def due_checks(s: AsyncSession, limit: int = 3) -> list[AdPost]:
+    """Опубликованные посты, которые пора проверить (не удалили ли их правила или бот группы)."""
+    return list((await s.scalars(select(AdPost).where(
+        AdPost.status == "sent", ~AdPost.checked, AdPost.sent_at <= now() - CHECK_AFTER,
+        AdPost.sent_at > now() - timedelta(days=2)).order_by(AdPost.id).limit(limit))).all())
+
+
 async def due_posts(s: AsyncSession) -> list[AdPost]:
     return list((await s.scalars(
         select(AdPost).join(AdOrder, AdOrder.id == AdPost.order_id)
         .where(AdPost.status == "queued", AdPost.scheduled_at <= now(), AdOrder.status == "running")
         .order_by(AdPost.id))).all())
+
+
+NOT_PUBLISHED = ("queued", "failed", "deleted", "canceled")
+
+
+async def order_payment(s: AsyncSession, order: AdOrder):
+    from app.models import Payment
+
+    return await s.scalar(select(Payment).where(Payment.charge_id == f"yk:{order.yk_id}")) if order.yk_id else None
+
+
+async def unpublished_value(s: AsyncSession, order: AdOrder) -> int:
+    """Сколько ₽ приходится на группы, где пост не вышел (или удалён), минус то, что уже вернули."""
+    posts = (await s.scalars(select(AdPost).where(AdPost.order_id == order.id))).all()
+    if not posts or not order.price:
+        return 0
+    if all(p.price == 0 for p in posts):  # посты до обновления — делим цену заказа по нынешним ценам групп
+        fresh = await _new_posts(s, order)
+        by_group = {p.group_id: p.price for p in fresh}
+        value = sum(by_group.get(p.group_id, 0) for p in posts if p.status in NOT_PUBLISHED)
+    else:
+        value = sum(p.price for p in posts if p.status in NOT_PUBLISHED)
+    pay = await order_payment(s, order)
+    already = (pay.refunded_amount // 100) if pay is not None else 0
+    return max(0, min(value, order.price) - already)
+
+
+async def finish_partial(s: AsyncSession, order: AdOrder) -> int:
+    """✂️ Выполнен частично: оставшиеся в очереди посты снимаются, заказ завершается. Возвращает число снятых."""
+    if order.status == "running" and not await _claim(s, order, ("running",), "done"):
+        raise AdError("Заказ уже изменился — откройте его снова.")
+    if order.status != "done":
+        raise AdError("Частично завершить можно только заказ, который публикуется или выполнен.")
+    posts = (await s.scalars(select(AdPost).where(AdPost.order_id == order.id, AdPost.status == "queued"))).all()
+    for p in posts:
+        p.status, p.error = "canceled", "заказ завершён частично"
+    await s.commit()
+    return len(posts)
 
 
 async def finish_if_done(s: AsyncSession, order: AdOrder) -> bool:

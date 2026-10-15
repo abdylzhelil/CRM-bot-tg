@@ -91,8 +91,9 @@ async def ap_list(cb: CallbackQuery, user: User) -> None:
     def line(g: Group) -> str:
         price = adposts.group_price(g, default)
         name = f"<a href=\"https://t.me/{esc(g.username)}\">{esc(g.title[:44])}</a>" if g.username else esc(g.title[:44])
+        hours = f" · 🕘 публикуем с {g.ad_hours.replace('-', ' до ')} ч" if g.ad_hours else ""
         return (f"• {KIND.get(g.kind, '')} {name} — {g.members} уч." + (f", {esc(g.city)}" if g.city else "")
-                + f" — <b>{price} ₽</b>" if price else f"• {KIND.get(g.kind, '')} {name} — {g.members} уч. — бесплатно")
+                + (f" — <b>{price} ₽</b>" if price else " — бесплатно") + hours)
 
     total = sum(g.members for g in groups[:30])
     await reply(cb, ("📋 <b>Где можно разместить рекламу</b> (цена за один пост)\n\n" + "\n".join(line(g) for g in groups[:30])
@@ -122,7 +123,7 @@ KIND = {"group": "👥", "channel": "📢"}
 
 
 async def show_picker(target, s, order: AdOrder, city: str) -> None:
-    groups = (await adposts.eligible_groups(s, city))[:20]
+    groups = (await adposts.eligible_groups(s, city, photo=bool(order.photo)))[:20]
     default = await settings.get_int(s, "adpost_price")
     chosen = set(adposts.selected(order))
     rows = [[(("✅ " if g.id in chosen else "▫️ ") + f"{KIND.get(g.kind, '')} {g.title[:26]} · {g.members} · "
@@ -170,9 +171,14 @@ async def ap_toggle(cb: CallbackQuery, user: User) -> None:
 
 async def summary(s, order: AdOrder, admin: bool = False) -> str:
     posts = await adposts.posts_of(s, order.id)
+    tail = ""
     if posts:
-        lines = [f"{adposts.POST_STATUS[p.status]} {esc(g.title[:40])}" + (f" — {esc(p.error)}" if p.error else "")
+        lines = [f"{adposts.POST_STATUS[p.status]} {esc(g.title[:40])}" + queue_note(p, g)
                  + (f' (<a href="{p.link}">пост</a>)' if p.link else "") for p, g in posts]
+        if any(p.status == "queued" for p, _ in posts):
+            gap, limit = await settings.get_int(s, "adpost_gap_min"), await settings.get_int(s, "adpost_daily_limit")
+            tail = (f"\n\n⏳ Посты выходят по очереди, чтобы Telegram не счёл это спамом: с одного аккаунта не чаще "
+                    f"раза в {gap} мин и до {limit} в сутки. Остальные выйдут сами.")
     else:
         groups = (await s.scalars(select(Group).where(Group.id.in_(adposts.selected(order))))).all()
         default = await settings.get_int(s, "adpost_price")
@@ -184,7 +190,21 @@ async def summary(s, order: AdOrder, admin: bool = False) -> str:
     price = f"{order.price} ₽" if order.price else "бесплатно"
     pic = "🖼 С картинкой\n" if order.photo else ""
     return (f"📣 <b>Заказ №{order.id}</b> — {adposts.STATUS[order.status]}\n{who}💰 {price}\n{pic}\n"
-            f"{esc(order.text[:700])}\n\nГруппы:\n" + "\n".join(lines))
+            f"{esc(order.text[:700])}\n\nГруппы:\n" + "\n".join(lines) + tail)
+
+
+def queue_note(p, g: Group) -> str:
+    """Почему пост ещё не вышел / почему не вышел — коротко, по-человечески."""
+    from app.models import now
+    from app.services import quiet
+
+    if p.status == "queued":
+        if p.scheduled_at > now():
+            return f" — {esc(p.error) + ', ' if p.error else ''}следующая попытка ~{quiet.to_local(p.scheduled_at):%H:%M}"
+        if not adposts.in_hours(g):
+            return f" — ждёт часов группы (с {g.ad_hours.replace('-', ' до ')} ч)"
+        return ""
+    return f" — {esc(p.error)}" if p.error else ""
 
 
 @router.callback_query(F.data.regexp(r"^ap:review:\d+$"))
@@ -351,9 +371,15 @@ async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
         rows.append([("💰 Изменить цену", f"apa:price:{order.id}")])
     if failed and order.status in ("running", "done") and not await adposts.refunded(s, order):
         rows.append([(f"🔁 Повторить неудачные ({failed})", f"apa:retry:{order.id}")])
+    missing = await s.scalar(select(func.count()).select_from(AdPost).where(
+        AdPost.order_id == order.id, AdPost.status.in_(adposts.NOT_PUBLISHED)))
+    if order.status == "running" and missing:
+        rows.append([("✂️ Выполнен частично", f"apa:part:{order.id}")])
+    elif order.status == "done" and missing and await adposts.unpublished_value(s, order):
+        rows.append([("💸 Вернуть за невышедшие", f"apa:part:{order.id}")])
     pay = await s.scalar(select(Payment).where(Payment.charge_id == f"yk:{order.yk_id}")) if order.yk_id else None
     if pay is not None and not pay.refunded:
-        rows.append([("↩️ Вернуть деньги", f"rf:ask:{pay.id}")])
+        rows.append([("↩️ Вернуть всю сумму" if pay.refunded_amount else "↩️ Вернуть деньги", f"rf:ask:{pay.id}")])
     if order.status in ("approved", "running", "pending"):
         rows.append([("🚫 Отменить заказ (с причиной)", f"apa:cancel:{order.id}")])
     return rows
@@ -369,6 +395,70 @@ async def show_order(cb: CallbackQuery, order_id: int) -> None:
             text += f"\n\nПричина: {esc(order.reason)}"
         rows = await order_buttons(s, order)
     await reply(cb, text, kb(rows + [[("◀️ К заказам", "apa:list")]]))
+
+
+@admin_router.callback_query(F.data.regexp(r"^apa:part:\d+$"))
+async def partial_ask(cb: CallbackQuery) -> None:
+    """Показать, что вышло и что нет, и сколько вернуть за невышедшие группы."""
+    oid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        order = await s.get(AdOrder, oid)
+        if order is None:
+            return await cb.answer("Заказ не найден", show_alert=True)
+        posts = await adposts.posts_of(s, oid)
+        value = await adposts.unpublished_value(s, order)
+        pay = await adposts.order_payment(s, order)
+    ok = [g.title[:40] for p, g in posts if p.status == "sent"]
+    bad = [g.title[:40] for p, g in posts if p.status in adposts.NOT_PUBLISHED]
+    can_refund = value > 0 and pay is not None and not pay.refunded and payments.refunds_enabled() and pay.provider_id
+    rows = []
+    if order.status == "running":
+        if can_refund:
+            rows.append([(f"✂️ Завершить и вернуть {value} ₽", f"apa:pok:{oid}:1")])
+        rows.append([("✂️ Завершить без возврата", f"apa:pok:{oid}:0")])
+    elif can_refund:
+        rows.append([(f"💸 Вернуть {value} ₽", f"apa:pok:{oid}:1")])
+    hint = "" if can_refund or not value else "\n\nВозврат кнопкой недоступен — верните в кабинете ЮKassa."
+    await reply(cb, (f"✂️ Заказ №{oid}: вышло {len(ok)} из {len(posts)}.\n"
+                     + ("Не вышло: " + ", ".join(esc(x) for x in bad) + "\n" if bad else "")
+                     + (f"За невышедшие группы приходится {value} ₽." if value else "Возвращать нечего (бесплатный заказ или уже вернули).")
+                     + ("\n\nПосты, которые ещё в очереди, будут сняты." if order.status == "running" else "") + hint),
+                kb(rows + [[("◀️ Назад", f"apa:o:{oid}")]]))
+
+
+@admin_router.callback_query(F.data.regexp(r"^apa:pok:\d+:[01]$"))
+async def partial_do(cb: CallbackQuery) -> None:
+    _, _, oid, money = cb.data.split(":")
+    oid = int(oid)
+    refunded = 0
+    async with Session() as s:
+        order = await s.get(AdOrder, oid)
+        if order is None:
+            return await cb.answer("Заказ не найден", show_alert=True)
+        try:
+            if order.status == "running":
+                await adposts.finish_partial(s, order)
+            if money == "1":
+                value = await adposts.unpublished_value(s, order)
+                pay = await adposts.order_payment(s, order)
+                if pay is not None and value:
+                    refunded = await payments.refund_part(s, pay, value * 100) // 100
+        except (adposts.AdError, payments.RefundError) as e:
+            return await cb.answer(str(e), show_alert=True)
+        posts = await adposts.posts_of(s, oid)
+        user_id = order.user_id
+    sent = sum(1 for p, _ in posts if p.status == "sent")
+    lines = [f"✅ <a href=\"{p.link}\">{esc(g.title[:40])}</a>" if p.link else f"✅ {esc(g.title[:40])}"
+             for p, g in posts if p.status == "sent"]
+    text = (f"📣 Заказ рекламы №{oid} выполнен частично: опубликовано {sent} из {len(posts)}.\n\n" + "\n".join(lines)
+            + (f"\n\n💸 За группы, где пост не вышел, вернули {refunded} ₽ — деньги придут тем же способом, "
+               "обычно за 1–3 дня." if refunded else ""))
+    try:
+        await notify._bot.send_message(user_id, text, disable_web_page_preview=True)
+    except Exception:
+        pass
+    await cb.answer(f"Готово{f', вернули {refunded} ₽' if refunded else ''}", show_alert=True)
+    await show_order(cb, oid)
 
 
 @admin_router.callback_query(F.data.regexp(r"^apa:(ok|retry):\d+$"))
@@ -458,7 +548,8 @@ async def groups_for_ads(cb: CallbackQuery) -> None:
         default = await settings.get_int(s, "adpost_price")
     if not groups:
         return await cb.answer("Пока нет подходящих групп и каналов", show_alert=True)
-    rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{KIND.get(g.kind, '')} {g.title[:28]} · {adposts.group_price(g, default)} ₽", f"apg:o:{g.id}")]
+    rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{KIND.get(g.kind, '')} {g.title[:28]} · {adposts.group_price(g, default)} ₽"
+               + (" · 🕘" if g.ad_hours else "") + (" · 📝" if g.ad_note else ""), f"apg:o:{g.id}")]
             for g in groups]
     bulk = [[("💰 Одна цена всем", "apg:allprice"), ("📈 Цена по размеру (от–до)", "apg:algo")],
             [("✅ Разрешить везде", "apg:allow:1"), ("⏸ Запретить везде", "apg:allow:0")],
@@ -481,12 +572,53 @@ async def show_group_card(cb: CallbackQuery, gid: int) -> None:
     note = ("\n⚠️ Чтобы публиковать в канал, аккаунт-публикатор должен быть админом канала с правом писать посты."
             if g.kind == "channel" else "")
     rows = [[("⏸ Запретить рекламу" if g.ads_allowed else "✅ Разрешить рекламу", f"apg:tog:{g.id}")],
-            [("💰 Цена за пост", f"apg:price:{g.id}")]]
+            [("💰 Цена за пост", f"apg:price:{g.id}"), ("🕘 Часы", f"apg:hours:{g.id}")],
+            [("📝 Условия группы", f"apg:note:{g.id}")]]
     if g.kind == "channel":
         rows.append([("👤 Сменить аккаунт-публикатор", f"apg:acc:{g.id}")])
+    hours = f"с {g.ad_hours.replace('-', ' до ')} ч" if g.ad_hours else "в любое время"
     await reply(cb, (f"{KIND.get(g.kind, '')} <b>{esc(g.title)}</b> — {g.members} уч.\n"
                      f"Реклама: {'✅ разрешена' if g.ads_allowed else '⏸ запрещена'}\n💰 Цена за пост: {own}\n"
+                     f"🕘 Публиковать: {hours}\n📝 Условия: {esc(g.ad_note) or '—'}\n"
                      f"👤 Публикует: {who}{note}"), kb(rows + [[("◀️ К списку", "apg:list")]]))
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:(hours|note):\d+$"))
+async def group_field_ask(cb: CallbackQuery, state: FSMContext) -> None:
+    _, field, gid = cb.data.split(":")
+    if field == "hours":
+        return await ask(cb, state, "apg_hours", (
+            "🕘 В какие часы группа открыта для сообщений? Например <b>9-21</b> (с 9:00 до 21:00 по вашему времени). "
+            "Вне этих часов разведчик ждёт. «-» — в любое время.\n"
+            "Если группа закрыта, а часы не указаны, бот сам пробует снова каждые 1–2 часа в течение суток."), gid=int(gid))
+    await ask(cb, state, "apg_note", (
+        "📝 Условия группы для рекламы (для себя), например: «подписка на @канал — сделано», «реклама только по пятницам». "
+        "До 250 знаков, «-» — очистить."), gid=int(gid))
+
+
+async def apg_hours(s, m: Message, d, text):
+    from app.services import quiet
+
+    value = "" if text.strip() in ("-", "0") else text.strip().replace(" ", "")
+    if value and not quiet.parse_hours(value):
+        await m.answer("Формат: 9-21 (часы от 0 до 23) или «-», чтобы публиковать в любое время")
+        return False
+    g = await s.get(Group, d["gid"])
+    if g is None:
+        return await m.answer("Группа не найдена")
+    g.ad_hours = value
+    await s.commit()
+    await m.answer(f"✔ «{esc(g.title)}»: " + (f"публикуем с {value.replace('-', ' до ')} ч" if value else "публикуем в любое время"),
+                   reply_markup=kb([[("Открыть", f"apg:o:{g.id}")]]))
+
+
+async def apg_note(s, m: Message, d, text):
+    g = await s.get(Group, d["gid"])
+    if g is None:
+        return await m.answer("Группа не найдена")
+    g.ad_note = "" if text.strip() == "-" else text.strip()[:250]
+    await s.commit()
+    await m.answer("✔ Сохранено", reply_markup=kb([[("Открыть", f"apg:o:{g.id}")]]))
 
 
 @admin_router.callback_query(F.data.regexp(r"^apg:o:\d+$"))

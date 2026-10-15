@@ -27,7 +27,7 @@ async def due_message(s: AsyncSession) -> str | None:
     row = await s.get(Setting, "receipts_reminded")
     if row is not None and row.value == key:
         return None
-    count, total = (await s.execute(select(func.count(), func.coalesce(func.sum(Payment.amount), 0)).where(
+    count, total = (await s.execute(select(func.count(), func.coalesce(func.sum(Payment.amount - Payment.refunded_amount), 0)).where(
         Payment.created_at >= start, Payment.created_at < end, ~Payment.refunded))).one()
     if row is None:
         row = Setting(key="receipts_reminded", value=key)

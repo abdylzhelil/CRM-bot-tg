@@ -9,6 +9,10 @@ from sqlalchemy import select, update
 from telethon.errors import (
     ChannelPrivateError,
     ChatAdminRequiredError,
+    ChatRestrictedError,
+    ChatSendMediaForbiddenError,
+    ChatSendPhotosForbiddenError,
+    ChatSendPlainForbiddenError,
     ChatWriteForbiddenError,
     FloodWaitError,
     PeerFloodError,
@@ -23,10 +27,11 @@ from app.services import adposts, settings
 
 log = logging.getLogger(__name__)
 
-# причины, после которых повтор в эту группу бессмысленен
-PERMANENT = (ChatWriteForbiddenError, UserBannedInChannelError, ChatAdminRequiredError, ChannelPrivateError)
+# причины, после которых повтор в эту группу бессмысленен (группа сама выключается из рекламы)
+PERMANENT = (UserBannedInChannelError, ChatAdminRequiredError, ChannelPrivateError)
+# группа закрыта для сообщений сейчас (ночной режим, «писать нельзя до…», ограничение новичков) — пробуем позже, до суток
+CLOSED = (ChatWriteForbiddenError, ChatRestrictedError, ChatSendPlainForbiddenError)
 REASON = {
-    "ChatWriteForbiddenError": "в группе запрещено писать",
     "UserBannedInChannelError": "аккаунт заблокирован в группе",
     "ChatAdminRequiredError": "писать могут только админы",
     "ChannelPrivateError": "группа закрыта",
@@ -55,9 +60,11 @@ async def _after(closed: list[tuple[int, str]], done: set[int]) -> None:
         await notify_done(order_id)
 
 
-def order_markup(order_id: int):
-    return notify.InlineKeyboardMarkup(inline_keyboard=[[
-        notify.InlineKeyboardButton(text="📣 Открыть заказ", callback_data=f"apa:o:{order_id}")]])
+def order_markup(order_id: int, group_id: int | None = None):
+    rows = [[notify.InlineKeyboardButton(text="📣 Открыть заказ", callback_data=f"apa:o:{order_id}")]]
+    if group_id:
+        rows.append([notify.InlineKeyboardButton(text="📢 Карточка группы", callback_data=f"apg:o:{group_id}")])
+    return notify.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def publish_one(manager) -> bool:
@@ -82,6 +89,8 @@ async def publish_one(manager) -> bool:
                                         "без права публикации или не подключён. Проверьте 👤 Аккаунты или смените аккаунт "
                                         "в 📢 Группы для рекламы.", cooldown=6 * 3600)
                 continue
+            if not adposts.in_hours(g):
+                continue  # у группы свои часы («9-21») — подождёт
             if not await adposts.account_ready(s, acc.id):
                 continue
             if await adposts.group_sent_today(s, g.id) >= await settings.get_int(s, "adpost_group_daily"):
@@ -100,7 +109,7 @@ async def publish_one(manager) -> bool:
         post, g, acc, client = chosen
         order = await s.get(AdOrder, post.order_id)
         text = await adposts.compose(s, order)
-        problem = None
+        problem, switched_off = None, False
         try:
             entity = await resolve(client, g)
             # parse_mode=None: текст рекламодателя публикуем как есть (Markdown Telethon испортил бы *, _, [ ])
@@ -123,22 +132,79 @@ async def publish_one(manager) -> bool:
             ).values(scheduled_at=now() + timedelta(days=1)).execution_options(synchronize_session=False))
             post.scheduled_at = now() + timedelta(days=1)
             problem = f"Telegram ограничил аккаунт «{acc.name}» за спам (PeerFlood). Публикации с него отложены на сутки."
+        except CLOSED:
+            if g.kind == "channel":  # в канал пишут только админы — ждать бесполезно
+                post.status, post.error = "failed", "аккаунт не админ канала (нет права публиковать)"
+                switched_off = True
+            elif not adposts.closed_now(post):
+                post.status, post.error = "failed", "в группе нельзя писать уже сутки (закрыта или нужны условия группы)"
+                switched_off = True
+        except (ChatSendMediaForbiddenError, ChatSendPhotosForbiddenError):
+            post.status, post.error = "failed", "в группе запрещены картинки"
+            g.no_media = True  # текстовую рекламу сюда можно, с картинкой — больше не предлагаем
         except PERMANENT as e:
             post.status, post.error = "failed", REASON.get(type(e).__name__, type(e).__name__)
+            switched_off = True
         except Exception as e:
             log.exception("реклама: не удалось опубликовать в %s", g.title)
             post.status, post.error = "failed", type(e).__name__
+        if switched_off:
+            g.ads_allowed = False  # не вышло и не выйдет — убираем группу из списка для покупателей
         await s.commit()
         if post.status != "queued" and await adposts.finish_if_done(s, order):
             done.add(order.id)
-        order_id, status, title, error = order.id, post.status, g.title, post.error
+        order_id, status, title, error, gid = order.id, post.status, g.title, post.error, g.id
     if problem:
         await notify.alert_once(f"peerflood_{acc.id}", problem)
     if status == "failed":
-        await notify._send(f"⚠️ Реклама, заказ №{order_id}: не вышло в «{html.escape(title)}» ({html.escape(error)}). "
-                           "Повторить можно в карточке заказа.", order_markup(order_id))
+        off = (" Реклама в этой группе выключена — покупатели её больше не видят; включить можно в карточке группы."
+               if switched_off else "")
+        await notify._send(f"⚠️ Реклама, заказ №{order_id}: не вышло в «{html.escape(title)}» ({html.escape(error)}).{off} "
+                           "В карточке заказа: повторить или «✂️ Выполнен частично» с возвратом за эту группу.",
+                           order_markup(order_id, gid))
     await _after(closed, done)
     return True
+
+
+async def check_posts(manager) -> int:
+    """Через 15 минут после публикации: пост на месте? Если его удалили (правила группы, бот-модератор) —
+    отмечаем «удалён», выключаем рекламу в этой группе и сообщаем админу и заказчику. Возвращает число удалённых."""
+    gone = []
+    async with Session() as s:
+        for post in await adposts.due_checks(s):
+            post.checked = True
+            g = await s.get(Group, post.group_id)
+            acc_id = (g.ad_account_id or g.account_id) if g else None
+            client = manager.clients.get(acc_id) if acc_id else None
+            if g is None or client is None or not post.message_id:
+                continue
+            try:
+                msg = await client.get_messages(await resolve(client, g), ids=post.message_id)
+            except Exception:
+                log.warning("реклама: не удалось проверить пост %s в %s", post.id, g.title)
+                continue
+            if msg is None:
+                post.status, post.error, post.link = "deleted", "удалён в группе (правила или бот группы)", ""
+                g.ads_allowed = False  # пока не разберётесь с условиями группы — туда больше не публикуем
+                order = await s.get(AdOrder, post.order_id)
+                gone.append((post.order_id, order.user_id if order else 0, g.id, g.title))
+        await s.commit()
+    for order_id, user_id, gid, title in gone:
+        await notify._send(
+            f"🗑 Реклама, заказ №{order_id}: пост в «{html.escape(title)}» удалили через несколько минут — видимо, правила "
+            "или бот группы. Реклама в этой группе выключена. Проверьте условия группы (подписка, «я не бот», согласие админа) "
+            "и включите снова в карточке группы. Деньги за заказ можно вернуть в карточке заказа.",
+            notify.InlineKeyboardMarkup(inline_keyboard=[
+                [notify.InlineKeyboardButton(text="📣 Открыть заказ", callback_data=f"apa:o:{order_id}")],
+                [notify.InlineKeyboardButton(text="📢 Карточка группы", callback_data=f"apg:o:{gid}")]]))
+        if user_id:
+            try:
+                await notify._bot.send_message(
+                    user_id, f"⚠️ Ваш рекламный пост в «{html.escape(title)}» удалили модераторы группы. "
+                    "Администратор уже знает — по этой группе решим вопрос с возвратом.")
+            except Exception:
+                pass
+    return len(gone)
 
 
 async def notify_done(order_id: int) -> None:
@@ -195,6 +261,7 @@ async def publish_loop(manager) -> None:
         did = False
         try:
             did = await publish_one(manager)
+            await check_posts(manager)
             ticks += 1
             if ticks % 30 == 0:  # примерно раз в 30 минут
                 await nudge_unpaid()

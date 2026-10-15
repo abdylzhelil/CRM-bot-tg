@@ -113,9 +113,10 @@ async def _refund(s: AsyncSession, payment: Payment, money: bool, call=None) -> 
             raise RefundError("Ключи ЮKassa не заданы (YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY в .env).")
         if not payment.provider_id:
             raise RefundError("У этого платежа нет номера ЮKassa (он сделан до обновления). Верните вручную в кабинете.")
+        rest = payment.amount - payment.refunded_amount  # часть уже могли вернуть («выполнен частично»)
+        key = f"refund-{payment.id}" if not payment.refunded_amount else f"refund-{payment.id}-rest"
         try:
-            data = await (call or _yookassa_refund)(payment.provider_id, payment.amount, payment.currency,
-                                                    f"refund-{payment.id}")
+            data = await (call or _yookassa_refund)(payment.provider_id, rest, payment.currency, key)
         except Exception:
             raise RefundError("ЮKassa не ответила. Попробуйте позже или верните вручную в кабинете.") from None
         if data.get("status") not in ("succeeded", "pending"):
@@ -123,6 +124,33 @@ async def _refund(s: AsyncSession, payment: Payment, money: bool, call=None) -> 
         note = "Деньги возвращены через ЮKassa."
     await take_back(s, payment)
     return note
+
+
+async def refund_part(s: AsyncSession, payment: Payment, amount_kop: int, call=None) -> int:
+    """Вернуть ЧАСТЬ платежа через ЮKassa (реклама: за группы, где пост не вышел). Возвращает сумму, копейки.
+
+    Тариф и заказ не трогаем — это делает вызывающий. Повтор с той же суммой безопасен (ключ идемпотентности)."""
+    async with _refund_lock:
+        await s.refresh(payment)
+        if payment.refunded:
+            raise RefundError("Этот платёж уже возвращён полностью.")
+        amount = min(amount_kop, payment.amount - payment.refunded_amount)
+        if amount <= 0:
+            raise RefundError("Возвращать нечего.")
+        if not refunds_enabled() or not payment.provider_id:
+            raise RefundError("Возврат кнопкой недоступен (нет ключей ЮKassa или номера платежа) — верните в кабинете ЮKassa.")
+        try:
+            data = await (call or _yookassa_refund)(payment.provider_id, amount, payment.currency,
+                                                    f"refund-{payment.id}-part-{payment.refunded_amount}")
+        except Exception:
+            raise RefundError("ЮKassa не ответила. Попробуйте позже или верните вручную в кабинете.") from None
+        if data.get("status") not in ("succeeded", "pending"):
+            raise RefundError(f"ЮKassa отказала: {data.get('description') or data.get('status') or data.get('_http')}")
+        payment.refunded_amount += amount
+        if payment.refunded_amount >= payment.amount:
+            payment.refunded, payment.refunded_at = True, now()
+        await s.commit()
+        return amount
 
 
 # ---------- оплата по ссылке (СБП и карта на странице ЮKassa) ----------
