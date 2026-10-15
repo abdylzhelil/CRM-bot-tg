@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app import config
 from app.bot import notify
-from app.bot.common import esc, kb
+from app.bot.common import alert, esc, kb
 from app.db import Session
 from app.models import Payment, PendingLink, User
 from app.services import payments, settings
@@ -107,7 +107,7 @@ async def link_pay(cb: CallbackQuery, user: User) -> None:
         try:
             url = await payments.create_link(s, user.tg_id, days, f"https://t.me/{me.username}", auto=auto)
         except payments.RefundError as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
     await cb.message.answer(
         f"🔗 Счёт на {days} дн. создан{' с автопродлением' if auto else ''}. Нажмите кнопку, оплатите, и вернитесь в бот — тариф включится сам.",
         reply_markup=kb([[("Оплатить (СБП / карта)", f"url:{url}")]]))
@@ -306,8 +306,10 @@ async def refund_ask(cb: CallbackQuery, user: User) -> None:
     rows.append([("Только снять тариф (деньги верну сам)" if pay.days else "Только отменить посты (деньги верну сам)", f"rf:tariff:{pay.id}")])
     rows.append([("Отмена", "noop")])
     hint = "" if payments.refunds_enabled() else "\n\nВозврат денег кнопкой не подключён (ключи ЮKassa в .env) — деньги верните в кабинете ЮKassa."
+    part = (f" (уже вернули {pay.refunded_amount / 100:.0f}, осталось вернуть {(pay.amount - pay.refunded_amount) / 100:.0f})"
+            if pay.refunded_amount else "")
     await cb.message.answer(
-        f"↩️ Платёж: {who} — {pay.amount / 100:.0f} {esc(pay.currency)}, "
+        f"↩️ Платёж: {who} — {pay.amount / 100:.0f} {esc(pay.currency)}{part}, "
         + (f"{pay.days} дн." if pay.days else "реклама в группах (неопубликованные посты будут отменены)") + hint, reply_markup=kb(rows))
     await cb.answer()
 
@@ -324,7 +326,7 @@ async def refund_do(cb: CallbackQuery, user: User) -> None:
         try:
             note = await payments.refund(s, pay, money)
         except payments.RefundError as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
     await cb.message.edit_text(f"✅ Готово. {'Тариф снят.' if pay.days else 'Неопубликованные посты отменены.'} {note}")
     await cb.answer()
     try:

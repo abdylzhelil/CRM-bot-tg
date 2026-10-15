@@ -5,7 +5,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
 from app.bot import notify
-from app.bot.common import ask, esc, kb, reply
+from app.bot.common import alert, ask, esc, kb, reply
 from app.db import Session
 from app.models import Category, Group, User, UserCategory
 from app.services import ads, catalog, geo, levels, settings
@@ -219,7 +219,7 @@ async def ad_go(cb: CallbackQuery, user: User) -> None:
         try:
             g = await ads.request(s, user.tg_id, int(cb.data.split(":")[2]))
         except ads.AdError as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
     text, markup = await ad_card(g, user)
     await notify._send("📢 Заказ рекламы:\n\n" + text, markup)
     await cb.answer("Заявка отправлена администратору", show_alert=True)

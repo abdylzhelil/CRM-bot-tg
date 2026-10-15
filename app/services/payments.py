@@ -114,8 +114,11 @@ async def _refund(s: AsyncSession, payment: Payment, money: bool, call=None) -> 
             raise RefundError("Ключи ЮKassa не заданы (YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY в .env).")
         if not payment.provider_id:
             raise RefundError("У этого платежа нет номера ЮKassa (он сделан до обновления). Верните вручную в кабинете.")
-        rest = payment.amount - payment.refunded_amount  # часть уже могли вернуть («выполнен частично»)
+        rest = payment.amount - payment.refunded_amount  # часть уже могли вернуть («выполнен частично» или автовозврат)
         key = f"refund-{payment.id}" if not payment.refunded_amount else f"refund-{payment.id}-rest"
+        if rest <= 0:  # всё уже вернули по частям — деньги трогать не нужно
+            await take_back(s, payment)
+            return "Деньги уже были возвращены раньше (по частям)."
         try:
             data = await (call or _yookassa_refund)(payment.provider_id, rest, payment.currency, key)
         except Exception:

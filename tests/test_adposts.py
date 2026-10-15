@@ -93,7 +93,8 @@ async def test_paid_order_waits_for_payment(maker, tgbot, monkeypatch):
     assert await publisher.publish_one(mgr) is True
 
 
-async def test_daily_limit_and_gap(maker, tgbot):
+async def test_daily_limit_and_gap(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(adposts, "day_start", lambda: now() - timedelta(hours=12))  # не зависеть от полуночи
     await setup_group(maker)
     await make_user(maker, 70)
     async with maker() as s:
@@ -487,7 +488,8 @@ async def test_group_card_toggle_and_channel_needs_publisher(maker, tgbot, monke
     assert "админом канала" in sent.await_args.args[1]
 
 
-async def test_per_group_daily_limit(maker, tgbot):
+async def test_per_group_daily_limit(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(adposts, "day_start", lambda: now() - timedelta(hours=12))  # не зависеть от полуночи
     await setup_group(maker)
     await make_user(maker, 70)
     async with maker() as s:
@@ -1084,3 +1086,31 @@ async def test_exact_post_link_and_three_checks(maker, tgbot):
     assert post.checked and client.get_messages.await_count == 3
     await publisher.check_posts(mgr)
     assert client.get_messages.await_count == 3  # больше не проверяем
+
+
+async def test_long_refund_error_does_not_crash(maker, tgbot, monkeypatch):
+    """ЮKassa отказала с длинным пояснением: бот показывает начало во всплывающем окне и полностью — сообщением."""
+    from app.bot.common import alert
+
+    cb = MagicMock()
+    cb.answer, cb.message.answer = AsyncMock(), AsyncMock()
+    await alert(cb, "коротко")
+    assert cb.answer.call_args.args[0] == "коротко"
+    long = "ЮKassa отказала: " + "очень длинная причина " * 20
+    await alert(cb, long)
+    assert len(cb.answer.call_args.args[0]) <= 200 and "очень длинная" in cb.message.answer.call_args.args[0]
+
+
+async def test_full_refund_after_parts_is_safe(maker, tgbot, monkeypatch):
+    """Всё уже вернули по частям (автовозврат): «Вернуть деньги» не идёт в ЮKassa с нулевой суммой."""
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    from app.models import Payment
+
+    async with maker() as s:
+        pay = Payment(user_id=70, days=0, amount=800, currency="RUB", charge_id="yk:z", provider_id="z", refunded_amount=800)
+        s.add(pay)
+        await s.commit()
+        called = AsyncMock()
+        note = await payments.refund(s, pay, True, call=called)
+        assert "уже" in note and pay.refunded and not called.await_count

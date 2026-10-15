@@ -42,6 +42,15 @@ def kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[btn(t, d) for t, d in row] for row in rows])
 
 
+async def alert(cb: CallbackQuery, text: str) -> None:
+    """Всплывающее окно. Telegram показывает до 200 знаков — длинную причину (например, ответ ЮKassa)
+    дописываем обычным сообщением, а не падаем с ошибкой."""
+    if len(text) <= 190:
+        return await cb.answer(text, show_alert=True)
+    await cb.answer(text[:180] + "… (полностью — ниже)", show_alert=True)
+    await cb.message.answer(html.escape(text[:3500]))
+
+
 async def reply(target: Message | CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
     """Для сообщений — новое сообщение, для кнопок — правим текущее."""
     if isinstance(target, CallbackQuery):

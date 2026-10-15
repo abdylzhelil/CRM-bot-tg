@@ -319,7 +319,9 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     async def on_error(event) -> bool:
         """Любая необработанная ошибка в обработчике: в лог и тревога администратору (не чаще раза в 15 минут)."""
         log.error("ошибка обработчика", exc_info=event.exception)
+        detail = str(event.exception).splitlines()[0][:160] if str(event.exception) else ""
         await notify.alert_once(f"handler:{type(event.exception).__name__}",
-                                f"Ошибка в боте: {type(event.exception).__name__} (подробности в логах сервера).")
+                                f"Ошибка в боте: {type(event.exception).__name__}" + (f" — {detail}" if detail else "")
+                                + " (подробности в логах сервера).")
         return True
     return bot, dp

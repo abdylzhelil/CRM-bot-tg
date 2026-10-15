@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from app import config
 from app.bot import notify
-from app.bot.common import ask, esc, kb, reply
+from app.bot.common import alert, ask, esc, kb, reply
 from app.db import Session
 from app.models import AdOrder, AdPost, Group, Payment, ScoutAccount, User
 from app.services import adposts, payments, quiet, settings
@@ -184,7 +184,7 @@ async def ap_toggle(cb: CallbackQuery, user: User) -> None:
         try:
             await adposts.toggle_group(s, order, int(gid))
         except adposts.AdError as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
         await show_picker(cb, s, order, user.city)
 
 
@@ -285,7 +285,7 @@ async def ap_send(cb: CallbackQuery, user: User) -> None:
         try:
             await adposts.submit(s, order)
         except adposts.AdError as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
         auto = await adposts.maybe_auto_approve(s, order)  # чистый заказ — без участия администратора
         text = await summary(s, order, admin=True)
         flags = adposts.suspicious(order.text)
@@ -342,7 +342,7 @@ async def ap_pay(cb: CallbackQuery, user: User) -> None:
         try:
             url = await payments.create_ad_link(s, order, f"https://t.me/{me.username}")
         except payments.RefundError as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
     await cb.message.answer(f"🔗 Счёт на {order.price} ₽ создан. Оплатите, и вернитесь в бот — посты встанут в очередь сами.",
                             reply_markup=kb([[("Оплатить (СБП / карта)", f"url:{url}")]]))
     await cb.answer()
@@ -475,7 +475,7 @@ async def partial_do(cb: CallbackQuery) -> None:
                     refunded = await payments.refund_part(s, pay, value * 100) // 100
             await adposts.settle(s, order)  # решение принято (вернули или «без возврата») — автовозврат больше не тронет
         except (adposts.AdError, payments.RefundError) as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
         posts = await adposts.posts_of(s, oid)
         user_id = order.user_id
     sent = sum(1 for p, _ in posts if p.status == "sent")
@@ -508,7 +508,7 @@ async def adm_act(cb: CallbackQuery) -> None:
                 if not await adposts.retry_failed(s, order):
                     return await cb.answer("Нечего повторять", show_alert=True)
         except adposts.AdError as e:
-            return await cb.answer(str(e), show_alert=True)
+            return await alert(cb, str(e))
     if msg:
         try:
             await notify._bot.send_message(user_id, msg, reply_markup=markup)
