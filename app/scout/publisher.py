@@ -125,7 +125,7 @@ async def publish_one(manager) -> bool:
         post, g, acc, client = chosen
         order = await s.get(AdOrder, post.order_id)
         text = await adposts.compose(s, order)
-        problem, switched_off = None, False
+        problem, switched_off, conditions_done = None, False, []
         try:
             entity = await resolve(client, g)
             # parse_mode=None: текст рекламодателя публикуем как есть (Markdown Telethon испортил бы *, _, [ ])
@@ -151,7 +151,13 @@ async def publish_one(manager) -> bool:
             problem = f"Telegram ограничил аккаунт «{acc.name}» за спам (PeerFlood). Публикации с него отложены на сутки."
         except CLOSED:
             g.ad_closed_at = g.ad_closed_at or now()  # новым покупателям её пока не предлагаем
-            if g.kind == "channel":  # в канал пишут только админы — ждать бесполезно
+            did = [] if g.kind == "channel" else await try_conditions(
+                s, manager, post, g, acc.id, client, entity, now() - timedelta(days=3))
+            if did:  # например, «писать могут только подписчики канала» — подписались, пробуем через несколько минут
+                post.scheduled_at = now() + timedelta(minutes=random.randint(5, 15))
+                post.error = "выполнил условия группы — пробую снова"
+                conditions_done = did
+            elif g.kind == "channel":  # в канал пишут только админы — ждать бесполезно
                 post.status, post.error = "failed", "аккаунт не админ канала (нет права публиковать)"
                 switched_off = True
             elif not adposts.closed_now(post):
@@ -177,6 +183,8 @@ async def publish_one(manager) -> bool:
         order_id, status, title, error, gid = order.id, post.status, g.title, post.error, g.id
     if problem:
         await notify.alert_once(f"peerflood_{acc.id}", problem)
+    if conditions_done:
+        await tell_conditions(order_id, title, conditions_done)
     if status == "failed":
         off = (" Реклама в этой группе выключена — покупатели её больше не видят; включить можно в карточке группы."
                if switched_off else "")
@@ -281,6 +289,15 @@ async def check_group(manager, gid: int) -> tuple[str, str]:
             except Exception:
                 verdict, mods = "", []
                 log.info("реклама: не удалось прочитать правила %s", g.title)
+            if g.ad_rules and await settings.get(s, "adpost_fulfill") == "1":  # «подпишитесь на @канал» в правилах — сразу
+                from app.scout import conditions
+
+                channels, _ = conditions.parse(g.ad_rules)
+                client = manager.clients.get(g.ad_account_id or g.account_id)
+                subscribed = await conditions.subscribe(client, channels) if channels and client else []
+                if subscribed:
+                    g.ad_rules = (g.ad_rules + "\n🤝 Подписался по правилам группы: "
+                                  + ", ".join("@" + c for c in subscribed))[:1500]
             if verdict and not g.ad_agreed:
                 level, text = "bad", verdict + " — договоритесь с админом и нажмите «🤝 Договорился с админом»"
             elif mods and level == "ok":
@@ -327,10 +344,32 @@ async def recheck_groups(manager) -> list[str]:
     return [t for _, t in off]
 
 
+async def try_conditions(s, manager, post: AdPost, g: Group, acc_id: int, client, entity, since) -> list[str]:
+    """Один раз на пост: выполнить условия группы (подписка, пригласить своих). Возвращает сделанное."""
+    from app.scout import conditions
+
+    if post.fulfilled or await settings.get(s, "adpost_fulfill") != "1":
+        return []
+    post.fulfilled = True
+    acc = await s.get(ScoutAccount, acc_id)
+    try:
+        did = await conditions.fulfill(manager, acc_id, client, entity, acc.tg_user_id if acc else 0, since,
+                                       {post.message_id} if post.message_id else set(), g.ad_rules)
+    except Exception:
+        log.exception("реклама: условия группы %s", g.title)
+        return []
+    return did if any(x.startswith(("подписался", "пригласил")) for x in did) else []
+
+
+async def tell_conditions(order_id: int, title: str, did: list[str]) -> None:
+    await notify._send(f"🤝 Реклама, заказ №{order_id}: группа «{html.escape(title)}» ставила условия — разведчик "
+                       + "; ".join(did) + ". Пробую опубликовать снова.", order_markup(order_id))
+
+
 async def check_posts(manager) -> int:
     """Через 15 минут после публикации: пост на месте? Если его удалили (правила группы, бот-модератор) —
     отмечаем «удалён», выключаем рекламу в этой группе и сообщаем админу и заказчику. Возвращает число удалённых."""
-    gone = []
+    gone, retried = [], []
     async with Session() as s:
         for post in await adposts.due_checks(s):
             post.checks += 1
@@ -348,6 +387,18 @@ async def check_posts(manager) -> int:
             if msg is not None:
                 post.verified_at = now()  # пост на месте
             if msg is None:
+                # бот группы мог удалить пост за невыполненное условие («подпишись», «пригласи друзей») — выполним и повторим
+                did = await try_conditions(s, manager, post, g, acc_id, client, await resolve(client, g),
+                                           post.sent_at - timedelta(minutes=1))
+                if did:
+                    post.status, post.link, post.checks, post.checked = "queued", "", 0, False
+                    post.error = "выполнил условия группы — пробую снова"
+                    post.scheduled_at = now() + timedelta(minutes=random.randint(5, 15))
+                    order = await s.get(AdOrder, post.order_id)
+                    if order is not None and order.status == "done":
+                        order.status = "running"
+                    retried.append((post.order_id, g.title, did))
+                    continue
                 post.status, post.error, post.link = "deleted", "удалён в группе (правила или бот группы)", ""
                 post.checked = True
                 g.ads_allowed = False  # пока не разберётесь с условиями группы — туда больше не публикуем
@@ -355,6 +406,8 @@ async def check_posts(manager) -> int:
                 gone.append((post.order_id, order.user_id if order else 0, g.id, g.title,
                              order is not None and order.status == "done"))
         await s.commit()
+    for order_id, title, did in retried:
+        await tell_conditions(order_id, title, did)
     for order_id, user_id, gid, title, finished in gone:
         refunded = (await refund_unpublished(order_id))[0] if finished else 0  # заказ ещё идёт — вернём при завершении
         await notify._send(

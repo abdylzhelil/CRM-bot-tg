@@ -402,4 +402,5 @@ class AdPost(Base):
     checked: Mapped[bool] = mapped_column(Boolean, default=False)  # все проверки «пост на месте» пройдены
     checks: Mapped[int] = mapped_column(Integer, default=0)  # сколько проверок уже было (15 мин, 3 ч, сутки)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда последний раз видели пост на месте
+    fulfilled: Mapped[bool] = mapped_column(Boolean, default=False)  # уже выполняли условия группы и пробовали снова (один раз)
     settled: Mapped[bool] = mapped_column(Boolean, default=False)  # пост не вышел и вопрос денег за него закрыт (вернули / решили не возвращать)

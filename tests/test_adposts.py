@@ -28,8 +28,16 @@ async def setup_group(maker, allowed=True, on=True, price=0, gid=-100):
         await s.commit()
 
 
+def no_messages(*a, **kw):
+    async def gen():
+        for m in ():
+            yield m
+    return gen()
+
+
 def manager(send=None, acc=1):
     client = AsyncMock()
+    client.iter_messages = no_messages
     client.get_entity = AsyncMock(return_value=object())
     client.send_message = send or AsyncMock(return_value=SimpleNamespace(id=555))
     return SimpleNamespace(clients={acc: client}), client
@@ -1175,3 +1183,69 @@ async def test_manual_refund_marks_posts(maker, tgbot, monkeypatch):
         pay = await s.scalar(select(Payment))
         assert pay.refunded_amount == 40000 and await adposts.unpublished_value(s, await s.get(AdOrder, oid)) == 0
     assert any("вернули 400" in t for t in tgbot.texts(70))
+
+
+def test_parse_conditions():
+    from app.scout import conditions
+
+    ch, n = conditions.parse("@user, чтобы писать в чат, подпишитесь на канал @dag_news и пригласите 3 друзей")
+    assert ch == {"dag_news"} and n == 3
+    ch, n = conditions.parse("Подпишись, чтобы писать", ["https://t.me/market_chan"])  # ссылка в кнопке
+    assert ch == {"market_chan"}
+    assert conditions.parse("Пригласите 50 человек")[1] == 0  # столько не делаем
+    assert conditions.parse("Вступай t.me/joinchat/AAAA")[0] == set()  # закрытые приглашения — мимо
+
+
+async def test_deleted_post_conditions_fulfilled_and_retried(maker, tgbot):
+    """Бот группы удалил пост и написал «подпишитесь на @kanal» → разведчик подписался, пост снова в очереди."""
+    from datetime import datetime, timezone
+
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        (await s.get(ScoutAccount, 1)).tg_user_id = 4242
+        await s.commit()
+    mgr, client = manager()
+    await publisher.publish_one(mgr)
+    async with maker() as s:
+        (await s.scalar(select(AdPost))).sent_at = now() - timedelta(minutes=16)
+        await s.commit()
+    bot_msg = SimpleNamespace(date=datetime.now(timezone.utc), sender=SimpleNamespace(bot=True), via_bot_id=None,
+                              reply_to=None, mentioned=True, message="Чтобы писать, подпишитесь на канал @kanal_news",
+                              buttons=None)
+
+    def msgs(*a, **kw):
+        async def gen():
+            yield bot_msg
+        return gen()
+
+    client.iter_messages = msgs
+    client.get_messages = AsyncMock(return_value=None)  # пост удалили
+    client.get_entity = AsyncMock(return_value=SimpleNamespace(broadcast=True, megagroup=False))
+    assert await publisher.check_posts(mgr) == 0  # не «удалён»: выполнили условие и повторяем
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
+        assert post.status == "queued" and post.fulfilled and (await s.scalar(select(Group))).ads_allowed
+    assert any("подписался на @kanal_news" in t for t in tgbot.texts(ADMIN_ID))
+    # второй раз удалили — условия уже выполняли, значит, «удалён» как обычно
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
+        post.status, post.sent_at, post.message_id = "sent", now() - timedelta(minutes=16), 556
+        await s.commit()
+    assert await publisher.check_posts(mgr) == 1
+
+
+async def test_invite_own_scouts(maker, tgbot):
+    from app.scout import conditions
+
+    async with maker() as s:
+        s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, phone="+7900"))
+        s.add(ScoutAccount(id=2, name="sc2", api_id=1, api_hash="x", enabled=True, phone="+7901"))
+        await s.commit()
+    client = AsyncMock()
+    client.return_value = SimpleNamespace(users=[SimpleNamespace(id=2)])
+    conditions._invites.clear()
+    assert await conditions.invite_scouts(None, 1, client, object(), 3) == 1  # больше наших нет — пригласили одного
+    assert client.await_count == 2  # импорт контакта + приглашение

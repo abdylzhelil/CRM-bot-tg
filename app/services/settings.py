@@ -18,6 +18,7 @@ DEFAULTS: dict[str, str] = {
     "adpost_enabled": "0",
     "adpost_auto_approve": "0",
     "adpost_auto_refund": "1",
+    "adpost_fulfill": "1",
     "adpost_price": "0",
     "adpost_daily_limit": "5",
     "adpost_group_daily": "3",
@@ -76,6 +77,7 @@ LABELS: dict[str, str] = {
     "adpost_enabled": "Реклама в группах через разведчиков (1/0)",
     "adpost_auto_approve": "Реклама в группах: одобрять заказы без запрещённых слов сами (1/0)",
     "adpost_auto_refund": "Реклама в группах: сами возвращать деньги за группы, где пост не вышел или удалён (1/0)",
+    "adpost_fulfill": "Реклама в группах: разведчик выполняет условия групп — подписка на канал, приглашение своих разведчиков (1/0)",
     "adpost_price": "Реклама в группах: цена за одну группу, ₽ (0 — бесплатно)",
     "adpost_daily_limit": "Реклама в группах: постов в сутки с одного аккаунта",
     "adpost_group_daily": "Реклама в группах: постов в сутки в одной группе",
@@ -145,7 +147,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
-                        "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer"]),
+                        "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
@@ -167,7 +169,7 @@ SHORT: dict[str, str] = {
     "rotation_days": "Выход из тихих групп, дн",
     "join_retry_days": "Повтор заявки, дн",
     "join_retry_max": "Попыток вступить",
-    "adpost_enabled": "Реклама вкл (1/0)", "adpost_auto_approve": "Автоодобрение (1/0)", "adpost_auto_refund": "Автовозврат (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
+    "adpost_enabled": "Реклама вкл (1/0)", "adpost_auto_approve": "Автоодобрение (1/0)", "adpost_auto_refund": "Автовозврат (1/0)", "adpost_fulfill": "Условия групп (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
     "adpost_group_daily": "Постов в группу в сутки",
     "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
@@ -193,6 +195,7 @@ HINTS: dict[str, str] = {
     "join_retry_max": "Сколько всего раз разведчик пробует вступить в группу, где нужно одобрение админа. После этого группа пропускается.",
     "adpost_enabled": "Включает заказ рекламы пользователями и публикацию постов разведчиками в разрешённых группах. 0 — ничего не публикуется.",
     "adpost_auto_approve": "1 — заказ без запрещённых слов сразу идёт на оплату, без вашей проверки (подозрительные всё равно придут вам). 0 — вы одобряете каждый заказ.",
+    "adpost_fulfill": "1 — если группа требует подписаться на канал или пригласить людей (пишет бот группы, описание или закреп), разведчик подписывается сам и добавляет в группу наших других разведчиков (не больше 5 приглашений в сутки с аккаунта), потом пробует пост снова. Капчи и кнопки «я не бот» не нажимает. 0 — ничего не делать.",
     "adpost_auto_refund": "1 — когда заказ закончен, бот сам возвращает через ЮKassa деньги за группы, где пост не вышел или его удалили модераторы (вам и заказчику придёт сообщение). 0 — возвращаете сами кнопкой «💸 Вернуть за невышедшие».",
     "adpost_price": "Сколько рублей стоит один пост в одной группе. 0 — реклама бесплатна (только с одобрением админа).",
     "adpost_daily_limit": "Сколько рекламных постов в сутки публикует один аккаунт-разведчик. Меньше — безопаснее для аккаунта.",
@@ -284,7 +287,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),          # 0 — заявки перестали бы доходить до людей
