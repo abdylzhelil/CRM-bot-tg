@@ -19,7 +19,7 @@ router = Router()
 ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_", "apa_", "apg_")
 
 
-@router.message(Ask.value, F.text)
+@router.message(Ask.value, F.text, ~F.text.startswith("/"))  # команда (/ads, /terms…) — это не ответ на вопрос
 async def on_input(m: Message, state: FSMContext, user=None) -> None:
     data = await state.get_data()
     action, text = data["action"], m.text.strip()
@@ -192,6 +192,8 @@ async def my_field(s, m, d, text, field):
             text = ""
         elif not quiet.parse_hours(text):
             return await m.answer("Формат: 23-8 (с 23:00 до 08:00) или «-», чтобы выключить") and False
+    elif text == "-":
+        text = ""  # «-» — очистить шаблон/цены
     setattr(u, field, text)
     await s.commit()
     await m.answer("✔ Сохранено. Посмотреть: 👤 Профиль")
@@ -259,7 +261,8 @@ async def niche_propose(s, m, d, text):
 async def bc_text(s, m, d, text):
     from app.bot.handlers import broadcast
 
-    return await broadcast.bc_text(s, m, d, text)
+    # html_text: жирный, ссылки и т. п. из редактора Telegram сохраняются, а «<50%» не ломает разметку
+    return await broadcast.bc_text(s, m, d, (m.html_text or text).strip())
 
 
 HANDLERS = {

@@ -5,7 +5,7 @@
 """
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AdOrder, AdPost, Group, ScoutAccount, now
@@ -82,14 +82,29 @@ async def new_draft(s: AsyncSession, user_id: int, text: str) -> AdOrder:
     text = text.strip()
     if not MIN_TEXT <= len(text) <= MAX_TEXT:
         raise AdError(f"Текст рекламы — от {MIN_TEXT} до {MAX_TEXT} знаков (сейчас {len(text)}).")
+    # брошенные черновики (текст ввели, группы не выбрали) не видны в «Мои заказы» — новый заказ их заменяет
+    await s.execute(delete(AdOrder).where(AdOrder.user_id == user_id, AdOrder.status == "draft"))
     open_n = await s.scalar(select(func.count()).select_from(AdOrder).where(
-        AdOrder.user_id == user_id, AdOrder.status.in_(("draft",) + OPEN_STATUSES)))
+        AdOrder.user_id == user_id, AdOrder.status.in_(OPEN_STATUSES)))
     if (open_n or 0) >= 3:
         raise AdError("У вас уже 3 незавершённых заказа. Дождитесь их или отмените лишние.")
     order = AdOrder(user_id=user_id, text=text)
     s.add(order)
     await s.commit()
     return order
+
+
+async def _claim(s: AsyncSession, order: AdOrder, before: tuple[str, ...], after: str) -> bool:
+    """Сменить статус, только если он всё ещё один из before (одной командой в базе).
+
+    Защита от двойного нажатия и гонок «оплата пришла ↔ заказ отменили»: второй запрос получит False."""
+    res = await s.execute(update(AdOrder).where(AdOrder.id == order.id, AdOrder.status.in_(before))
+                          .values(status=after).execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        await s.refresh(order)
+        return False
+    order.status = after
+    return True
 
 
 async def toggle_group(s: AsyncSession, order: AdOrder, group_id: int) -> None:
@@ -124,12 +139,15 @@ async def approve(s: AsyncSession, order: AdOrder) -> str:
     """Одобрил админ. Бесплатный заказ сразу идёт в очередь, платный ждёт оплаты. Возвращает новый статус."""
     if order.status != "pending":
         raise AdError("Заказ уже обработан.")
-    order.decided_at = now()
     if order.price > 0:
-        order.status = "approved"
+        if not await _claim(s, order, ("pending",), "approved"):
+            raise AdError("Заказ уже обработан.")
+        order.decided_at = now()
         await s.commit()
     else:
-        await start(s, order)
+        order.decided_at = now()
+        if not await start(s, order):
+            raise AdError("Заказ уже обработан.")
     return order.status
 
 
@@ -150,20 +168,20 @@ async def stale_unpaid(s: AsyncSession) -> tuple[list[AdOrder], list[AdOrder]]:
 
 
 async def reject(s: AsyncSession, order: AdOrder, reason: str = "") -> None:
-    if order.status != "pending":
+    if order.status != "pending" or not await _claim(s, order, ("pending",), "rejected"):
         raise AdError("Заказ уже обработан.")
-    order.status, order.decided_at, order.reason = "rejected", now(), reason[:300]
+    order.decided_at, order.reason = now(), reason[:300]
     await s.commit()
 
 
-async def start(s: AsyncSession, order: AdOrder) -> None:
-    """Поставить публикации в очередь (после одобрения/оплаты)."""
-    if order.status not in ("pending", "approved"):
-        return
-    order.status = "running"
+async def start(s: AsyncSession, order: AdOrder) -> bool:
+    """Поставить публикации в очередь (после одобрения/оплаты). False — заказ уже запущен/отменён кем-то другим."""
+    if not await _claim(s, order, ("pending", "approved"), "running"):
+        return False
     for gid in selected(order):
         s.add(AdPost(order_id=order.id, group_id=gid))
     await s.commit()
+    return True
 
 
 async def mark_paid(s: AsyncSession, order_id: int, yk_id: str, amount_kop: int = 0, currency: str = "RUB"):
@@ -173,13 +191,14 @@ async def mark_paid(s: AsyncSession, order_id: int, yk_id: str, amount_kop: int 
     from app.models import Payment
 
     order = await s.get(AdOrder, order_id)
-    if order is None or order.status != "approved":
-        return None
+    if order is None or order.status != "approved" or not await _claim(s, order, ("approved",), "running"):
+        return None  # отменён/уже оплачен — вызывающий запишет «лишнюю» оплату для возврата
     order.yk_id = yk_id
     pay = Payment(user_id=order.user_id, days=0, amount=amount_kop or order.price * 100, currency=currency,
                   charge_id=f"yk:{yk_id}", provider_id=yk_id)  # days=0 — это реклама, тариф не трогаем
     s.add(pay)
-    await start(s, order)
+    s.add_all([AdPost(order_id=order.id, group_id=gid) for gid in selected(order)])
+    await s.commit()  # оплата, статус и очередь постов — одним сохранением
     return order, pay
 
 
@@ -209,19 +228,29 @@ async def record_extra_payment(s: AsyncSession, order_id: int, user_id: int, yk_
 
 async def cancel(s: AsyncSession, order: AdOrder, reason: str = "") -> int:
     """Отмена: неопубликованные посты снимаются. Возвращает число снятых."""
-    if order.status not in ("draft", "pending", "approved", "running"):
+    if not await _claim(s, order, ("draft", "pending", "approved", "running"), "canceled"):
         raise AdError("Этот заказ уже нельзя отменить.")
     posts = (await s.scalars(select(AdPost).where(AdPost.order_id == order.id, AdPost.status == "queued"))).all()
     for p in posts:
         p.status = "canceled"
-    order.status = "canceled"
     if reason:
         order.reason = reason[:300]
     await s.commit()
     return len(posts)
 
 
+async def refunded(s: AsyncSession, order: AdOrder) -> bool:
+    from app.models import Payment
+
+    return bool(order.yk_id) and bool(await s.scalar(
+        select(Payment.id).where(Payment.charge_id == f"yk:{order.yk_id}", Payment.refunded)))
+
+
 async def retry_failed(s: AsyncSession, order: AdOrder) -> int:
+    if order.status not in ("running", "done"):
+        raise AdError("Заказ отменён — повторять нечего.")
+    if await refunded(s, order):
+        raise AdError("Деньги за этот заказ возвращены — повторять нельзя.")
     posts = (await s.scalars(select(AdPost).where(AdPost.order_id == order.id, AdPost.status == "failed"))).all()
     for p in posts:
         p.status, p.error, p.scheduled_at = "queued", "", now()
@@ -340,12 +369,20 @@ async def allow_all(s: AsyncSession, flag: bool) -> tuple[int, int]:
     return changed, skipped
 
 
+def rubles(text: str) -> int | None:
+    """Сумма в рублях от админа: только обычные цифры, до 1 000 000. Иначе None."""
+    import re
+
+    text = text.strip()
+    return int(text) if re.fullmatch(r"[0-9]{1,7}", text) and int(text) <= 1_000_000 else None
+
+
 def parse_range(text: str) -> tuple[int, int] | None:
     """«300-2000», «300 2000», «300–2000» → (300, 2000)."""
     import re
 
-    nums = re.findall(r"\d+", text)
-    if len(nums) != 2:
+    nums = re.findall(r"[0-9]+", text)
+    if len(nums) != 2 or any(len(n) > 7 for n in nums):
         return None
     low, high = int(nums[0]), int(nums[1])
     return (low, high) if 0 <= low <= high <= 1_000_000 else None

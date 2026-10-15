@@ -5,6 +5,7 @@ import logging
 import random
 from datetime import timedelta
 
+from sqlalchemy import select, update
 from telethon.errors import (
     ChannelPrivateError,
     ChatAdminRequiredError,
@@ -46,20 +47,40 @@ def post_link(g: Group, message_id: int) -> str:
     return f"https://t.me/{g.username}/{message_id}" if g.username else ""
 
 
+async def _after(closed: list[tuple[int, str]], done: set[int]) -> None:
+    for order_id, title in closed:
+        await notify._send(f"⚠️ Реклама, заказ №{order_id}: не вышло в «{html.escape(title)}» (группа закрыта для рекламы).",
+                           order_markup(order_id))
+    for order_id in done:
+        await notify_done(order_id)
+
+
+def order_markup(order_id: int):
+    return notify.InlineKeyboardMarkup(inline_keyboard=[[
+        notify.InlineKeyboardButton(text="📣 Открыть заказ", callback_data=f"apa:o:{order_id}")]])
+
+
 async def publish_one(manager) -> bool:
     """Опубликовать один пост из очереди. True — попытка была (нужна пауза)."""
+    done: set[int] = set()
     async with Session() as s:
         if not await adposts.enabled(s):
             return False
-        chosen = None
+        chosen, closed = None, []
         for post in await adposts.due_posts(s):
             g = await s.get(Group, post.group_id)
             acc_id = (g.ad_account_id or g.account_id) if g else None
             acc = await s.get(ScoutAccount, acc_id) if acc_id else None
             client = manager.clients.get(acc.id) if acc else None
-            if not g or not g.ads_allowed or acc is None or not acc.enabled or not acc.can_post or client is None:
-                if g and not g.ads_allowed:  # админ закрыл группу для рекламы после заказа
-                    post.status, post.error = "failed", "группа закрыта для рекламы"
+            if g is None or not g.ads_allowed:  # группу удалили или админ закрыл её для рекламы после заказа
+                post.status, post.error = "failed", "группа закрыта для рекламы"
+                closed.append((post.order_id, g.title if g else "группа удалена"))
+                continue
+            if acc is None or not acc.enabled or not acc.can_post or client is None:
+                waiting = f"«{acc.name}»" if acc else "без аккаунта"
+                await notify.alert_once(f"adpost_acc_{acc_id}", f"Реклама ждёт: аккаунт-публикатор {waiting} выключен, "
+                                        "без права публикации или не подключён. Проверьте 👤 Аккаунты или смените аккаунт "
+                                        "в 📢 Группы для рекламы.", cooldown=6 * 3600)
                 continue
             if not await adposts.account_ready(s, acc.id):
                 continue
@@ -67,8 +88,14 @@ async def publish_one(manager) -> bool:
                 continue  # в эту группу сегодня уже вышло достаточно рекламы — подождёт до завтра
             chosen = (post, g, acc, client)
             break
+        if closed:
+            await s.commit()
+            for order_id, _ in closed:
+                if await adposts.finish_if_done(s, await s.get(AdOrder, order_id)):
+                    done.add(order_id)
         if chosen is None:
             await s.commit()
+            await _after(closed, done)
             return False
         post, g, acc, client = chosen
         order = await s.get(AdOrder, post.order_id)
@@ -85,6 +112,11 @@ async def publish_one(manager) -> bool:
             log.warning("реклама: ожидание %s с в %s", e.seconds, g.title)
         except PeerFloodError:
             acc.status = "limited"
+            # откладываем ВСЕ посты этого аккаунта, иначе он продолжит писать и ограничение станет строже
+            await s.execute(update(AdPost).where(
+                AdPost.status == "queued",
+                AdPost.group_id.in_(select(Group.id).where(adposts.publisher_id() == acc.id)),
+            ).values(scheduled_at=now() + timedelta(days=1)).execution_options(synchronize_session=False))
             post.scheduled_at = now() + timedelta(days=1)
             problem = f"Telegram ограничил аккаунт «{acc.name}» за спам (PeerFlood). Публикации с него отложены на сутки."
         except PERMANENT as e:
@@ -93,15 +125,15 @@ async def publish_one(manager) -> bool:
             log.exception("реклама: не удалось опубликовать в %s", g.title)
             post.status, post.error = "failed", type(e).__name__
         await s.commit()
-        finished = post.status != "queued" and await adposts.finish_if_done(s, order)
+        if post.status != "queued" and await adposts.finish_if_done(s, order):
+            done.add(order.id)
         order_id, status, title, error = order.id, post.status, g.title, post.error
     if problem:
-        await notify.alert(problem)
+        await notify.alert_once(f"peerflood_{acc.id}", problem)
     if status == "failed":
         await notify._send(f"⚠️ Реклама, заказ №{order_id}: не вышло в «{html.escape(title)}» ({html.escape(error)}). "
-                           "Повторить: 🔍 Группы → 📣 Заказы рекламы.")
-    if finished:
-        await notify_done(order_id)
+                           "Повторить можно в карточке заказа.", order_markup(order_id))
+    await _after(closed, done)
     return True
 
 

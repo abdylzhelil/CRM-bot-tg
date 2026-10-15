@@ -5,7 +5,7 @@ from sqlalchemy import delete, select
 
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import Category, Keyword, User
+from app.models import Category, Keyword, User, UserCategory
 from app.services import niches, rules
 
 router = Router()
@@ -34,6 +34,9 @@ async def open_cat(cb: CallbackQuery) -> None:
     async with Session() as s:
         c = await s.get(Category, cid)
         subs = (await s.scalars(select(Category).where(Category.parent_id == cid).order_by(Category.id))).all()
+    if c is None:
+        await cb.answer("Категория уже удалена", show_alert=True)
+        return await categories_menu(cb)
     text = (
         f"{c.emoji} <b>{esc(c.name)}</b> {'' if c.enabled else '(выключена)'}\n"
         f"Город: {esc(c.city) or 'любой'}\n"
@@ -53,6 +56,8 @@ async def open_cat(cb: CallbackQuery) -> None:
 async def toggle(cb: CallbackQuery) -> None:
     async with Session() as s:
         c = await s.get(Category, int(cb.data.split(":")[2]))
+        if c is None:
+            return await cb.answer("Категория уже удалена", show_alert=True)
         c.enabled = not c.enabled
         await s.commit()
     rules.invalidate()
@@ -60,11 +65,31 @@ async def toggle(cb: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cat:del:"))
+async def delete_ask(cb: CallbackQuery) -> None:
+    """Удаление необратимо (слова, подкатегории, выбор ниши у пользователей) — сначала спрашиваем."""
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        c = await s.get(Category, cid)
+        if c is None:
+            return await cb.answer("Категория уже удалена", show_alert=True)
+        subs = len((await s.scalars(select(Category.id).where(Category.parent_id == cid))).all())
+        users = len((await s.scalars(select(UserCategory.user_id).where(UserCategory.category_id == cid))).all())
+    await reply(cb, f"🗑 Удалить «{esc(c.name)}» навсегда? Удалятся все её слова"
+                + (f", подкатегорий: {subs}" if subs else "") + (f"; у {users} польз. ниша пропадёт" if users else "")
+                + ".\nЕсли нужно лишь на время — лучше «⏯ Вкл/выкл».",
+                kb([[("🗑 Да, удалить", f"cat:delok:{cid}"), ("◀️ Нет", f"cat:open:{cid}")]]))
+
+
+@router.callback_query(F.data.startswith("cat:delok:"))
 async def delete_cat(cb: CallbackQuery) -> None:
     cid = int(cb.data.split(":")[2])
     async with Session() as s:
         c = await s.get(Category, cid)
+        if c is None:
+            await cb.answer("Категория уже удалена", show_alert=True)
+            return await categories_menu(cb)
         ids = [cid] + list((await s.scalars(select(Category.id).where(Category.parent_id == cid))).all())
+        await s.execute(delete(UserCategory).where(UserCategory.category_id.in_(ids)))
         await s.execute(delete(Keyword).where(Keyword.category_id.in_(ids)))
         await s.execute(delete(Category).where(Category.parent_id == cid))
         await s.delete(c)

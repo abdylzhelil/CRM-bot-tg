@@ -74,6 +74,11 @@ async def delivery_loop() -> None:
         await asyncio.sleep(20)
 
 
+def local_day(moment) -> str:
+    """Дата из базы (UTC) так, как её видит человек: по местному времени."""
+    return quiet.to_local(moment).strftime("%d.%m")
+
+
 async def expiry_once() -> int:
     """Тарифы 💎: за 3 дня до конца — напоминание (или предупреждение о списании), в день конца — «тариф закончился».
 
@@ -88,6 +93,7 @@ async def expiry_once() -> int:
     button = notify.InlineKeyboardMarkup(inline_keyboard=[[
         notify.InlineKeyboardButton(text="💎 Продлить", callback_data="pf:plan")]])
     async with Session() as s:
+        renew_on = payments.autorenew_on(await settings.get(s, "autorenew"))
         soon = (await s.scalars(select(User).where(
             User.plan == "full", User.plan_until.is_not(None), ~User.blocked,
             User.plan_until > now(), User.plan_until < now() + timedelta(days=3)))).all()
@@ -96,18 +102,18 @@ async def expiry_once() -> int:
                 continue
             u.expiry_notice = u.plan_until
             sent += 1
-            price = await payments.price_of(s, u.renew_days) if u.renew_method else 0
-            if u.renew_method and price:
-                text = (f"🔁 💎 Полный тариф заканчивается {u.plan_until:%d.%m}: автоматически спишем {price} ₽ "
+            price = await payments.price_of(s, u.renew_days) if u.renew_method and renew_on else 0
+            if price:
+                text = (f"🔁 💎 Полный тариф заканчивается {local_day(u.plan_until)}: автоматически спишем {price} ₽ "
                         f"за продление на {u.renew_days} дн. Не нужно — отключите: 👤 Профиль → 💎 Тариф.")
                 await send_to(u.tg_id, text)
             else:
-                await send_to(u.tg_id, f"⏳ 💎 Полный тариф заканчивается {u.plan_until:%d.%m}. "
+                await send_to(u.tg_id, f"⏳ 💎 Полный тариф заканчивается {local_day(u.plan_until)}. "
                               "Продлите, чтобы заявки приходили сразу и без лимита.", button)
         ended = (await s.scalars(select(User).where(
             User.plan == "full", User.plan_until.is_not(None), User.plan_until <= now(), ~User.is_admin))).all()
         for u in ended:
-            if u.renew_method and u.renew_for != u.plan_until:
+            if renew_on and u.renew_method and u.renew_for != u.plan_until:
                 continue  # автопродление ещё попробует — раньше времени «закончился» не пишем
             u.plan, u.plan_until, u.expiry_notice = "free", None, None
             u.winback_at = now() + timedelta(days=3)

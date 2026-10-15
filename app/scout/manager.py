@@ -134,11 +134,12 @@ class ScoutManager:
             await asyncio.sleep(300)
             for acc_id, client in list(self.clients.items()):
                 try:
-                    if not client.is_connected():
-                        await client.connect()
-                    await client.get_me()
-                except DEAD as e:
-                    await self.detach(acc_id)
-                    await self._mark(acc_id, "dead", f"Аккаунт-разведчик #{acc_id} вылетел: {type(e).__name__}. Нужен повторный вход.")
-                except Exception:
+                    try:
+                        if not client.is_connected():
+                            await client.connect()
+                        await client.get_me()
+                    except DEAD as e:
+                        await self.detach(acc_id)
+                        await self._mark(acc_id, "dead", f"Аккаунт-разведчик #{acc_id} вылетел: {type(e).__name__}. Нужен повторный вход.")
+                except Exception:  # в том числе ошибка базы в _mark — сторож не должен остановиться
                     log.exception("проверка разведчика #%s", acc_id)

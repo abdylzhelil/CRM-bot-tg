@@ -112,10 +112,11 @@ async def poll_all() -> int:
 
 async def channel_loop() -> None:
     while True:
+        minutes = 10
         try:
             await poll_all()
+            async with Session() as s:
+                minutes = await settings.get_int(s, "channel_poll_min")
         except Exception:
             log.exception("channel_loop")
-        async with Session() as s:
-            minutes = await settings.get_int(s, "channel_poll_min")
         await asyncio.sleep(max(minutes, 1) * 60)

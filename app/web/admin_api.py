@@ -80,7 +80,7 @@ async def users_list(request: web.Request) -> web.Response:
         query = select(User).order_by(User.last_seen.desc())
         if q:
             raw = q.lstrip("@")
-            if raw.isdigit():
+            if raw.isascii() and raw.isdigit() and len(raw) < 19:
                 query = query.where(User.tg_id == int(raw))
             elif q.startswith("@"):
                 query = query.where(User.username.ilike(raw))

@@ -321,7 +321,7 @@ def validate(key: str, text: str) -> str:
     elif key in FLAGS:
         if text not in ("0", "1"):
             raise SettingError("Нужно 0 (выключено) или 1 (включено)")
-    elif not text.isdigit() or len(text) > 9:
+    elif not (text.isascii() and text.isdigit()) or len(text) > 9:  # «²» и прочие «цифры» Юникода — не число
         raise SettingError("Нужно число")
     elif key in RANGES and not RANGES[key][0] <= int(text) <= RANGES[key][1]:
         lo, hi = RANGES[key]

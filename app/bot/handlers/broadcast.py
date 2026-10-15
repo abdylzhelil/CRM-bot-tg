@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 from sqlalchemy import select
@@ -85,7 +85,11 @@ async def _send_all(bot, admin_id: int, aud: str, text: str) -> tuple[int, int]:
     try:
         for uid in await recipients(aud):
             try:
-                await bot.send_message(uid, text, disable_web_page_preview=True)
+                try:
+                    await bot.send_message(uid, text, disable_web_page_preview=True)
+                except TelegramRetryAfter as e:  # Telegram просит подождать — ждём и пробуем ещё раз
+                    await asyncio.sleep(e.retry_after + 1)
+                    await bot.send_message(uid, text, disable_web_page_preview=True)
                 ok += 1
             except TelegramForbiddenError:
                 fail += 1

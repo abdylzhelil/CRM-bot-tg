@@ -186,3 +186,71 @@ async def test_admin_count(maker):
         admin = await s.get(User, ADMIN_ID)
         assert admin.is_admin and admin.plan == "full"
         assert await s.scalar(select(func.count()).select_from(Lead)) == 0
+
+
+async def test_flush_concurrent_sends_once_and_retries_on_flood(maker, tgbot, monkeypatch):
+    """Два прохода раздачи одновременно не шлют одну заявку дважды; «подождите» от Telegram — не потеря заявки."""
+    import asyncio
+
+    from aiogram.exceptions import TelegramRetryAfter
+    from aiogram.methods import SendMessage
+
+    await make_user(maker, 40, plan="full")
+    async with maker() as s:
+        lead = Lead(group_id=0, group_title="Г", author_id=555, text="Нужен сайт", text_hash="h", category_id=None)
+        s.add(lead)
+        await s.commit()
+        s.add(Delivery(lead_id=lead.id, user_id=40, deliver_after=now()))
+        await s.commit()
+    slow = tgbot.send_message
+
+    async def slow_send(chat_id, text, **kw):
+        await asyncio.sleep(0.05)
+        return await slow(chat_id, text, **kw)
+
+    monkeypatch.setattr(tgbot, "send_message", slow_send)
+    await asyncio.gather(notify.flush_due(), notify.flush_due())
+    assert len(tgbot.texts(40)) == 1
+
+    async with maker() as s:
+        s.add(Delivery(lead_id=lead.id, user_id=ADMIN_ID, deliver_after=now()))
+        await s.commit()
+
+    async def flood(chat_id, text, **kw):
+        raise TelegramRetryAfter(method=SendMessage(chat_id=chat_id, text=text), message="flood", retry_after=5)
+
+    monkeypatch.setattr(tgbot, "send_message", flood)
+    await notify.flush_due()
+    async with maker() as s:
+        assert not (await s.scalar(select(Delivery).where(Delivery.user_id == ADMIN_ID))).sent  # пошлём позже
+
+
+async def test_paused_user_gets_nothing_from_queue(maker, tgbot):
+    await make_user(maker, 41, paused=True)
+    async with maker() as s:
+        lead = Lead(group_id=0, group_title="Г", author_id=556, text="Нужен сайт", text_hash="h", category_id=None)
+        s.add(lead)
+        await s.commit()
+        s.add(Delivery(lead_id=lead.id, user_id=41, deliver_after=now()))
+        await s.commit()
+    await notify.flush_due()
+    assert not tgbot.texts(41)
+
+
+async def test_pass_to_rejects_wildcards(maker, tgbot):
+    await make_user(maker, 42, username="kolya")
+    await make_user(maker, 43, username="petya")
+    async with maker() as s:
+        lead = Lead(group_id=0, group_title="Г", author_id=557, text="Нужен сайт", text_hash="h", category_id=None)
+        s.add(lead)
+        await s.commit()
+        d = Delivery(lead_id=lead.id, user_id=42, deliver_after=now(), sent=True)
+        s.add(d)
+        await s.commit()
+        m = MagicMock()
+        m.from_user.id = 42
+        m.answer = AsyncMock()
+        m.bot.me = AsyncMock(return_value=MagicMock(username="bot"))
+        await leads.pass_to(s, m, {"did": d.id}, "%")
+    async with maker() as s:
+        assert not await s.scalar(select(Delivery).where(Delivery.user_id == 43))  # «%» не значит «кто угодно»

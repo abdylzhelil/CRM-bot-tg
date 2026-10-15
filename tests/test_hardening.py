@@ -342,3 +342,14 @@ async def test_cleanup_keeps_unfinished_account_with_payment_or_ad_order(maker):
         await s.commit()
     async with maker() as s:
         assert [u.tg_id for u in await cleanup.empty_users(s, 7)] == [95]  # с оплатой и заказом рекламы — остаются
+
+
+async def test_cabinet_empty_quiet_hours_saves(maker):
+    from app.services import profile_edit
+
+    await make_user(maker, 96, quiet_hours="23-8")
+    async with maker() as s:
+        u = await s.get(User, 96)
+        await profile_edit.update_profile(s, u, {"quiet_hours": "", "city": ""})
+    async with maker() as s:
+        assert (await s.get(User, 96)).quiet_hours == ""

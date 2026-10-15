@@ -1,4 +1,5 @@
 """Оплата тарифа: пакеты дней, запись платежа, продление 💎, доля пригласившему."""
+import asyncio
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -92,7 +93,18 @@ async def take_back(s: AsyncSession, payment: Payment) -> None:
 
 
 async def refund(s: AsyncSession, payment: Payment, money: bool, call=None) -> str:
-    """Вернуть деньги (money=True) и снять тариф. Возвращает текст результата для администратора."""
+    """Вернуть деньги (money=True) и снять тариф. Возвращает текст результата для администратора.
+
+    По одному возврату за раз: двойное нажатие не снимет дни дважды."""
+    async with _refund_lock:
+        await s.refresh(payment)
+        return await _refund(s, payment, money, call)
+
+
+_refund_lock = asyncio.Lock()
+
+
+async def _refund(s: AsyncSession, payment: Payment, money: bool, call=None) -> str:
     if payment.refunded:
         raise RefundError("Этот платёж уже возвращён.")
     note = "Деньги верните вручную в кабинете ЮKassa → Платежи."
@@ -255,6 +267,11 @@ async def renew_due(s: AsyncSession, api=None, notify_user=None, notify_admin=No
                 ok = data.get("status") == "succeeded"
             except Exception:
                 ok = False
+            if data.get("status") == "pending" and data.get("id"):
+                # банк ещё думает: деньги могут списаться позже — следим, как за ссылкой (дни начислит link_loop)
+                s.add(PendingLink(yk_id=data["id"], user_id=u.tg_id, days=days, amount=price * 100))
+                await s.commit()
+                continue
         if ok:
             new, share = await apply(s, u.tg_id, days, price * 100, config.PAYMENT_CURRENCY, f"yk:{data['id']}", data["id"])
             done += 1

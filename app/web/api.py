@@ -52,7 +52,7 @@ async def leads_list(request: web.Request) -> web.Response:
     if status not in STATUSES:
         return err("bad_status", "Неизвестный статус")
     try:
-        before = int(request.query.get("before", "0"))
+        before = _bounded(request.query.get("before", "0"))
     except ValueError:
         return err("bad_request", "Некорректный запрос")
     async with Session() as s:
@@ -71,7 +71,7 @@ async def lead_act(request: web.Request) -> web.Response:
     if action not in lead_actions.ACTIONS:
         return err("bad_action", "Неизвестное действие")
     try:
-        delivery_id = int(request.match_info["id"])
+        delivery_id = _bounded(request.match_info["id"])
     except ValueError:
         return err("bad_request", "Некорректный номер")
     async with Session() as s:
@@ -99,7 +99,7 @@ async def lead_reply(request: web.Request) -> web.Response:
     if kind not in ("template", "draft"):
         return err("bad_kind", "Неизвестный вид ответа")
     try:
-        delivery_id = int(request.match_info["id"])
+        delivery_id = _bounded(request.match_info["id"])
     except ValueError:
         return err("bad_request", "Некорректный номер")
     async with Session() as s:
@@ -169,9 +169,20 @@ async def client_card(s, c) -> dict:
     return item
 
 
+MAX_INT = 2**62  # больше не влезает в SQLite: огромный номер в запросе дал бы ошибку 500 вместо «не найдено»
+
+
+def _bounded(raw) -> int:
+    """int(raw) или ValueError, если это не число или оно не помещается в базу."""
+    value = int(raw)
+    if abs(value) > MAX_INT:
+        raise ValueError(raw)
+    return value
+
+
 def _int(raw, default=0):
     try:
-        return int(raw)
+        return _bounded(raw)
     except (TypeError, ValueError):
         return default
 

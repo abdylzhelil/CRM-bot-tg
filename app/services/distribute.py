@@ -123,23 +123,34 @@ async def distribute(s: AsyncSession, lead: Lead) -> list[Delivery]:
 
 
 async def due(s: AsyncSession, limit: int = 50) -> list[tuple[Delivery, Lead, User]]:
-    """Заявки, которые пора отправить (режим тишины пользователя учитывается здесь)."""
-    rows = (await s.execute(
-        select(Delivery, Lead, User)
-        .join(Lead, Lead.id == Delivery.lead_id)
-        .join(User, User.tg_id == Delivery.user_id)
-        .where(~Delivery.sent, Delivery.deliver_after <= now(), ~User.blocked)
-        .order_by(Delivery.id)
-        .limit(limit * 4)
-    )).all()
+    """Заявки, которые пора отправить (режим тишины пользователя учитывается здесь).
+
+    Читаем порциями, пока не наберём limit: иначе ночью сотня отложенных «тихих» заявок заслонила бы остальных.
+    На паузе — не шлём; старше суток (пауза, блокировка) — уже не шлём вовсе, чтобы потом не пришла пачка старья.
+    """
     hour = quiet.local_now().hour
-    out = []
-    for d, lead, user in rows:
-        if quiet.in_quiet(hour, quiet.parse_hours(user.quiet_hours)) and not quiet.is_hot(lead.text):
-            continue  # придёт, когда закончится тишина
-        out.append((d, lead, user))
-        if len(out) >= limit:
+    fresh = now() - timedelta(days=1)
+    out: list[tuple[Delivery, Lead, User]] = []
+    last_id = 0
+    while len(out) < limit:
+        rows = (await s.execute(
+            select(Delivery, Lead, User)
+            .join(Lead, Lead.id == Delivery.lead_id)
+            .join(User, User.tg_id == Delivery.user_id)
+            .where(~Delivery.sent, Delivery.deliver_after <= now(), Delivery.deliver_after > fresh,
+                   ~User.blocked, ~User.paused, Delivery.id > last_id)
+            .order_by(Delivery.id)
+            .limit(limit * 4)
+        )).all()
+        if not rows:
             break
+        last_id = rows[-1][0].id
+        for d, lead, user in rows:
+            if quiet.in_quiet(hour, quiet.parse_hours(user.quiet_hours)) and not quiet.is_hot(lead.text):
+                continue  # придёт, когда закончится тишина
+            out.append((d, lead, user))
+            if len(out) >= limit:
+                break
     return out
 
 

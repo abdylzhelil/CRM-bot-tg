@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import random
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, or_, select
 from telethon import TelegramClient, functions
@@ -16,7 +16,7 @@ from telethon.errors import (
 
 from app.bot import notify
 from app.db import Session
-from app.models import FeedChat, Group, ScoutAccount, now
+from app.models import FeedChat, Group, ScoutAccount, Setting, now
 from app.services import settings
 
 log = logging.getLogger(__name__)
@@ -110,13 +110,16 @@ async def join_loop(manager) -> None:
     """Раз в цикл — по одному вступлению на аккаунт, затем случайная пауза."""
     while True:
         did = False
-        for acc_id, client in list(manager.clients.items()):
-            if await paused():
-                break
-            try:
-                did |= await join_one(client, acc_id)
-            except Exception:
-                log.exception("join_loop #%s", acc_id)
+        try:
+            for acc_id, client in list(manager.clients.items()):
+                if await paused():
+                    break
+                try:
+                    did |= await join_one(client, acc_id)
+                except Exception:
+                    log.exception("join_loop #%s", acc_id)
+        except Exception:  # например, база занята — не останавливаем задачу навсегда
+            log.exception("join_loop")
         await asyncio.sleep(random.uniform(90, 420) if did else 60)
 
 
@@ -129,6 +132,7 @@ async def rotate(client: TelegramClient, acc_id: int, limit: int = 10) -> int:
             select(Group).where(
                 Group.account_id == acc_id, Group.status == "joined", Group.joined_at < cutoff,
                 (Group.last_lead_at.is_(None)) | (Group.last_lead_at < cutoff),
+                ~Group.ads_allowed,  # в группах, где продаём рекламу, остаёмся, даже если заявок нет
             ).limit(limit)
         )).all()
         left = 0
@@ -150,23 +154,50 @@ async def search_loop(manager) -> None:
     from app.scout.search import discover
 
     while True:
-        for acc_id, client in list(manager.clients.items()):
-            if await paused():
-                break
-            try:
-                await discover(client)
-            except Exception:
-                log.exception("search_loop #%s", acc_id)
-        async with Session() as s:
-            hours = await settings.get_int(s, "search_interval_h")
-        await asyncio.sleep(hours * 3600)
+        hours = 6
+        try:
+            for acc_id, client in list(manager.clients.items()):
+                if await paused():
+                    break
+                try:
+                    await discover(client)
+                except Exception:
+                    log.exception("search_loop #%s", acc_id)
+            async with Session() as s:
+                hours = await settings.get_int(s, "search_interval_h")
+        except Exception:
+            log.exception("search_loop")
+        await asyncio.sleep(max(hours, 1) * 3600)
+
+
+ROTATION_KEY = "rotation_at"  # когда последний раз выходили из пустых групп (переживает перезапуск)
+
+
+async def rotation_due(every=timedelta(days=7)) -> bool:
+    async with Session() as s:
+        row = await s.get(Setting, ROTATION_KEY)
+        if row is not None and datetime.fromisoformat(row.value) > now() - every:
+            return False
+        if row is None:
+            # первый запуск после обновления: отсчёт с этого момента, а не выход из групп сразу
+            s.add(Setting(key=ROTATION_KEY, value=now().isoformat()))
+            await s.commit()
+            return False
+        row.value = now().isoformat()
+        await s.commit()
+        return True
 
 
 async def rotation_loop(manager) -> None:
+    """Раз в 7 дней (по отметке в базе, а не от запуска) — выйти из групп без заявок."""
     while True:
-        await asyncio.sleep(7 * 86400)
-        for acc_id, client in list(manager.clients.items()):
-            try:
-                await rotate(client, acc_id)
-            except Exception:
-                log.exception("rotation #%s", acc_id)
+        try:
+            if await rotation_due():
+                for acc_id, client in list(manager.clients.items()):
+                    try:
+                        await rotate(client, acc_id)
+                    except Exception:
+                        log.exception("rotation #%s", acc_id)
+        except Exception:
+            log.exception("rotation_loop")
+        await asyncio.sleep(3600)

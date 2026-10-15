@@ -1,6 +1,6 @@
 """Режим тишины и признак «горячей» заявки (без ИИ — по словам в тексте)."""
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app import config
@@ -18,6 +18,11 @@ def is_hot(text: str) -> bool:
 
 def local_now() -> datetime:
     return datetime.now(ZoneInfo(config.TZ_NAME))
+
+
+def to_local(moment: datetime) -> datetime:
+    """Время из базы (UTC без пояса) → местное."""
+    return moment.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(config.TZ_NAME))
 
 
 def parse_hours(raw: str) -> tuple[int, int] | None:

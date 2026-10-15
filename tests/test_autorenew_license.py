@@ -100,12 +100,44 @@ async def test_autorenew_off_flag_and_user_button(maker, tgbot, monkeypatch):
         assert (await s.get(User, 72)).renew_method == ""
 
 
-async def test_reminder_mentions_charge_for_autorenew(maker, tgbot):
+async def test_reminder_mentions_charge_for_autorenew(maker, tgbot, monkeypatch):
+    await keys(monkeypatch)
     async with maker() as s:
         await settings.put(s, "price_30", "490")
+        await settings.put(s, "autorenew", "1")
     await make_user(maker, 73, plan="full", plan_until=now() + timedelta(days=2), renew_method="pm", renew_days=30)
     await expiry_once()
     assert any("спишем 490" in t for t in tgbot.texts(73))
+
+
+async def test_autorenew_switched_off_plan_still_ends(maker, tgbot, monkeypatch):
+    """Карта привязана, но владелец выключил автопродление: не обещаем списание и тариф честно заканчивается."""
+    await keys(monkeypatch)
+    async with maker() as s:
+        await settings.put(s, "price_30", "490")
+    await make_user(maker, 74, plan="full", plan_until=now() + timedelta(days=2), renew_method="pm", renew_days=30)
+    await make_user(maker, 75, plan="full", plan_until=now() - timedelta(hours=1), renew_method="pm", renew_days=30)
+    await expiry_once()
+    assert not any("спишем" in t for t in tgbot.texts(74))
+    async with maker() as s:
+        assert (await s.get(User, 75)).plan == "free"
+
+
+async def test_renew_pending_is_watched_not_dropped(maker, tgbot, monkeypatch):
+    """ЮKassa ответила «pending»: автопродление не выключаем, платёж ставим под наблюдение."""
+    from app.models import PendingLink
+
+    await keys(monkeypatch)
+    async with maker() as s:
+        await settings.put(s, "price_30", "490")
+        await settings.put(s, "autorenew", "1")
+    await make_user(maker, 76, plan="full", plan_until=now() + timedelta(hours=3), renew_method="pm", renew_days=30)
+    async with maker() as s:
+        assert await payments.renew_due(s, api=AsyncMock(return_value={"id": "p-1", "status": "pending"})) == 0
+    async with maker() as s:
+        assert (await s.get(User, 76)).renew_method == "pm"
+        link = await s.scalar(select(PendingLink))
+        assert link.yk_id == "p-1" and link.days == 30 and link.amount == 49000
 
 
 async def add_group(maker, leads=0, **kw):

@@ -108,8 +108,11 @@ async def pass_to(s, m: Message, d, text):
         return await m.answer("Заявка не найдена.")
     me = await s.get(User, m.from_user.id)
     raw = text.strip().lstrip("@")
-    colleague = await s.get(User, int(raw)) if raw.isdigit() else await s.scalar(
-        select(User).where(User.username.ilike(raw)))
+    if not raw:
+        return await m.answer("Напишите @ник или ID коллеги.")
+    # точное совпадение ника (без учёта регистра); ilike принял бы «%» как «кто угодно»
+    colleague = await s.get(User, int(raw)) if raw.isascii() and raw.isdigit() and len(raw) < 19 else await s.scalar(
+        select(User).where(func.lower(User.username) == raw.lower()).limit(1))
     if colleague is None or not colleague.onboarded:
         bot_name = (await m.bot.me()).username
         return await m.answer(

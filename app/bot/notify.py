@@ -1,9 +1,10 @@
 """Отправка владельцу: карточки заявок, карточки групп, алерты."""
+import asyncio
 import html
 import logging
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter, TelegramServerError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app import config
@@ -92,8 +93,12 @@ def lead_text(lead: Lead, category: str) -> str:
     )
 
 
-async def send_delivery(d: Delivery, lead: Lead, user: User, category: str) -> bool:
-    """Карточка заявки пользователю. False — пользователь недоступен (заблокировал бота)."""
+SENT, BLOCKED, RETRY = "sent", "blocked", "retry"
+_flush_lock = asyncio.Lock()
+
+
+async def send_delivery(d: Delivery, lead: Lead, user: User, category: str) -> str:
+    """Карточка заявки пользователю: SENT; BLOCKED — заблокировал бота; RETRY — Telegram временно не принял, повторим."""
     assert _bot, "notify.init(bot) не вызван"
     text = lead_text(lead, category)
     if d.from_user:
@@ -105,28 +110,39 @@ async def send_delivery(d: Delivery, lead: Lead, user: User, category: str) -> b
             user.tg_id, text, reply_markup=lead_keyboard(lead, d.id, user.is_admin),
             disable_web_page_preview=True,
         )
-        return True
+        return SENT
     except TelegramForbiddenError:
-        return False
+        return BLOCKED
+    except (TelegramRetryAfter, TelegramNetworkError, TelegramServerError):
+        log.warning("Telegram временно не принял заявку %s для %s — повторим", lead.id, user.tg_id)
+        return RETRY
     except Exception:
         log.exception("не удалось отправить заявку %s пользователю %s", lead.id, user.tg_id)
-        return True  # не повторяем бесконечно
+        return SENT  # ошибка в самом сообщении — не повторяем бесконечно
 
 
 async def flush_due() -> int:
-    """Отправить все заявки, время которых пришло. Возвращает, сколько отправлено."""
+    """Отправить все заявки, время которых пришло. Возвращает, сколько отправлено.
+
+    Вызывается из нескольких мест сразу (новая заявка, передача коллеге, фоновая задача), поэтому идёт по очереди
+    (замок), и каждая отметка «отправлено» сохраняется сразу — одна заявка не уйдёт человеку дважды.
+    """
     from app.bot.handlers.leads import category_name
     from app.services.distribute import due
 
     sent = 0
-    async with Session() as s:
-        for d, lead, user in await due(s):
-            ok = await send_delivery(d, lead, user, await category_name(s, lead.category_id))
-            d.sent = True
-            if not ok:
-                user.blocked = True
-            sent += ok
-        await s.commit()
+    async with _flush_lock:
+        async with Session() as s:
+            for d, lead, user in await due(s):
+                category = await category_name(s, lead.category_id)
+                result = await send_delivery(d, lead, user, category)
+                if result == RETRY:
+                    break  # Telegram просит подождать — остальное отправит следующий проход
+                d.sent = True
+                if result == BLOCKED:
+                    user.blocked = True
+                sent += result == SENT
+                await s.commit()
     return sent
 
 

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import AdOrder, Group, ScoutAccount, User
+from app.models import AdOrder, AdPost, Group, Payment, ScoutAccount, User
 from app.services import adposts, payments, settings
 
 router = Router()        # пользователи
@@ -294,7 +294,22 @@ async def adm_list(cb: CallbackQuery) -> None:
         enabled = await adposts.enabled(s)
     rows = [[(f"№{o.id} · {adposts.STATUS[o.status]} · {o.price} ₽", f"apa:o:{o.id}")] for o in orders]
     head = "📣 Заказы рекламы" + ("" if enabled else " (⚠️ сервис выключен: ⚙️ → 🔍 Разведчик)")
-    await reply(cb, head + (":" if orders else "\n\nАктивных заказов нет."), kb(rows + [[("◀️ Назад", "gr:menu")]]))
+    await reply(cb, head + (":" if orders else "\n\nАктивных заказов нет."),
+                kb(rows + [[("📜 Завершённые и отменённые", "apa:hist")], [("◀️ Назад", "gr:menu")]]))
+
+
+@admin_router.callback_query(F.data == "apa:hist")
+async def adm_history(cb: CallbackQuery) -> None:
+    """Выполненные, отклонённые и отменённые заказы: тут повтор неудачных постов и возврат по старым заказам."""
+    async with Session() as s:
+        orders = (await s.scalars(select(AdOrder).where(AdOrder.status.in_(("done", "rejected", "canceled")))
+                                  .order_by(AdOrder.id.desc()).limit(30))).all()
+        failed = set((await s.scalars(select(AdPost.order_id).where(
+            AdPost.status == "failed", AdPost.order_id.in_([o.id for o in orders])))).all())
+    rows = [[(f"№{o.id} · {adposts.STATUS[o.status]}{' · ⚠️ есть неудачные' if o.id in failed else ''}", f"apa:o:{o.id}")]
+            for o in orders]
+    await reply(cb, "📜 Последние завершённые заказы:" if orders else "📜 Завершённых заказов пока нет.",
+                kb(rows + [[("◀️ К заказам", "apa:list")]]))
 
 
 @admin_router.callback_query(F.data.regexp(r"^apa:o:\d+$"))
@@ -309,8 +324,11 @@ async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
     if order.status == "pending":
         rows.append([("✅ Одобрить", f"apa:ok:{order.id}"), ("❌ Отклонить", f"apa:no:{order.id}")])
         rows.append([("💰 Изменить цену", f"apa:price:{order.id}")])
-    if failed:
+    if failed and order.status in ("running", "done") and not await adposts.refunded(s, order):
         rows.append([(f"🔁 Повторить неудачные ({failed})", f"apa:retry:{order.id}")])
+    pay = await s.scalar(select(Payment).where(Payment.charge_id == f"yk:{order.yk_id}")) if order.yk_id else None
+    if pay is not None and not pay.refunded:
+        rows.append([("↩️ Вернуть деньги", f"rf:ask:{pay.id}")])
     if order.status in ("approved", "running", "pending"):
         rows.append([("🚫 Отменить заказ (с причиной)", f"apa:cancel:{order.id}")])
     return rows
@@ -392,14 +410,15 @@ async def apa_reason(s, m: Message, d, text):
 
 
 async def apa_price(s, m: Message, d, text):
-    if not text.strip().isdigit():
+    price = adposts.rubles(text)
+    if price is None:
         await m.answer("Нужно число (рубли), например 1500")
         return False
     order = await s.get(AdOrder, d["order_id"])
     if order is None:
         return await m.answer("Заказ не найден")
     try:
-        await adposts.set_order_price(s, order, int(text))
+        await adposts.set_order_price(s, order, price)
     except adposts.AdError as e:
         return await m.answer(str(e))
     await m.answer(f"✔ Цена заказа №{order.id}: {order.price} ₽", reply_markup=kb([[("Открыть заказ", f"apa:o:{order.id}")]]))
@@ -471,13 +490,14 @@ async def group_price_ask(cb: CallbackQuery, state: FSMContext) -> None:
 
 
 async def apg_price(s, m: Message, d, text):
-    if not text.strip().isdigit() or int(text) > 1_000_000:
+    price = adposts.rubles(text)
+    if price is None:
         await m.answer("Нужно число (рубли), например 500")
         return False
     g = await s.get(Group, d["gid"])
     if g is None:
         return await m.answer("Группа не найдена")
-    g.ad_price = int(text)
+    g.ad_price = price
     await s.commit()
     await m.answer(f"✔ Цена за пост в «{esc(g.title)}»: {g.ad_price or 'общая'} ₽", reply_markup=kb([[("Открыть", f"apg:o:{g.id}")]]))
 
@@ -527,11 +547,12 @@ async def all_price_ask(cb: CallbackQuery, state: FSMContext) -> None:
 
 
 async def apg_allprice(s, m: Message, d, text):
-    if not text.strip().isdigit() or int(text) > 1_000_000:
+    price = adposts.rubles(text)
+    if price is None:
         await m.answer("Нужно число (рубли), например 500")
         return False
-    n = await adposts.set_all_prices(s, int(text))
-    await m.answer(f"✔ Цена {int(text) or 'общая'} ₽ поставлена в {n} группах и каналах.", reply_markup=kb([[("📢 К списку", "apg:list")]]))
+    n = await adposts.set_all_prices(s, price)
+    await m.answer(f"✔ Цена {price or 'общая'} ₽ поставлена в {n} группах и каналах.", reply_markup=kb([[("📢 К списку", "apg:list")]]))
 
 
 @admin_router.callback_query(F.data == "apg:algo")

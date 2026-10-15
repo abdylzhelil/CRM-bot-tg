@@ -60,7 +60,7 @@ async def update_profile(s, user: User, data: dict) -> list[str]:
         changed.append("only_city")
     if "quiet_hours" in data:
         text = str(data["quiet_hours"]).strip()
-        if text in ("-", "0", "выкл"):
+        if text in ("", "-", "0", "выкл"):  # пустое поле в кабинете = тишина выключена
             text = ""
         elif not quiet.parse_hours(text):
             raise ValidationError("Тишина: формат 23-8 (с 23:00 до 08:00) или пусто, чтобы выключить")

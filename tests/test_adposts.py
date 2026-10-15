@@ -193,11 +193,17 @@ async def test_validation_and_limits(maker):
     async with maker() as s:
         with pytest.raises(adposts.AdError):
             await adposts.new_draft(s, 70, "коротко")
-        for i in range(3):
+        for i in range(5):  # брошенные черновики не копятся и не блокируют новые заказы
             await adposts.new_draft(s, 70, TEXT + str(i))
+        assert await s.scalar(select(func.count()).select_from(AdOrder)) == 1
+    for _ in range(3):
+        await make_order(maker)
+    async with maker() as s:
         with pytest.raises(adposts.AdError, match="3 незавершённых"):
             await adposts.new_draft(s, 70, TEXT)
-        order = (await s.scalars(select(AdOrder))).first()
+        order = AdOrder(user_id=70, text=TEXT)
+        s.add(order)
+        await s.commit()
         with pytest.raises(adposts.AdError, match="хотя бы одну"):
             await adposts.submit(s, order)
         order.group_ids = "999"
@@ -645,3 +651,64 @@ async def test_group_daily_limit_counts_local_day(maker, monkeypatch):
         s.add(AdPost(order_id=1, group_id=g.id, status="sent", sent_at=start + timedelta(minutes=5)))  # сегодня
         await s.commit()
         assert await adposts.group_sent_today(s, g.id) == 1
+
+
+async def test_double_approve_publishes_once(maker, tgbot):
+    """Двойное нажатие «✅ Одобрить» (или одобрение из двух сообщений) не ставит посты дважды."""
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s1, maker() as s2:
+        a, b = await s1.get(AdOrder, oid), await s2.get(AdOrder, oid)  # оба видят «на проверке»
+        await adposts.approve(s1, a)
+        with pytest.raises(adposts.AdError):
+            await adposts.approve(s2, b)
+    async with maker() as s:
+        assert await s.scalar(select(func.count()).select_from(AdPost)) == 1
+
+
+async def test_payment_after_cancel_is_not_started(maker, tgbot):
+    await setup_group(maker, price=500)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    async with maker() as s1, maker() as s2:
+        stale = await s1.get(AdOrder, oid)  # оплата пришла, а заказчик в этот момент отменил
+        await adposts.cancel(s2, await s2.get(AdOrder, oid))
+        assert stale.status == "approved"
+        assert await adposts.mark_paid(s1, oid, "yk-late", 50000) is None  # уйдёт в «лишнюю оплату» с возвратом
+    async with maker() as s:
+        assert await s.scalar(select(func.count()).select_from(AdPost)) == 0
+
+
+async def test_closed_group_finishes_order_and_tells_admin(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        (await s.scalar(select(Group))).ads_allowed = False  # админ закрыл группу после заказа
+        await s.commit()
+    mgr, _ = manager()
+    await publisher.publish_one(mgr)
+    async with maker() as s:
+        assert (await s.get(AdOrder, oid)).status == "done"  # не висит «публикуется» вечно
+    assert any("закрыта для рекламы" in t for t in tgbot.texts(ADMIN_ID))
+    assert any("выполнен" in t for t in tgbot.texts(70))
+
+
+async def test_no_retry_after_refund_or_cancel(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        order = await s.get(AdOrder, oid)
+        await adposts.cancel(s, order)
+        with pytest.raises(adposts.AdError):
+            await adposts.retry_failed(s, order)
+
+
+def test_rubles_input():
+    assert adposts.rubles(" 1500 ") == 1500
+    assert adposts.rubles("²") is None and adposts.rubles("9" * 5000) is None and adposts.rubles("2000000") is None
