@@ -71,3 +71,5 @@ main > *:nth-child(n+6) { animation-delay: .15s; }
 nav button { transition: color .15s; }
 nav button[aria-current="true"] div:first-child { animation: pop .3s ease-out; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+.btn.pkg { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.radar { flex: none; }

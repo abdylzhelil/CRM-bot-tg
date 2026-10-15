@@ -450,6 +450,27 @@
   function backHome() { return el("button", { class: "btn ghost", text: "◀️ Назад", onclick: function () { go("home"); } }); }
 
   // ---------- Тариф и оплата ----------
+  // мини-радар: чем длиннее тариф, тем больше «целей» (30 дн. — 3, до 90 — 6, дольше — 10), как на картинке в окне оплаты
+  var RADAR_DOTS = [[30, .55], [115, .45], [230, .65], [75, .85], [165, .8], [300, .5], [345, .8], [260, .9], [195, .35], [20, .95]];
+  function radar(days) {
+    var n = days <= 30 ? 3 : days <= 90 ? 6 : 10, NS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 100 100"); svg.setAttribute("width", "44"); svg.setAttribute("height", "44");
+    svg.setAttribute("aria-hidden", "true"); svg.setAttribute("class", "radar");
+    function add(tag, attrs) {
+      var n2 = document.createElementNS(NS, tag);
+      Object.keys(attrs).forEach(function (k) { n2.setAttribute(k, attrs[k]); });
+      svg.appendChild(n2);
+    }
+    [48, 32, 16].forEach(function (r) { add("circle", { cx: 50, cy: 50, r: r, fill: "none", stroke: "currentColor", "stroke-opacity": .55, "stroke-width": 2 }); });
+    add("path", { d: "M50 50 L66 4 A48 48 0 0 1 93 30 Z", fill: "currentColor", "fill-opacity": .3 });
+    RADAR_DOTS.slice(0, n).forEach(function (d) {
+      var a = d[0] * Math.PI / 180;
+      add("circle", { cx: 50 + Math.sin(a) * 48 * d[1], cy: 50 - Math.cos(a) * 48 * d[1], r: 4.5, fill: "#ffcc1a" });
+    });
+    return svg;
+  }
+
   function renderPlans() {
     setBack(function () { go("home"); });
     show(el("p", { class: "muted center-block", text: "Загрузка…" }));
@@ -472,10 +493,10 @@
       if (r.packages.length && r.can_pay) {
         parts.push(el("h2", { text: "Продлить или купить" }));
         r.packages.forEach(function (p) {
-          parts.push(el("button", { class: "btn", text: p.days + " дней — " + p.price.toLocaleString("ru-RU") + " ₽", onclick: function () {
+          parts.push(el("button", { class: "btn pkg", onclick: function () {
             api("POST", "/api/pay", { days: p.days }).then(function (x) { openLink(x.url); toast("Откроется страница оплаты (СБП или карта). Тариф включится сам в течение минуты."); })
               .catch(function (e) { toast(e.message, true); });
-          } }));
+          } }, [radar(p.days), el("span", { text: p.days + " дней — " + p.price.toLocaleString("ru-RU") + " ₽" })]));
         });
       } else if (!r.paid) {
         parts.push(el("p", { class: "muted", text: "Оплата пока не подключена. Больше заявок можно получить за приглашения друзей и добавленные группы." }));
