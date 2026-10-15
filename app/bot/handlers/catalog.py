@@ -164,7 +164,7 @@ async def my_groups(cb: CallbackQuery, user: User) -> None:
     lines = [f"{KIND[g.kind]} <b>{esc(g.title[:40])}</b> — {STATUS.get(g.status, g.status)}"
              + (f", заявок: {g.leads_count}" if g.catalog else "") for g in groups]
     days = sum(catalog.bonus_days(g, per) for g in groups)
-    ad_rows = [[(f"📢 Реклама: {g.title[:24]}", f"ad:ask:{g.id}")] for g in groups if g.catalog]
+    ad_rows = [[(f"📢 Продвинуть мою группу: {g.title[:20]}", f"ad:ask:{g.id}")] for g in groups if g.catalog]
     await reply(cb, "📂 <b>Мои группы</b>\n\n" + "\n".join(lines) + f"\n\n🎁 Получено бонусных дней: {days}\n🏆 Уровень: {levels.name(user.level)}",
                 kb(ad_rows + [[("◀️ Назад", "cg:menu")]]))
 
@@ -178,7 +178,8 @@ async def ad_ask(cb: CallbackQuery, user: User) -> None:
         return await cb.answer("Группа не найдена", show_alert=True)
     until = f"\nСейчас реклама идёт до {g.ad_until:%d.%m.%Y}." if ads.active(g) else ""
     rows = [[("✅ Заказать", f"ad:go:{g.id}")]] if cost > 0 else []
-    await reply(cb, (f"📢 <b>Реклама группы «{esc(g.title[:40])}»</b>\n\n"
+    await reply(cb, (f"📢 <b>Продвижение вашей группы «{esc(g.title[:40])}»</b> в каталоге\n"
+                     "<i>Хотите рекламу своего бизнеса или услуги в других группах? Это в 🌐 Каталог → «📣 Реклама моего бизнеса».</i>\n\n"
                      f"Ваша группа будет в начале каталога с пометкой 📢 и в канале статистики на {days} дн. "
                      f"Стоит {cost} заявок из этой группы (доступно: {ads.available(g)}). Дни 💎 за заявки не тратятся.{until}\n"
                      "Рекламу подтверждает администратор." if cost > 0 else "Реклама сейчас не подключена."),

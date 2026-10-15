@@ -70,5 +70,9 @@ async def answer(cb: CallbackQuery, user: User) -> None:
     user.verified = True
     await cb.answer("✅ Проверка пройдена")
     await cb.message.delete()
+    if param == "ads":  # пришёл по ссылке для рекламодателей
+        from app.bot.handlers import adposts
+
+        return await adposts.link_entry(cb.message, user)
     await intro.send_radar(cb.message)
     await profile.show_niches(cb.message, user)

@@ -549,3 +549,39 @@ async def test_bulk_screens(maker, tgbot, monkeypatch):
     c = cbq("apg:allow:1", uid=ADMIN_ID)
     await ah.allow_all_handler(c)
     assert "Разрешено: 4" in c.answer.await_args.args[0] and "Пропущено" in c.answer.await_args.args[0]
+
+
+async def test_ads_link_opens_order_screen_without_registration(maker, tgbot, monkeypatch):
+    from aiogram.filters import CommandObject
+
+    from app.bot import setup
+
+    sent = AsyncMock()
+    monkeypatch.setattr(ah, "reply", sent)
+    await setup_group(maker, price=400)
+    async with maker() as s:
+        s.add(User(tg_id=90, name="Рекламодатель", verified=True, onboarded=False))
+        await s.commit()
+        user = await s.get(User, 90)
+    state = MagicMock()
+    state.clear = AsyncMock()
+    m = msg(90)
+    await setup.start(m, state, user, CommandObject(command="start", args="ads"))
+    async with maker() as s:
+        u = await s.get(User, 90)
+        assert u.onboarded and u.source == "ads"  # ниши и город ему не нужны
+    assert "Реклама в группах и каналах" in sent.await_args.args[1] and "ap:new" in str(sent.await_args.args[2])
+    m.answer.assert_not_called()  # про ниши не спрашивали
+    # команда /ads делает то же самое
+    await ah.ads_cmd(msg(90), user)
+    assert "ap:list" in str(sent.await_args.args[2])
+
+
+async def test_ready_message_for_client(maker, tgbot):
+    await setup_group(maker, price=500)
+    c = cbq("apg:share", uid=ADMIN_ID)
+    c.bot.me = AsyncMock(return_value=SimpleNamespace(username="klientradarbot"))
+    await ah.share_text(c)
+    text = c.message.answer.await_args_list[0].args[0]
+    assert "Барахолка — 5000 уч. — 500 ₽" in text and "https://t.me/klientradarbot?start=ads" in text
+    assert "название компании" in text  # правило для вакансий сразу в сообщении

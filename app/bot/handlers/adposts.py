@@ -1,5 +1,6 @@
 """📣 Реклама в группах: заказ пользователем, проверка и управление админом (публикуют разведчики)."""
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
@@ -28,19 +29,45 @@ def approved_message(order_id: int, price: int, status: str):
 # ---------------------------------------------------------------- пользователь
 async def menu_rows(s) -> list[list[tuple[str, str]]]:
     """Кнопка для 🌐 Каталога (только когда сервис включён)."""
-    return [[("📣 Реклама в группах", "ap:menu")]] if await adposts.enabled(s) else []
+    return [[("📣 Реклама моего бизнеса в группах", "ap:menu")]] if await adposts.enabled(s) else []
 
 
 @router.callback_query(F.data == "ap:menu")
 async def ap_menu(cb: CallbackQuery, user: User) -> None:
+    await show_menu(cb, user)
+
+
+@router.message(Command("ads"))
+async def ads_cmd(m: Message, user: User) -> None:
+    """/ads и ссылка ?start=ads — рекламодатель сразу попадает сюда, без выбора ниш."""
+    await link_entry(m, user)
+
+
+async def link_entry(target, user: User) -> None:
+    """Человек пришёл за рекламой: регистрация с нишами ему не нужна — сразу открываем заказ рекламы."""
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+        if row is not None:
+            if not row.source:
+                row.source = "ads"
+            if not row.onboarded:
+                row.onboarded = True  # без ниш заявок не получает; чистка «пустых» его не удалит
+            await s.commit()
+    user.onboarded = True
+    await show_menu(target, user)
+
+
+async def show_menu(target, user: User) -> None:
     async with Session() as s:
         if not await adposts.enabled(s):
-            return await cb.answer("Реклама в группах пока не подключена", show_alert=True)
-        price = await settings.get_int(s, "adpost_price")
+            text = "Реклама в группах пока не подключена."
+            if isinstance(target, CallbackQuery):
+                return await target.answer(text, show_alert=True)
+            return await target.answer(text)
         groups = len(await adposts.eligible_groups(s))
         mine = await s.scalar(select(func.count()).select_from(AdOrder).where(AdOrder.user_id == user.tg_id, AdOrder.status != "draft"))
     cost = "у каждой группы и канала своя (смотрите в списке)" if groups else "—"
-    await reply(cb, (
+    await reply(target, (
         "📣 <b>Реклама в группах и каналах</b>\n\n"
         "Вы присылаете текст, выбираете группы или каналы — мы публикуем ваше объявление там.\n\n"
         f"💰 Стоимость: {cost}\n👥 Доступно мест: {groups}\n\n"
@@ -390,7 +417,8 @@ async def groups_for_ads(cb: CallbackQuery) -> None:
     rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{KIND.get(g.kind, '')} {g.title[:28]} · {adposts.group_price(g, default)} ₽", f"apg:o:{g.id}")]
             for g in groups]
     bulk = [[("💰 Одна цена всем", "apg:allprice"), ("📈 Цена по размеру (от–до)", "apg:algo")],
-            [("✅ Разрешить везде", "apg:allow:1"), ("⏸ Запретить везде", "apg:allow:0")]]
+            [("✅ Разрешить везде", "apg:allow:1"), ("⏸ Запретить везде", "apg:allow:0")],
+            [("📨 Готовое сообщение клиенту", "apg:share")]]
     await reply(cb, ("📢 Группы и каналы для рекламы. ✅ — разрешено (покупатель видит и может выбрать). "
                      "Нажмите на любую — разрешить/запретить и цена. Кнопки внизу меняют сразу все:"),
                 kb(rows + bulk + [[("◀️ Назад", "gr:menu")]]))
@@ -468,6 +496,27 @@ async def group_account_cycle(cb: CallbackQuery) -> None:
         g.ad_account_id = ids[(ids.index(cur) + 1) % len(ids)] if cur in ids else ids[0]
         await s.commit()
     await show_group_card(cb, gid)
+
+
+@admin_router.callback_query(F.data == "apg:share")
+async def share_text(cb: CallbackQuery) -> None:
+    """Готовое сообщение рекламодателю: список мест с ценами и ссылка, которая сразу открывает заказ в боте."""
+    me = await cb.bot.me()
+    async with Session() as s:
+        groups = await adposts.eligible_groups(s)
+        default = await settings.get_int(s, "adpost_price")
+    if not groups:
+        return await cb.answer("Пока нет разрешённых групп и каналов", show_alert=True)
+    lines = [f"• {g.title[:40]} — {g.members} уч. — {adposts.group_price(g, default)} ₽" for g in groups[:15]]
+    text = ("Реклама в наших группах и каналах (цена за один пост):\n\n" + "\n".join(lines)
+            + f"\n\nВсего {len(groups)} мест, около {sum(g.members for g in groups)} участников.\n\n"
+            f"Чтобы заказать: откройте https://t.me/{me.username}?start=ads, пришлите текст и выберите, где разместить. "
+            "После проверки придёт кнопка оплаты (СБП или карта), пост выйдет сам. "
+            "Для вакансий укажите название компании и телефон или адрес.")
+    await cb.message.answer(text)
+    await cb.message.answer("☝️ Скопируйте это сообщение и отправьте клиенту (нажмите и удерживайте текст).",
+                            reply_markup=kb([[("📢 К списку", "apg:list")]]))
+    await cb.answer()
 
 
 @admin_router.callback_query(F.data == "apg:allprice")

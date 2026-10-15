@@ -49,6 +49,7 @@ USER_COMMANDS = [
     BotCommand(command="clients", description="Мои клиенты (CRM)"),
     BotCommand(command="invite", description="Пригласить друзей (+дни 💎)"),
     BotCommand(command="catalog", description="Каталог групп и бонусы"),
+    BotCommand(command="ads", description="📣 Заказать рекламу"),
     BotCommand(command="profile", description="Профиль и настройки"),
     BotCommand(command="terms", description="Условия оплаты"),
     BotCommand(command="privacy", description="Политика конфиденциальности"),
@@ -130,6 +131,8 @@ base = Router()
 @base.message(Command("menu"))
 async def start(m: Message, state: FSMContext, user: User, command: CommandObject) -> None:
     await state.clear()
+    if command.args == "ads" and user.verified:  # ссылка для рекламодателей: сразу к заказу рекламы
+        return await adposts.link_entry(m, user)
     referrer = referrals.parse_payload(command.args)
     if not user.onboarded:
         async with Session() as s:
