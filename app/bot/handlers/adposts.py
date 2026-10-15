@@ -389,8 +389,11 @@ async def groups_for_ads(cb: CallbackQuery) -> None:
         return await cb.answer("Пока нет подходящих групп и каналов", show_alert=True)
     rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{KIND.get(g.kind, '')} {g.title[:28]} · {adposts.group_price(g, default)} ₽", f"apg:o:{g.id}")]
             for g in groups]
+    bulk = [[("💰 Одна цена всем", "apg:allprice"), ("📈 Цена по размеру (от–до)", "apg:algo")],
+            [("✅ Разрешить везде", "apg:allow:1"), ("⏸ Запретить везде", "apg:allow:0")]]
     await reply(cb, ("📢 Группы и каналы для рекламы. ✅ — разрешено (покупатель видит и может выбрать). "
-                     "Нажмите на любую, чтобы разрешить/запретить и поставить цену:"), kb(rows + [[("◀️ Назад", "gr:menu")]]))
+                     "Нажмите на любую — разрешить/запретить и цена. Кнопки внизу меняют сразу все:"),
+                kb(rows + bulk + [[("◀️ Назад", "gr:menu")]]))
 
 
 async def show_group_card(cb: CallbackQuery, gid: int) -> None:
@@ -465,6 +468,67 @@ async def group_account_cycle(cb: CallbackQuery) -> None:
         g.ad_account_id = ids[(ids.index(cur) + 1) % len(ids)] if cur in ids else ids[0]
         await s.commit()
     await show_group_card(cb, gid)
+
+
+@admin_router.callback_query(F.data == "apg:allprice")
+async def all_price_ask(cb: CallbackQuery, state: FSMContext) -> None:
+    async with Session() as s:
+        n = len(await adposts.candidates(s))
+    await ask(cb, state, "apg_allprice", f"Одна цена за пост для ВСЕХ ({n} групп и каналов), ₽. «0» — вернуть общую цену из ⚙️:")
+
+
+async def apg_allprice(s, m: Message, d, text):
+    if not text.strip().isdigit() or int(text) > 1_000_000:
+        await m.answer("Нужно число (рубли), например 500")
+        return False
+    n = await adposts.set_all_prices(s, int(text))
+    await m.answer(f"✔ Цена {int(text) or 'общая'} ₽ поставлена в {n} группах и каналах.", reply_markup=kb([[("📢 К списку", "apg:list")]]))
+
+
+@admin_router.callback_query(F.data == "apg:algo")
+async def algo_ask(cb: CallbackQuery, state: FSMContext) -> None:
+    async with Session() as s:
+        groups = await adposts.candidates(s)
+    if not groups:
+        return await cb.answer("Нет групп и каналов", show_alert=True)
+    await ask(cb, state, "apg_algo", (
+        f"📈 Цена по размеру для {len(groups)} групп и каналов. Самая маленькая ({min(g.members for g in groups)} уч.) получит "
+        f"нижнюю цену, самая большая ({max(g.members for g in groups)} уч.) — верхнюю, остальные пропорционально участникам.\n\n"
+        "Напишите «от-до» в рублях, например: 300-2000"))
+
+
+async def apg_algo(s, m: Message, d, text):
+    rng = adposts.parse_range(text)
+    if rng is None:
+        await m.answer("Напишите два числа: от и до, например 300-2000 (от не больше до)")
+        return False
+    low, high = rng
+    groups = await adposts.candidates(s)
+    prices = adposts.scaled_prices(groups, low, high)
+    sample = [groups[0], groups[len(groups) // 2], groups[-1]] if len(groups) > 2 else groups
+    lines = [f"• {esc(g.title[:30])} — {g.members} уч. → {prices[g.id]} ₽" for g in sample]
+    await m.answer(f"Так будут выставлены цены ({len(groups)} шт.): от {low} до {high} ₽\n\n" + "\n".join(lines)
+                   + "\n\nЦены у всех групп и каналов заменятся. Применить?",
+                   reply_markup=kb([[("✅ Применить", f"apg:algo_ok:{low}:{high}")], [("Отмена", "apg:list")]]))
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:algo_ok:\d+:\d+$"))
+async def algo_apply(cb: CallbackQuery) -> None:
+    _, _, low, high = cb.data.split(":")
+    async with Session() as s:
+        n = await adposts.apply_scaled(s, int(low), int(high))
+    await cb.answer(f"Цены обновлены: {n} шт.", show_alert=True)
+    await groups_for_ads(cb)
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:allow:[01]$"))
+async def allow_all_handler(cb: CallbackQuery) -> None:
+    flag = cb.data.endswith("1")
+    async with Session() as s:
+        changed, skipped = await adposts.allow_all(s, flag)
+    note = f"\nПропущено без аккаунта-публикатора: {skipped} (назначьте его в карточке)." if skipped else ""
+    await cb.answer(("Разрешено" if flag else "Запрещено") + f": {changed} шт." + note, show_alert=True)
+    await groups_for_ads(cb)
 
 
 async def counts() -> tuple[int, int]:

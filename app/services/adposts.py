@@ -272,3 +272,65 @@ async def posts_of(s: AsyncSession, order_id: int) -> list[tuple[AdPost, Group]]
     rows = await s.execute(select(AdPost, Group).join(Group, Group.id == AdPost.group_id)
                            .where(AdPost.order_id == order_id).order_by(AdPost.id))
     return [(p, g) for p, g in rows.all()]
+
+
+# ---- массовые действия администратора над группами и каналами
+async def candidates(s: AsyncSession) -> list[Group]:
+    """Все группы и каналы, где разведчик состоит и есть публичная ссылка: с ними работают массовые кнопки."""
+    return list((await s.scalars(select(Group).where(Group.status == "joined", Group.username != "")
+                                 .order_by(Group.members.desc()))).all())
+
+
+def scaled_prices(groups: list[Group], low: int, high: int, step: int = 10) -> dict[int, int]:
+    """Цена по размеру: самая маленькая группа — `low`, самая большая — `high`, остальные пропорционально участникам."""
+    if not groups:
+        return {}
+    mn, mx = min(g.members for g in groups), max(g.members for g in groups)
+    out = {}
+    for g in groups:
+        share = 0.0 if mx == mn else (g.members - mn) / (mx - mn)
+        price = round((low + (high - low) * share) / step) * step
+        out[g.id] = min(max(price, low), high)
+    return out
+
+
+async def set_all_prices(s: AsyncSession, price: int) -> int:
+    groups = await candidates(s)
+    for g in groups:
+        g.ad_price = price
+    await s.commit()
+    return len(groups)
+
+
+async def apply_scaled(s: AsyncSession, low: int, high: int) -> int:
+    groups = await candidates(s)
+    prices = scaled_prices(groups, low, high)
+    for g in groups:
+        g.ad_price = prices[g.id]
+    await s.commit()
+    return len(groups)
+
+
+async def allow_all(s: AsyncSession, flag: bool) -> tuple[int, int]:
+    """Разрешить/запретить рекламу везде. Возвращает (изменено, пропущено: нет аккаунта-публикатора)."""
+    changed = skipped = 0
+    for g in await candidates(s):
+        if flag and not (g.ad_account_id or g.account_id):
+            skipped += 1
+            continue
+        if g.ads_allowed != flag:
+            g.ads_allowed = flag
+        changed += 1
+    await s.commit()
+    return changed, skipped
+
+
+def parse_range(text: str) -> tuple[int, int] | None:
+    """«300-2000», «300 2000», «300–2000» → (300, 2000)."""
+    import re
+
+    nums = re.findall(r"\d+", text)
+    if len(nums) != 2:
+        return None
+    low, high = int(nums[0]), int(nums[1])
+    return (low, high) if 0 <= low <= high <= 1_000_000 else None

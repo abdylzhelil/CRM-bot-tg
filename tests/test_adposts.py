@@ -498,3 +498,54 @@ async def test_per_group_daily_limit(maker, tgbot):
     assert client.send_message.await_count == 1
     async with maker() as s:
         assert (await s.scalar(select(func.count()).select_from(AdPost).where(AdPost.status == "queued"))) == 1
+
+
+async def many_groups(maker):
+    async with maker() as s:
+        s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        for i, members in enumerate((100, 1000, 5000, 10000)):
+            s.add(Group(tg_id=-1000 - i, username=f"g{i}", title=f"Группа {i}", members=members, status="joined",
+                        kind="group", account_id=1))
+        s.add(Group(tg_id=-2000, username="chan", title="Канал", members=3000, status="joined", kind="channel"))  # без аккаунта
+        await s.commit()
+
+
+async def test_bulk_price_algorithm_and_allow_all(maker, tgbot):
+    await many_groups(maker)
+    async with maker() as s:
+        groups = await adposts.candidates(s)
+        prices = adposts.scaled_prices(groups, 300, 2000)
+        by_members = {g.members: prices[g.id] for g in groups}
+        assert by_members[100] == 300 and by_members[10000] == 2000  # самая маленькая — «от», самая большая — «до»
+        assert 300 < by_members[1000] < by_members[3000] < by_members[5000] < 2000  # пропорционально участникам
+        assert all(p % 10 == 0 for p in prices.values())
+        assert adposts.parse_range("300-2000") == (300, 2000) and adposts.parse_range("300 – 2000") == (300, 2000)
+        assert adposts.parse_range("2000-300") is None and adposts.parse_range("500") is None
+        assert await adposts.apply_scaled(s, 300, 2000) == 5
+        assert (await s.scalar(select(Group).where(Group.members == 10000))).ad_price == 2000
+        assert await adposts.set_all_prices(s, 700) == 5
+        assert {g.ad_price for g in await adposts.candidates(s)} == {700}
+        changed, skipped = await adposts.allow_all(s, True)
+        assert changed == 4 and skipped == 1  # канал без аккаунта-публикатора не разрешается
+        assert len(await adposts.eligible_groups(s)) == 4
+        assert await adposts.allow_all(s, False) == (5, 0) and not await adposts.eligible_groups(s)
+
+
+async def test_bulk_screens(maker, tgbot, monkeypatch):
+    sent = AsyncMock()
+    monkeypatch.setattr(ah, "reply", sent)
+    await many_groups(maker)
+    await ah.groups_for_ads(cbq("apg:list", uid=ADMIN_ID))
+    shown = str(sent.await_args.args[2])
+    assert "apg:allprice" in shown and "apg:algo" in shown and "apg:allow:1" in shown and "apg:allow:0" in shown
+    m = msg()
+    async with maker() as s:
+        assert await ah.apg_algo(s, m, {}, "много") is False  # непонятный ввод — переспросит
+        await ah.apg_algo(s, m, {}, "300-2000")
+        assert "apg:algo_ok:300:2000" in str(m.answer.await_args.kwargs["reply_markup"]) and "→ 300 ₽" in m.answer.await_args.args[0]
+        assert await ah.apg_allprice(s, msg(), {}, "abc") is False
+        await ah.apg_allprice(s, msg(), {}, "800")
+    await ah.algo_apply(cbq("apg:algo_ok:300:2000", uid=ADMIN_ID))
+    c = cbq("apg:allow:1", uid=ADMIN_ID)
+    await ah.allow_all_handler(c)
+    assert "Разрешено: 4" in c.answer.await_args.args[0] and "Пропущено" in c.answer.await_args.args[0]

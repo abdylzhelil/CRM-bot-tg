@@ -270,6 +270,8 @@ HANDLERS = {
     "apa_reason": adposts_h.apa_reason,
     "apa_price": adposts_h.apa_price,
     "apg_price": adposts_h.apg_price,
+    "apg_allprice": adposts_h.apg_allprice,
+    "apg_algo": adposts_h.apg_algo,
     "grp_link": grp_link,
     "grp_city": grp_city,
     "us_find": us_find,
