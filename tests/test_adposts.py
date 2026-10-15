@@ -1002,7 +1002,8 @@ async def test_estimate_text(maker):
         assert await adposts.estimate(s, ids[:1]) == "в течение часа"
 
 
-async def test_closed_group_locked_for_buyers_and_reopens(maker, tgbot):
+async def test_closed_group_locked_for_buyers_and_reopens(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(publisher.asyncio, "sleep", AsyncMock())
     """Группа закрыта сейчас: покупатель видит её с 🔒, но выбрать не может; открылась — снова доступна;
     закрыта больше 2 суток — реклама в ней выключается сама."""
     from telethon.tl.types import ChatBannedRights
@@ -1114,3 +1115,63 @@ async def test_full_refund_after_parts_is_safe(maker, tgbot, monkeypatch):
         called = AsyncMock()
         note = await payments.refund(s, pay, True, call=called)
         assert "уже" in note and pay.refunded and not called.await_count
+
+
+def test_rules_verdict():
+    assert adposts.rules_verdict("Правила чата: 1. Реклама запрещена! 2. Мат нельзя")
+    assert adposts.rules_verdict("Реклама только через админа @boss")
+    assert adposts.rules_verdict("По вопросам рекламы — @manager")
+    assert adposts.rules_verdict("Чат без рекламы и спама")
+    assert not adposts.rules_verdict("Добро пожаловать! Общаемся вежливо, делимся опытом")
+    assert adposts.moderation_bots(["Combot", "shop_bot", "MissRose_bot"]) == ["Combot", "MissRose_bot"]
+
+
+async def test_group_rules_ban_and_agreement(maker, tgbot, monkeypatch):
+    """В закрепе «реклама только через админа» → группа выключается; владелец договорился → правила не мешают."""
+    await setup_group(maker)
+    mgr, client = manager()
+    ent = SimpleNamespace(left=False, broadcast=False, creator=False, admin_rights=None, banned_rights=None, default_banned_rights=None)
+    client.get_entity = AsyncMock(return_value=ent)
+    client.return_value = SimpleNamespace(full_chat=SimpleNamespace(about="Чат барахолки", pinned_msg_id=9, slowmode_seconds=30))
+    client.get_messages = AsyncMock(return_value=SimpleNamespace(message="Правила: реклама только через админа @boss"))
+    client.get_participants = AsyncMock(side_effect=[[SimpleNamespace(username="Combot")],
+                                                     [SimpleNamespace(username="boss", bot=False)]] * 2)
+    async with maker() as s:
+        gid = (await s.scalar(select(Group))).id
+    level, text = await publisher.check_group(mgr, gid)
+    assert level == "bad" and "в правилах группы" in text
+    async with maker() as s:
+        g = await s.get(Group, gid)
+        assert not g.ads_allowed and "@boss" in g.ad_rules and "@Combot" in g.ad_rules and "30 с" in g.ad_rules
+        g.ad_agreed, g.ads_allowed = True, True
+        await s.commit()
+    level, text = await publisher.check_group(mgr, gid)
+    assert level == "warn" and "модератор" in text  # правила не мешают, но бот-модератор есть
+    async with maker() as s:
+        assert (await s.get(Group, gid)).ads_allowed
+
+
+async def test_manual_refund_marks_posts(maker, tgbot, monkeypatch):
+    """ЮKassa не даёт вернуть через API: админ вернул в кабинете и нажал «✔ Вернул сам»."""
+    from telethon.errors import UserBannedInChannelError
+
+    from app.models import Payment
+
+    await setup_group(maker, price=400)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await settings.put(s, "adpost_auto_refund", "0")
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        await adposts.mark_paid(s, oid, "yk-7", 40000)
+    mgr, _ = manager(send=AsyncMock(side_effect=UserBannedInChannelError(request=None)))
+    await publisher.publish_one(mgr)
+    c = MagicMock()
+    c.data, c.from_user.id = f"apa:pok:{oid}:2", ADMIN_ID
+    c.answer, c.message.edit_text, c.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(ah, "reply", AsyncMock())
+    await ah.partial_do(c)
+    async with maker() as s:
+        pay = await s.scalar(select(Payment))
+        assert pay.refunded_amount == 40000 and await adposts.unpublished_value(s, await s.get(AdOrder, oid)) == 0
+    assert any("вернули 400" in t for t in tgbot.texts(70))

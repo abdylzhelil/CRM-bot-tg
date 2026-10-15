@@ -223,6 +223,51 @@ async def probe(manager, g: Group) -> tuple[str, str, bool, bool]:
     return ("warn", ", ".join(notes), no_media, False) if notes else ("ok", "можно публиковать", False, False)
 
 
+async def inspect_rules(manager, g: Group) -> tuple[str, str, list[str]]:
+    """Что за группа изнутри: описание и закреплённое сообщение (правила), боты, админы, медленный режим.
+    Возвращает (текст для карточки, запрет рекламы в правилах — или пусто, боты-модераторы)."""
+    from telethon import functions
+    from telethon.tl.types import ChannelParticipantsAdmins, ChannelParticipantsBots
+
+    client = manager.clients.get(g.ad_account_id or g.account_id)
+    if client is None:
+        return "", "", []
+    entity = await resolve(client, g)
+    about, pinned, slow = "", "", 0
+    try:
+        full = (await client(functions.channels.GetFullChannelRequest(entity))).full_chat
+        about, slow = full.about or "", full.slowmode_seconds or 0
+        if full.pinned_msg_id:
+            msg = await client.get_messages(entity, ids=full.pinned_msg_id)
+            pinned = (getattr(msg, "message", "") or "") if msg else ""
+    except Exception:
+        log.info("реклама: не прочитал описание/закреп %s", g.title)
+    bots, admins = [], []
+    try:
+        bots = [u.username for u in await client.get_participants(entity, filter=ChannelParticipantsBots(), limit=30)
+                if getattr(u, "username", None)]
+        admins = [u.username for u in await client.get_participants(entity, filter=ChannelParticipantsAdmins(), limit=15)
+                  if getattr(u, "username", None) and not getattr(u, "bot", False)]
+    except Exception:
+        log.info("реклама: список ботов/админов %s скрыт", g.title)
+    verdict = adposts.rules_verdict(about + "\n" + pinned)
+    mods = adposts.moderation_bots(bots)
+    lines = []
+    if verdict:
+        lines.append("📜 " + verdict)
+    if about:
+        lines.append("Описание: " + " ".join(about.split())[:200])
+    if pinned:
+        lines.append("Закреп: " + " ".join(pinned.split())[:200])
+    if bots:
+        lines.append("🤖 Боты: " + ", ".join("@" + b for b in bots[:8]) + (" (модераторы: " + ", ".join("@" + b for b in mods) + ")" if mods else ""))
+    if admins:
+        lines.append("👮 Админы (договориться о рекламе): " + ", ".join("@" + a for a in admins[:5]))
+    if slow:
+        lines.append(f"🐢 Медленный режим: одно сообщение в {slow} с")
+    return "\n".join(lines)[:1500], verdict, mods
+
+
 async def check_group(manager, gid: int) -> tuple[str, str]:
     """Проверить группу и запомнить итог в карточке. bad — реклама в группе выключается."""
     async with Session() as s:
@@ -230,6 +275,16 @@ async def check_group(manager, gid: int) -> tuple[str, str]:
         if g is None:
             return "bad", "группа не найдена"
         level, text, no_media, closed = await probe(manager, g)
+        if level != "bad" and g.kind != "channel":  # правила и боты группы (в своём канале — не нужно)
+            try:
+                g.ad_rules, verdict, mods = await inspect_rules(manager, g)
+            except Exception:
+                verdict, mods = "", []
+                log.info("реклама: не удалось прочитать правила %s", g.title)
+            if verdict and not g.ad_agreed:
+                level, text = "bad", verdict + " — договоритесь с админом и нажмите «🤝 Договорился с админом»"
+            elif mods and level == "ok":
+                level, text = "warn", "есть боты-модераторы (" + ", ".join("@" + m for m in mods[:3]) + ") — пост могут удалить, бот это проверит"
         g.ad_check = ({"ok": "✅ ", "warn": "⚠️ ", "bad": "⛔ "}[level] + text)[:160]
         g.ad_checked_at = now()
         g.no_media = no_media or (g.no_media and level != "ok")
@@ -253,6 +308,7 @@ async def recheck_groups(manager) -> list[str]:
     off = []
     for gid in ids:
         level, _ = await check_group(manager, gid)
+        await asyncio.sleep(2)  # не дёргаем Telegram слишком часто
         async with Session() as s:
             g = await s.get(Group, gid)
             if g is not None and g.ads_allowed and g.ad_closed_at and now() - g.ad_closed_at >= adposts.CLOSED_GIVE_UP:
@@ -261,11 +317,13 @@ async def recheck_groups(manager) -> list[str]:
                 await s.commit()
             elif g is not None and level == "bad":
                 off.append((g.id, g.title))
-    for gid, title in off:
-        await notify._send(f"⛔ Реклама в «{html.escape(title)}» выключена: писать туда нельзя (закрыта больше 2 суток "
-                           "или аккаунт потерял доступ). Покупатели её больше не видят.",
-                           notify.InlineKeyboardMarkup(inline_keyboard=[[
-                               notify.InlineKeyboardButton(text="📢 Карточка группы", callback_data=f"apg:o:{gid}")]]))
+    if off:  # одним сообщением за проверку
+        await notify._send("⛔ Реклама выключена (покупатели их больше не видят): писать туда нельзя — закрыта больше 2 суток, "
+                           "нет доступа или правила группы запрещают рекламу. Причина — в карточке группы.\n"
+                           + "\n".join(f"• {html.escape(title)}" for _, title in off),
+                           notify.InlineKeyboardMarkup(inline_keyboard=[
+                               [notify.InlineKeyboardButton(text=f"📢 {title[:30]}", callback_data=f"apg:o:{gid}")]
+                               for gid, title in off[:8]]))
     return [t for _, t in off]
 
 
@@ -359,7 +417,8 @@ async def notify_done(order_id: int) -> None:
     elif left:
         why = f" Автовозврат не прошёл: {html.escape(problem)}" if problem else ""
         await notify._send(f"⚠️ Заказ №{order_id} закончен, но не всё вышло: к возврату {left} ₽.{why} "
-                           "Верните кнопкой «💸 Вернуть за невышедшие» в карточке заказа.", order_markup(order_id))
+                           "Карточка заказа → «💸 Вернуть за невышедшие»: вернуть кнопкой или, если ЮKassa не даёт, "
+                           "вернуть в кабинете ЮKassa и нажать «✔ Вернул сам».", order_markup(order_id))
 
 
 async def stuck_orders() -> int:

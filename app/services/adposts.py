@@ -3,6 +3,7 @@
 Публикует аккаунт-разведчик, который состоит в группе. Только в группах, где админ разрешил (`groups.ads_allowed`),
 с суточным лимитом и паузами на аккаунт. Под постом — подпись `adpost_footer` (пометка «Реклама» и т. п.).
 """
+import re
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -70,6 +71,28 @@ async def eligible_groups(s: AsyncSession, city: str = "", photo: bool = False) 
     return sorted(rows, key=lambda g: 0 if city and g.city.lower() == city.lower() else 1)
 
 
+# правила группы: реклама запрещена / только через админа / платно — разведчику туда без договорённости нельзя
+_RULES_BAN = re.compile(
+    r"(реклам\w*[^.\n]{0,40}(запрещ|нельзя|не\s*допуска|бан|удаля)|без\s*реклам|no\s*ads|"
+    r"реклам\w*[^.\n]{0,30}(только|строго)?\s*(через|у|с|по\s*согласовани\w*\s*с)\s*(админ|владел|@)|"
+    r"(платн\w*|стоимость)\s*реклам|реклам\w*\s*платн|по\s*вопросам\s*реклам|прайс\s*на\s*реклам)",
+    re.I,
+)
+# известные боты-модераторы: удаляют сообщения новичков, ссылки, рекламу, требуют подписку или капчу
+MOD_BOTS = ("combot", "grouphelp", "missrose", "rose", "shieldy", "captcha", "antispam", "chatkeeper", "iris",
+            "guard", "protect", "moder", "admin", "spam", "check", "verify", "welcome", "subscribe", "podpis")
+
+
+def rules_verdict(text: str) -> str:
+    """Что сказано про рекламу в правилах группы (описание + закреп). Пусто — запрета не нашли."""
+    m = _RULES_BAN.search(text or "")
+    return f"в правилах группы: «{' '.join(m.group(0).split())[:60]}»" if m else ""
+
+
+def moderation_bots(usernames: list[str]) -> list[str]:
+    return [u for u in usernames if any(k in u.lower() for k in MOD_BOTS)]
+
+
 CLOSED_GIVE_UP = timedelta(hours=48)  # закрыта дольше — значит, навсегда: выключаем рекламу в группе
 RECHECK_EVERY = timedelta(hours=2)
 
@@ -80,7 +103,7 @@ async def closed_groups(s: AsyncSession) -> list[Group]:
         Group.status == "joined", Group.ads_allowed, Group.ad_closed_at.is_not(None)).order_by(Group.members.desc()))).all())
 
 
-async def due_rechecks(s: AsyncSession, limit: int = 2) -> list[int]:
+async def due_rechecks(s: AsyncSession, limit: int = 5) -> list[int]:
     """Какие группы пора (пере)проверить: ни разу не проверенные и закрытые, проверенные больше 2 ч назад."""
     rows = (await s.scalars(select(Group.id).where(
         Group.status == "joined", Group.ads_allowed,

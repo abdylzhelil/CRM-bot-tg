@@ -157,6 +157,20 @@ async def refund_part(s: AsyncSession, payment: Payment, amount_kop: int, call=N
         return amount
 
 
+async def mark_manual_refund(s: AsyncSession, payment: Payment, amount_kop: int) -> int:
+    """Админ сам вернул часть денег в кабинете ЮKassa (когда возврат через API запрещён) — записываем. Копейки."""
+    async with _refund_lock:
+        await s.refresh(payment)
+        amount = min(amount_kop, payment.amount - payment.refunded_amount)
+        if payment.refunded or amount <= 0:
+            raise RefundError("Возвращать нечего.")
+        payment.refunded_amount += amount
+        if payment.refunded_amount >= payment.amount:
+            payment.refunded, payment.refunded_at = True, now()
+        await s.commit()
+        return amount
+
+
 # ---------- оплата по ссылке (СБП и карта на странице ЮKassa) ----------
 API = "https://api.yookassa.ru/v3"
 

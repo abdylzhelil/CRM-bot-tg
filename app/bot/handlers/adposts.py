@@ -445,10 +445,16 @@ async def partial_ask(cb: CallbackQuery) -> None:
     if order.status == "running":
         if can_refund:
             rows.append([(f"✂️ Завершить и вернуть {value} ₽", f"apa:pok:{oid}:1")])
+        if value and pay is not None:
+            rows.append([(f"✂️ Завершить, {value} ₽ вернул сам в ЮKassa", f"apa:pok:{oid}:2")])
         rows.append([("✂️ Завершить без возврата", f"apa:pok:{oid}:0")])
-    elif can_refund:
-        rows.append([(f"💸 Вернуть {value} ₽", f"apa:pok:{oid}:1")])
-    hint = "" if can_refund or not value else "\n\nВозврат кнопкой недоступен — верните в кабинете ЮKassa."
+    else:
+        if can_refund:
+            rows.append([(f"💸 Вернуть {value} ₽", f"apa:pok:{oid}:1")])
+        if value and pay is not None:
+            rows.append([(f"✔ Вернул {value} ₽ сам в кабинете ЮKassa", f"apa:pok:{oid}:2")])
+    hint = ("\n\nЕсли ЮKassa не даёт вернуть кнопкой: кабинет ЮKassa → Платежи → этот платёж → «Вернуть» "
+            f"на {value} ₽, потом нажмите «✔ Вернул сам»." if value else "")
     await reply(cb, (f"✂️ Заказ №{oid}: вышло {len(ok)} из {len(posts)}.\n"
                      + ("Не вышло: " + ", ".join(esc(x) for x in bad) + "\n" if bad else "")
                      + (f"За невышедшие группы приходится {value} ₽." if value else "Возвращать нечего (бесплатный заказ или уже вернули).")
@@ -456,7 +462,7 @@ async def partial_ask(cb: CallbackQuery) -> None:
                 kb(rows + [[("◀️ Назад", f"apa:o:{oid}")]]))
 
 
-@admin_router.callback_query(F.data.regexp(r"^apa:pok:\d+:[01]$"))
+@admin_router.callback_query(F.data.regexp(r"^apa:pok:\d+:[012]$"))
 async def partial_do(cb: CallbackQuery) -> None:
     _, _, oid, money = cb.data.split(":")
     oid = int(oid)
@@ -468,11 +474,12 @@ async def partial_do(cb: CallbackQuery) -> None:
         try:
             if order.status == "running":
                 await adposts.finish_partial(s, order)
-            if money == "1":
+            if money in ("1", "2"):
                 value = await adposts.unpublished_value(s, order)
                 pay = await adposts.order_payment(s, order)
                 if pay is not None and value:
-                    refunded = await payments.refund_part(s, pay, value * 100) // 100
+                    refunded = (await payments.refund_part(s, pay, value * 100) if money == "1"
+                                else await payments.mark_manual_refund(s, pay, value * 100)) // 100
             await adposts.settle(s, order)  # решение принято (вернули или «без возврата») — автовозврат больше не тронет
         except (adposts.AdError, payments.RefundError) as e:
             return await alert(cb, str(e))
@@ -605,7 +612,8 @@ async def show_group_card(cb: CallbackQuery, gid: int) -> None:
             if g.kind == "channel" else "")
     rows = [[("⏸ Запретить рекламу" if g.ads_allowed else "✅ Разрешить рекламу", f"apg:tog:{g.id}")],
             [("💰 Цена за пост", f"apg:price:{g.id}"), ("🕘 Часы", f"apg:hours:{g.id}")],
-            [("📝 Условия группы", f"apg:note:{g.id}"), ("🔎 Проверить группу", f"apg:check:{g.id}")]]
+            [("📝 Условия группы", f"apg:note:{g.id}"), ("🔎 Проверить группу", f"apg:check:{g.id}")],
+            [("🤝 Не договаривались" if g.ad_agreed else "🤝 Договорился с админом", f"apg:agree:{g.id}")]]
     if g.kind == "channel":
         rows.append([("👤 Сменить аккаунт-публикатор", f"apg:acc:{g.id}")])
     hours = f"с {g.ad_hours.replace('-', ' до ')} ч" if g.ad_hours else "в любое время"
@@ -615,6 +623,8 @@ async def show_group_card(cb: CallbackQuery, gid: int) -> None:
                      + (f"🔎 Проверка {quiet.to_local(g.ad_checked_at):%d.%m %H:%M}: {esc(g.ad_check)}\n" if g.ad_checked_at
                         else "🔎 Ещё не проверяли — нажмите «🔎 Проверить группу»\n")
                      + ("🖼 Картинки запрещены — только текстовая реклама\n" if g.no_media else "")
+                     + ("🤝 С админом группы договорились — правила не мешают\n" if g.ad_agreed else "")
+                     + (f"\n<i>{esc(g.ad_rules[:900])}</i>\n\n" if g.ad_rules else "")
                      + (f"🔒 Закрыта для сообщений с {quiet.to_local(g.ad_closed_at):%d.%m %H:%M} — покупатели видят её, "
                         "но выбрать не могут; проверяю каждые 2 ч, через 2 суток выключу\n" if g.ad_closed_at else "") +
                      f"👤 Публикует: {who}{note}"), kb(rows + [[("◀️ К списку", "apg:list")]]))
@@ -631,6 +641,29 @@ async def group_check(cb: CallbackQuery) -> None:
     level, text = await publisher.check_group(manager, gid)
     off = "\nРеклама здесь выключена." if level == "bad" else ""
     await cb.answer({"ok": "✅ ", "warn": "⚠️ ", "bad": "⛔ "}[level] + text + off, show_alert=True)
+    await show_group_card(cb, gid)
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:agree:\d+$"))
+async def group_agree(cb: CallbackQuery) -> None:
+    """Владелец договорился с админом группы о рекламе: запрет в правилах больше не выключает группу."""
+    gid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        if g is None:
+            return await cb.answer("Группа не найдена", show_alert=True)
+        g.ad_agreed = not g.ad_agreed
+        agreed = g.ad_agreed
+        await s.commit()
+    if agreed and manager is not None:
+        from app.scout import publisher
+
+        level, text = await publisher.check_group(manager, gid)
+        await cb.answer(("Отмечено. " if level != "bad" else "Отмечено, но: ") + text
+                        + ("" if level == "bad" else " Включите рекламу кнопкой «✅ Разрешить рекламу», если она выключена."),
+                        show_alert=True)
+    else:
+        await cb.answer("Отмечено" if agreed else "Снято: правила группы снова учитываются", show_alert=True)
     await show_group_card(cb, gid)
 
 
