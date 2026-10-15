@@ -5,7 +5,8 @@ from sqlalchemy import delete, func, select
 
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import BlacklistEntry, SpamVote
+from app.models import BlacklistEntry, SpamSample, SpamVote
+from app.services import spamtexts
 
 router = Router()
 PAGE = 10
@@ -20,9 +21,12 @@ def who(e: BlacklistEntry) -> str:
 async def blacklist_menu(target: Message | CallbackQuery) -> None:
     async with Session() as s:
         cnt = dict((await s.execute(select(BlacklistEntry.status, func.count()).group_by(BlacklistEntry.status))).all())
+        samples = await spamtexts.count(s)
     await reply(target, "🛡 <b>Списки авторов заявок</b>\n"
-                "🚫 Чёрный — их сообщения не становятся заявками.\n👍 Белый — всегда заявки, даже если похожи на спам.",
+                "🚫 Чёрный — их сообщения не становятся заявками.\n👍 Белый — всегда заявки, даже если похожи на спам.\n"
+                "🧩 Спам-тексты — похожий текст с любого аккаунта не станет заявкой (появляются, когда вы жмёте «🚫 Спам»).",
                 kb([[(f"🚫 Чёрный · {cnt.get('spam', 0)}", "bl:ls:spam:0"), (f"👍 Белый · {cnt.get('client', 0)}", "bl:ls:client:0")],
+                    [(f"🧩 Спам-тексты · {samples}", "bl:sp:0")],
                     [("🔎 Найти по ID или @нику", "bl:find"), ("➕ Добавить по ID", "bl:add")]]))
 
 
@@ -108,3 +112,64 @@ async def bl_find(s, m: Message, d, text):
     if e is None:
         return await m.answer("Не нашёл в списках.", reply_markup=kb([[("◀️ Назад", "bl:menu")]]))
     await card(m, e.user_id)
+
+
+# ---------- спам-тексты ----------
+@router.callback_query(F.data.regexp(r"^bl:sp:\d{1,6}$"))
+async def samples_list(cb: CallbackQuery) -> None:
+    offset = int(cb.data.split(":")[2])
+    async with Session() as s:
+        total = await spamtexts.count(s)
+        rows_ = (await s.scalars(select(SpamSample).order_by(SpamSample.id.desc()).offset(offset).limit(PAGE))).all()
+    rows = [[(f"№{x.id} · {' '.join(x.text.split())[:40]}" + (f" · отсеяно {x.hits}" if x.hits else ""), f"bl:so:{x.id}")]
+            for x in rows_]
+    nav = []
+    if offset:
+        nav.append(("⬅️", f"bl:sp:{max(offset - PAGE, 0)}"))
+    if offset + PAGE < total:
+        nav.append(("➡️", f"bl:sp:{offset + PAGE}"))
+    if nav:
+        rows.append(nav)
+    rows.append([("➕ Добавить спам-текст", "bl:spadd")])
+    rows.append([("◀️ Назад", "bl:menu")])
+    await reply(cb, f"🧩 Спам-тексты: {total}" + ("" if rows_ else "\nПока пусто — появятся, когда вы отметите заявку «🚫 Спам»."),
+                kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^bl:so:\d{1,9}$"))
+async def sample_open(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        x = await s.get(SpamSample, int(cb.data.split(":")[2]))
+    if x is None:
+        return await cb.answer("Уже удалён", show_alert=True)
+    await reply(cb, f"🧩 Спам-текст №{x.id} (добавлен {x.created_at:%d.%m.%Y}, отсеяно похожих: {x.hits})\n\n{esc(x.text[:1500])}",
+                kb([[("♻️ Удалить (это не спам)", f"bl:sdel:{x.id}")], [("◀️ К списку", "bl:sp:0")]]))
+
+
+@router.callback_query(F.data.regexp(r"^bl:sdel:\d{1,9}$"))
+async def sample_delete(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        x = await s.get(SpamSample, int(cb.data.split(":")[2]))
+        if x is not None:
+            await s.delete(x)
+            await s.commit()
+    spamtexts.invalidate()
+    await cb.answer("Удалён — похожие тексты снова могут быть заявками")
+    cb.data = "bl:sp:0"
+    await samples_list(cb)
+
+
+@router.callback_query(F.data == "bl:spadd")
+async def sample_add(cb: CallbackQuery, state: FSMContext) -> None:
+    await ask(cb, state, "bl_sample", "Пришлите текст спама целиком (можно переслать сообщение). "
+              f"Похожие с любых аккаунтов перестанут быть заявками. Нужно хотя бы {spamtexts.MIN_WORDS} слов.")
+
+
+async def bl_sample(s, m: Message, d, text):
+    sample = await spamtexts.remember(s, text, added_by=m.from_user.id)
+    if sample is None:
+        await s.rollback()
+        return await m.answer("Слишком короткий текст или похожий уже есть в списке.",
+                              reply_markup=kb([[("🧩 Спам-тексты", "bl:sp:0")]]))
+    await s.commit()
+    await m.answer(f"✔ Спам-текст №{sample.id} сохранён.", reply_markup=kb([[("🧩 Спам-тексты", "bl:sp:0")]]))

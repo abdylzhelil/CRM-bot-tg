@@ -63,6 +63,9 @@ async def maker(monkeypatch):
         if name.startswith("app.") and hasattr(mod, "Session"):
             monkeypatch.setattr(mod, "Session", factory)
     rules.invalidate()
+    from app.services import spamtexts
+
+    spamtexts.invalidate()
     async with factory() as s:
         await seed(s)
         await migrate_data(s)

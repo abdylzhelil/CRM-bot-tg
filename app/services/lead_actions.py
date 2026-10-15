@@ -2,7 +2,7 @@
 from sqlalchemy import func, select
 
 from app.models import BlacklistEntry, Category, Client, ClientEvent, Delivery, Group, Lead, SpamVote, User
-from app.services import draft, settings, templates
+from app.services import draft, settings, spamtexts, templates
 from app.services.distribute import root_category
 
 STATUS_NOTES = {"later": ("postponed", "Отложено"), "reject": ("rejected", "Отказ")}
@@ -26,14 +26,31 @@ async def blacklist(s, lead: Lead, status: str, reason: str) -> None:
         s.add(BlacklistEntry(user_id=lead.author_id, username=lead.username, status=status, reason=reason))
 
 
-async def vote_spam(s, lead: Lead, user: User) -> None:
-    """Голос «спам»: пользователю автор больше не приходит; админ или N голосов — общий чёрный список."""
+async def vote_spam(s, lead: Lead, user: User) -> bool:
+    """Голос «спам»: пользователю автор больше не приходит; админ или N голосов — общий чёрный список,
+    плюс текст запоминается как образец (похожие с других аккаунтов тоже отсеются). True — заблокирован для всех.
+
+    Чтобы не нажимать «спам» дважды: другие заявки этого автора, которые ещё лежат у человека новыми или
+    ждут отправки, сразу уходят в «спам» (их можно вернуть из списка 🚫 Спам)."""
     if await s.get(SpamVote, (lead.author_id, user.tg_id)) is None:
         s.add(SpamVote(author_id=lead.author_id, user_id=user.tg_id))
         await s.flush()
+    others = (await s.scalars(select(Delivery).join(Lead, Lead.id == Delivery.lead_id).where(
+        Lead.author_id == lead.author_id, Delivery.user_id == user.tg_id, Lead.id != lead.id,
+        Delivery.status.in_(("new", "postponed"))))).all()
+    for other in others:
+        other.status, other.sent = "spam", True
     votes = await s.scalar(select(func.count()).select_from(SpamVote).where(SpamVote.author_id == lead.author_id))
-    if user.is_admin or votes >= await settings.get_int(s, "spam_votes_to_ban"):
-        await blacklist(s, lead, "spam", "отмечено администратором" if user.is_admin else f"голосов «спам»: {votes}")
+    if not (user.is_admin or votes >= await settings.get_int(s, "spam_votes_to_ban")):
+        return False
+    await blacklist(s, lead, "spam", "отмечено администратором" if user.is_admin else f"голосов «спам»: {votes}")
+    await spamtexts.remember(s, lead.text, lead.id, user.tg_id)
+    # у остальных ещё не отправленные заявки этого автора не придут
+    pending = (await s.scalars(select(Delivery).join(Lead, Lead.id == Delivery.lead_id).where(
+        Lead.author_id == lead.author_id, ~Delivery.sent))).all()
+    for d in pending:
+        d.status, d.sent = "spam", True
+    return True
 
 
 async def take(s, user: User, d: Delivery, lead: Lead) -> Client:
@@ -59,7 +76,8 @@ async def apply_status(s, user: User, d: Delivery, lead: Lead, action: str) -> s
         return note
     if action == "spam":
         d.status = "spam"
-        await vote_spam(s, lead, user)
+        if await vote_spam(s, lead, user):
+            return "Спам: автор и похожие тексты больше не придут"
         return "Это спам — автор больше не придёт"
     if action == "restore":
         return await restore(s, user, d, lead)
@@ -87,6 +105,7 @@ async def restore(s, user: User, d: Delivery, lead: Lead) -> str:
             votes = await s.scalar(select(func.count()).select_from(SpamVote).where(SpamVote.author_id == lead.author_id))
             if user.is_admin or votes < await settings.get_int(s, "spam_votes_to_ban"):
                 await s.delete(entry)
+                await spamtexts.forget_lead(s, lead.id)
     d.status = "new"
     return "Вернул в новые"
 

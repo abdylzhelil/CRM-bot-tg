@@ -295,6 +295,7 @@ HANDLERS = {
     "kw_del": kw_del,
     "bl_add": bl_add,
     "bl_find": lambda s, m, d, t: blacklist_h.bl_find(s, m, d, t),
+    "bl_sample": lambda s, m, d, t: blacklist_h.bl_sample(s, m, d, t),
 }
 for _f in ("note", "budget", "phone", "name"):
     HANDLERS[f"client_{_f}"] = lambda s, m, d, t, _f=_f: client_field(s, m, d, t, _f)

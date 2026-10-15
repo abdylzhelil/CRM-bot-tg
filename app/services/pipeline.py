@@ -6,8 +6,8 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import BlacklistEntry, Group, Lead, ScoutAccount, SeenMessage, now
-from app.services import geo, settings
+from app.models import BlacklistEntry, Group, Lead, ScoutAccount, SeenMessage, SpamSample, now
+from app.services import geo, settings, spamtexts
 from app.services.antispam import AuthorInfo, Behavior, score_message, text_hash
 from app.services.rules import load_rules
 from app.services.text import match
@@ -34,6 +34,18 @@ async def process(session: AsyncSession, msg: Incoming) -> Lead | None:
 
     m = match(msg.text, await load_rules(session), context=msg.group_title)
     if not m:
+        return None
+
+    # тот же спам с другого аккаунта: текст похож на уже отмеченный «спам» → не заявка, автор — в чёрный список
+    sample_id = None if entry is not None and entry.status == "client" else await spamtexts.match(session, msg.text)
+    if sample_id:
+        sample = await session.get(SpamSample, sample_id)
+        if sample is not None:
+            sample.hits += 1
+        if entry is None:
+            session.add(BlacklistEntry(user_id=author.user_id, username=author.username, status="spam",
+                                       reason=f"текст как спам-образец №{sample_id}"))
+        await session.commit()
         return None
 
     h = text_hash(msg.text)

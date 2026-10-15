@@ -139,6 +139,20 @@ class BlacklistEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class SpamSample(Base):
+    """Образец спам-текста: похожие сообщения (от любого аккаунта) больше не становятся заявками.
+
+    Появляется, когда админ (или N голосов) отмечает заявку «спам»; список и удаление — 🛡 Чёрный список → 🧩 Спам-тексты."""
+
+    __tablename__ = "spam_samples"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    lead_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    added_by: Mapped[int] = mapped_column(BigInteger, default=0)
+    hits: Mapped[int] = mapped_column(Integer, default=0)  # сколько похожих сообщений уже отсеяно
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class SeenMessage(Base):
     """Хеши текстов — для поиска одинаковых сообщений в разных группах и антидублей."""
 
