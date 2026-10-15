@@ -27,7 +27,9 @@ async def invoice(cb: CallbackQuery, user: User) -> None:
         price = await payments.price_of(s, days)
     if not price:
         return await cb.answer("Этот пакет сейчас недоступен", show_alert=True)
-    extra = {"photo_url": f"{config.WEBAPP_URL}/app/invoice.png", "photo_width": 640, "photo_height": 360} if config.WEBAPP_URL else {}
+    # чем длиннее тариф, тем больше «целей» на радаре: 30 дн. — 3, до 90 — 6, дольше — 10
+    tier = 30 if days <= 30 else 90 if days <= 90 else 365
+    extra = {"photo_url": f"{config.WEBAPP_URL}/app/invoice_{tier}.png", "photo_width": 640, "photo_height": 360} if config.WEBAPP_URL else {}
     await cb.bot.send_invoice(
         chat_id=cb.from_user.id, title=f"💎 Полный тариф на {days} дн.",
         description="📡 КлиентРадар: заявки от клиентов приходят сразу и без дневного лимита, своя CRM и кабинет в Telegram. "
