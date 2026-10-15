@@ -629,3 +629,19 @@ async def test_deleteme_cancels_ad_orders_and_wipes_texts(maker, tgbot):
         assert (await s.scalar(select(AdPost))).status == "canceled"
     mgr, client = manager()
     assert await publisher.publish_one(mgr) is False
+
+
+async def test_group_daily_limit_counts_local_day(maker, monkeypatch):
+    """Сутки для лимитов рекламы — местные (как у заявок), а не по UTC."""
+    from app.services import distribute
+
+    await setup_group(maker)
+    start = now() - timedelta(hours=3)  # местные сутки начались 3 часа назад
+    monkeypatch.setattr(distribute, "day_start", lambda: start)
+    monkeypatch.setattr(adposts, "day_start", lambda: start)
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        s.add(AdPost(order_id=1, group_id=g.id, status="sent", sent_at=start - timedelta(minutes=5)))  # вчера
+        s.add(AdPost(order_id=1, group_id=g.id, status="sent", sent_at=start + timedelta(minutes=5)))  # сегодня
+        await s.commit()
+        assert await adposts.group_sent_today(s, g.id) == 1

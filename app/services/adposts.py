@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AdOrder, AdPost, Group, ScoutAccount, now
 from app.services import settings
+from app.services.distribute import day_start
 
 MAX_GROUPS = 10  # групп в одном заказе
 MIN_TEXT, MAX_TEXT = 20, 1000
@@ -240,13 +241,13 @@ async def compose(s: AsyncSession, order: AdOrder) -> str:
 
 
 async def sent_today(s: AsyncSession, account_id: int) -> int:
-    start_of_day = now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_day = day_start()  # местные сутки, как у лимита заявок
     return await s.scalar(select(func.count()).select_from(AdPost).join(Group, Group.id == AdPost.group_id).where(
         publisher_id() == account_id, AdPost.status == "sent", AdPost.sent_at >= start_of_day)) or 0
 
 
 async def group_sent_today(s: AsyncSession, group_id: int) -> int:
-    start_of_day = now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_day = day_start()  # местные сутки, как у лимита заявок
     return await s.scalar(select(func.count()).select_from(AdPost).where(
         AdPost.group_id == group_id, AdPost.status == "sent", AdPost.sent_at >= start_of_day)) or 0
 

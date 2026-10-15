@@ -10,20 +10,23 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.common import kb
-from app.models import Client, Delivery, SpamVote, User, UserCategory, UserNegative, now
+from app.models import AdOrder, Client, Delivery, Payment, SpamVote, User, UserCategory, UserNegative, now
 from app.services import settings
 
 log = logging.getLogger(__name__)
 
 
 async def empty_users(s: AsyncSession, days: int) -> list[User]:
-    """Не завершили регистрацию дольше days дней, заявок и клиентов нет, не администраторы."""
+    """Не завершили регистрацию дольше days дней, заявок, клиентов, оплат и заказов рекламы нет, не администраторы."""
     cutoff = now() - timedelta(days=days)
     users = (await s.scalars(select(User).where(~User.onboarded, ~User.is_admin, User.created_at < cutoff))).all()
     out = []
     for x in users:
         has = await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.user_id == x.tg_id)) or 0
         has += await s.scalar(select(func.count()).select_from(Client).where(Client.user_id == x.tg_id)) or 0
+        # заплатившего или заказавшего рекламу не удаляем: по оплате может понадобиться возврат
+        has += await s.scalar(select(func.count()).select_from(Payment).where(Payment.user_id == x.tg_id)) or 0
+        has += await s.scalar(select(func.count()).select_from(AdOrder).where(AdOrder.user_id == x.tg_id)) or 0
         if not has:
             out.append(x)
     return out

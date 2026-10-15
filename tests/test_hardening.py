@@ -327,3 +327,18 @@ async def test_winback_message_once_three_days_after_end(maker, tgbot):
     assert len(tgbot.texts(91)) == before  # второй раз не пишем
     async with maker() as s:
         assert (await s.get(User, 91)).winback_at is None
+
+
+async def test_cleanup_keeps_unfinished_account_with_payment_or_ad_order(maker):
+    from app.models import AdOrder, Payment
+    from app.services import cleanup
+
+    async with maker() as s:
+        old = now() - timedelta(days=30)
+        s.add_all([User(tg_id=93, onboarded=False, created_at=old), User(tg_id=94, onboarded=False, created_at=old),
+                   User(tg_id=95, onboarded=False, created_at=old)])
+        s.add(Payment(user_id=93, days=30, amount=490, currency="RUB", charge_id="t1"))
+        s.add(AdOrder(user_id=94, text="реклама", group_ids="", price=0, status="draft"))
+        await s.commit()
+    async with maker() as s:
+        assert [u.tg_id for u in await cleanup.empty_users(s, 7)] == [95]  # с оплатой и заказом рекламы — остаются
