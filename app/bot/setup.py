@@ -143,6 +143,12 @@ async def start(m: Message, state: FSMContext, user: User, command: CommandObjec
     await m.answer("📡 Главное меню — выберите раздел:", reply_markup=menu_keyboard(user))
 
 
+@base.message(Command("radar"))
+async def radar_cmd(m: Message, user: User) -> None:
+    """Показать радар-анимацию (новым она приходит на /start сама)."""
+    await intro.send_radar(m)
+
+
 @base.message(Command("app"))
 async def app_cmd(m: Message, state: FSMContext, user: User) -> None:
     await state.clear()
