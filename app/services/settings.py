@@ -16,6 +16,7 @@ DEFAULTS: dict[str, str] = {
     "join_retry_days": "3",
     "join_retry_max": "4",
     "adpost_enabled": "0",
+    "adpost_auto_approve": "0",
     "adpost_price": "0",
     "adpost_daily_limit": "5",
     "adpost_gap_min": "10",
@@ -71,6 +72,7 @@ LABELS: dict[str, str] = {
     "join_retry_days": "Повторять заявку на вступление через N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
     "adpost_enabled": "Реклама в группах через разведчиков (1/0)",
+    "adpost_auto_approve": "Реклама в группах: одобрять заказы без запрещённых слов сами (1/0)",
     "adpost_price": "Реклама в группах: цена за одну группу, ₽ (0 — бесплатно)",
     "adpost_daily_limit": "Реклама в группах: постов в сутки с одного аккаунта",
     "adpost_gap_min": "Реклама в группах: пауза между постами аккаунта, мин",
@@ -139,7 +141,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
-                        "adpost_enabled", "adpost_price", "adpost_daily_limit", "adpost_gap_min", "adpost_footer"]),
+                        "adpost_enabled", "adpost_auto_approve", "adpost_price", "adpost_daily_limit", "adpost_gap_min", "adpost_footer"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
@@ -161,7 +163,7 @@ SHORT: dict[str, str] = {
     "rotation_days": "Выход из тихих групп, дн",
     "join_retry_days": "Повтор заявки, дн",
     "join_retry_max": "Попыток вступить",
-    "adpost_enabled": "Реклама вкл (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
+    "adpost_enabled": "Реклама вкл (1/0)", "adpost_auto_approve": "Автоодобрение (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
     "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "lead_keep_days": "Хранить заявки, дн",
@@ -185,6 +187,7 @@ HINTS: dict[str, str] = {
     "join_retry_days": "Если админ группы не одобрил заявку на вступление, разведчик отправит её снова через столько дней.",
     "join_retry_max": "Сколько всего раз разведчик пробует вступить в группу, где нужно одобрение админа. После этого группа пропускается.",
     "adpost_enabled": "Включает заказ рекламы пользователями и публикацию постов разведчиками в разрешённых группах. 0 — ничего не публикуется.",
+    "adpost_auto_approve": "1 — заказ без запрещённых слов сразу идёт на оплату, без вашей проверки (подозрительные всё равно придут вам). 0 — вы одобряете каждый заказ.",
     "adpost_price": "Сколько рублей стоит один пост в одной группе. 0 — реклама бесплатна (только с одобрением админа).",
     "adpost_daily_limit": "Сколько рекламных постов в сутки публикует один аккаунт-разведчик. Меньше — безопаснее для аккаунта.",
     "adpost_gap_min": "Минимальная пауза между рекламными постами одного аккаунта. Слишком частые посты — риск блокировки.",
@@ -274,7 +277,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),          # 0 — заявки перестали бы доходить до людей

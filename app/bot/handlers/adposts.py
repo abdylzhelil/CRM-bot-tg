@@ -17,6 +17,14 @@ FORBIDDEN = ("алкоголь, табак, казино и ставки, зай
              "политику и экстремизм")
 
 
+def approved_message(order_id: int, price: int, status: str):
+    """Сообщение заказчику после одобрения: платный — сразу с кнопкой «Оплатить», бесплатный — «в очереди»."""
+    if status == "approved":
+        return (f"✅ Заказ рекламы №{order_id} одобрен. Осталось оплатить {price} ₽ — нажмите кнопку (СБП или карта), "
+                "посты встанут в очередь сами.", kb([[(f"💳 Оплатить {price} ₽", f"ap:pay:{order_id}")]]))
+    return f"✅ Заказ рекламы №{order_id} одобрен и поставлен в очередь на публикацию.", None
+
+
 # ---------------------------------------------------------------- пользователь
 async def menu_rows(s) -> list[list[tuple[str, str]]]:
     """Кнопка для 🌐 Каталога (только когда сервис включён)."""
@@ -146,9 +154,18 @@ async def ap_send(cb: CallbackQuery, user: User) -> None:
             await adposts.submit(s, order)
         except adposts.AdError as e:
             return await cb.answer(str(e), show_alert=True)
+        auto = await adposts.maybe_auto_approve(s, order)  # чистый заказ — без участия администратора
         text = await summary(s, order, admin=True)
-    await notify._send("📣 Новый заказ рекламы:\n\n" + text, kb([[("✅ Одобрить", f"apa:ok:{order.id}"), ("❌ Отклонить", f"apa:no:{order.id}")]]))
-    await reply(cb, f"✅ Заказ №{order.id} отправлен на проверку. Напишу, когда администратор решит.",
+        flags = adposts.suspicious(order.text)
+        oid, price = order.id, order.price
+    if auto:
+        msg, markup = approved_message(oid, price, auto)
+        await reply(cb, msg, markup or kb([[("📋 Мои заказы", "ap:mine")]]))
+        return
+    warn = f"\n\n⚠️ Подозрительные слова: {', '.join(flags)}" if flags else ""
+    await notify._send("📣 Новый заказ рекламы:\n\n" + text + warn,
+                       kb([[("✅ Одобрить", f"apa:ok:{oid}"), ("❌ Отклонить", f"apa:no:{oid}")]]))
+    await reply(cb, f"✅ Заказ №{oid} отправлен на проверку. Напишу, когда администратор решит.",
                 kb([[("📋 Мои заказы", "ap:mine")], [("◀️ Назад", "cg:menu")]]))
 
 
@@ -252,17 +269,16 @@ async def adm_act(cb: CallbackQuery) -> None:
         order = await s.get(AdOrder, int(oid))
         if order is None:
             return await cb.answer("Заказ не найден", show_alert=True)
-        user_id = order.user_id
+        user_id, markup = order.user_id, None
         try:
             if op == "ok":
                 status = await adposts.approve(s, order)
-                msg = (f"✅ Заказ рекламы №{order.id} одобрен. Оплатите {order.price} ₽: 📋 Мои заказы → заказ → «💳 Оплатить»."
-                       if status == "approved" else f"✅ Заказ рекламы №{order.id} одобрен и поставлен в очередь на публикацию.")
+                msg, markup = approved_message(order.id, order.price, status)
             elif op == "no":
                 await adposts.reject(s, order)
                 msg = f"❌ Заказ рекламы №{order.id} отклонён администратором."
             elif op == "cancel":
-                n = await adposts.cancel(s, order)
+                await adposts.cancel(s, order)
                 msg = (f"🚫 Заказ рекламы №{order.id} отменён администратором. Если вы уже платили — напишите, вернём деньги за "
                        "неопубликованное.") if order.price else f"🚫 Заказ рекламы №{order.id} отменён администратором."
             else:
@@ -274,9 +290,10 @@ async def adm_act(cb: CallbackQuery) -> None:
             return await cb.answer(str(e), show_alert=True)
     if msg:
         try:
-            await notify._bot.send_message(user_id, msg)
+            await notify._bot.send_message(user_id, msg, reply_markup=markup)
         except Exception:
             pass
+    await cb.answer("Готово")
     await show_order(cb, int(oid))
 
 

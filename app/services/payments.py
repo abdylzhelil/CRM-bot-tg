@@ -66,8 +66,21 @@ class RefundError(Exception):
 
 
 async def take_back(s: AsyncSession, payment: Payment) -> None:
-    """Снять дни этого платежа с тарифа пользователя (деньги здесь не трогаем)."""
+    """Снять дни этого платежа с тарифа пользователя (деньги здесь не трогаем). Платёж за рекламу (days=0) отменяет заказ."""
     user = await s.get(User, payment.user_id)
+    if payment.days == 0:  # реклама: тариф и привязанная карта не трогаем
+        from app.models import AdOrder
+        from app.services import adposts
+
+        order = await s.scalar(select(AdOrder).where(AdOrder.yk_id == payment.provider_id)) if payment.provider_id else None
+        if order is not None:
+            try:
+                await adposts.cancel(s, order)
+            except adposts.AdError:
+                pass  # уже выполнен — деньги вернули, посты остаются
+        payment.refunded, payment.refunded_at = True, now()
+        await s.commit()
+        return
     if user is not None and not user.is_admin and user.plan_until is not None:
         user.plan_until = user.plan_until - timedelta(days=payment.days)
         if user.plan_until <= now():

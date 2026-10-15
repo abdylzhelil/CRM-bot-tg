@@ -128,10 +128,10 @@ async def process_links(api=None) -> int:
             if link.order_id:  # оплата рекламы, а не тарифа
                 from app.services import adposts
 
-                order = await adposts.mark_paid(s, link.order_id, link.yk_id)
+                paid = await adposts.mark_paid(s, link.order_id, link.yk_id, link.amount, (data.get("amount") or {}).get("currency", "RUB"))
                 await s.commit()
-                if order is not None:
-                    await _ad_paid(order.id, order.user_id, link.amount)
+                if paid is not None:
+                    await _ad_paid(paid[0].id, paid[0].user_id, link.amount, paid[1].id)
                     done += 1
                 continue
             amount = int(round(float((data.get("amount") or {}).get("value", link.amount / 100)) * 100))
@@ -154,13 +154,14 @@ async def process_links(api=None) -> int:
     return done
 
 
-async def _ad_paid(order_id: int, user_id: int, amount: int) -> None:
+async def _ad_paid(order_id: int, user_id: int, amount: int, pay_id: int) -> None:
     try:
         await notify._bot.send_message(user_id, f"✅ Оплата получена. Заказ рекламы №{order_id} поставлен в очередь: "
                                        "когда посты выйдут, пришлю ссылки.")
     except Exception:
         pass
-    await notify._send(f"💰 Оплачена реклама, заказ №{order_id}: {amount / 100:.0f} ₽.\n🧾 Не забудьте чек в «Мой налог».")
+    await notify._send(f"💰 Оплачена реклама, заказ №{order_id}: {amount / 100:.0f} ₽.\n🧾 Не забудьте чек в «Мой налог».",
+                       kb([[("↩️ Вернуть и отменить посты", f"rf:ask:{pay_id}")]]))
 
 
 @router.callback_query(F.data == "ren:ask")
@@ -291,7 +292,8 @@ async def refund_ask(cb: CallbackQuery, user: User) -> None:
     rows.append([("Отмена", "noop")])
     hint = "" if payments.refunds_enabled() else "\n\nВозврат денег кнопкой не подключён (ключи ЮKassa в .env) — деньги верните в кабинете ЮKassa."
     await cb.message.answer(
-        f"↩️ Платёж: {who} — {pay.amount / 100:.0f} {esc(pay.currency)}, {pay.days} дн.{hint}", reply_markup=kb(rows))
+        f"↩️ Платёж: {who} — {pay.amount / 100:.0f} {esc(pay.currency)}, "
+        + (f"{pay.days} дн." if pay.days else "реклама в группах (неопубликованные посты будут отменены)") + hint, reply_markup=kb(rows))
     await cb.answer()
 
 
@@ -308,10 +310,15 @@ async def refund_do(cb: CallbackQuery, user: User) -> None:
             note = await payments.refund(s, pay, money)
         except payments.RefundError as e:
             return await cb.answer(str(e), show_alert=True)
-    await cb.message.edit_text(f"✅ Готово. Тариф снят. {note}")
+    await cb.message.edit_text(f"✅ Готово. {'Тариф снят.' if pay.days else 'Неопубликованные посты отменены.'} {note}")
     await cb.answer()
     try:
-        await cb.bot.send_message(pay.user_id, "↩️ Платёж за 💎 Полный тариф возвращён, тариф отключён."
-                                  if money else "ℹ️ Ваш 💎 Полный тариф отключён администратором.")
+        if not pay.days:
+            text = ("↩️ Платёж за рекламу возвращён, неопубликованные посты отменены." if money
+                    else "ℹ️ Неопубликованные посты вашей рекламы отменены администратором.")
+        else:
+            text = ("↩️ Платёж за 💎 Полный тариф возвращён, тариф отключён." if money
+                    else "ℹ️ Ваш 💎 Полный тариф отключён администратором.")
+        await cb.bot.send_message(pay.user_id, text)
     except Exception:
         pass

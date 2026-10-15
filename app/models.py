@@ -353,6 +353,7 @@ class AdOrder(Base):
     yk_id: Mapped[str] = mapped_column(String(64), default="")  # платёж ЮKassa
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reminded: Mapped[bool] = mapped_column(Boolean, default=False)  # напомнили об оплате
 
 
 class AdPost(Base):

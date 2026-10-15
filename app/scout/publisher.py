@@ -112,11 +112,42 @@ async def notify_done(order_id: int) -> None:
         log.warning("не удалось сообщить заказчику %s", order.user_id)
 
 
+async def nudge_unpaid() -> int:
+    """Одобренные, но неоплаченные заказы: напомнить через сутки, отменить через трое. Возвращает число сообщений."""
+    from app.bot.common import kb
+
+    async with Session() as s:
+        remind, expire = await adposts.stale_unpaid(s)
+        data = [(o.id, o.user_id, o.price) for o in remind]
+        gone = [(o.id, o.user_id) for o in expire]
+        for o in remind:
+            o.reminded = True
+        for o in expire:
+            await adposts.cancel(s, o)
+        await s.commit()
+    for oid, uid, price in data:
+        try:
+            await notify._bot.send_message(uid, f"⏰ Заказ рекламы №{oid} ждёт оплаты ({price} ₽). Без оплаты он отменится через 2 суток.",
+                                           reply_markup=kb([[(f"💳 Оплатить {price} ₽", f"ap:pay:{oid}")]]))
+        except Exception:
+            pass
+    for oid, uid in gone:
+        try:
+            await notify._bot.send_message(uid, f"🚫 Заказ рекламы №{oid} отменён: не дождались оплаты. Можно оформить новый.")
+        except Exception:
+            pass
+    return len(data) + len(gone)
+
+
 async def publish_loop(manager) -> None:
+    ticks = 0
     while True:
         did = False
         try:
             did = await publish_one(manager)
+            ticks += 1
+            if ticks % 30 == 0:  # примерно раз в 30 минут
+                await nudge_unpaid()
         except Exception:
             log.exception("publish_loop")
         await asyncio.sleep(random.uniform(40, 120) if did else 60)

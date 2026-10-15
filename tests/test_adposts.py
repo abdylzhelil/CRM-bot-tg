@@ -255,7 +255,7 @@ async def test_screens_user_and_admin(maker, tgbot, monkeypatch):
     assert other.answer.await_args.kwargs.get("show_alert") is True
     # админ одобряет → заказчик получает просьбу оплатить
     await ah.adm_act(cbq(f"apa:ok:{order.id}", uid=ADMIN_ID))
-    assert any("Оплатите 100" in t for t in tgbot.texts(70))
+    assert any("Осталось оплатить 100" in t for t in tgbot.texts(70))
     await ah.adm_list(cbq("apa:list", uid=ADMIN_ID))
     assert f"apa:o:{order.id}" in str(sent.await_args.args[2])
     await ah.groups_for_ads(cbq("apg:list", uid=ADMIN_ID))
@@ -263,3 +263,91 @@ async def test_screens_user_and_admin(maker, tgbot, monkeypatch):
     await ah.groups_toggle(cbq(f"apg:tog:{gid}", uid=ADMIN_ID))
     async with maker() as s:
         assert (await s.get(Group, gid)).ads_allowed is False
+
+
+async def paid_order(maker, tgbot, monkeypatch, price=300):
+    from tests.test_payments import FakeYK
+
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    await setup_group(maker, price=price)
+    await make_user(maker, 70, plan="full", plan_until=now() + timedelta(days=20), renew_method="pm", renew_card="Mir •••• 1234", renew_days=30)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    yk = FakeYK()
+    async with maker() as s:
+        await payments.create_ad_link(s, await s.get(AdOrder, oid), "https://t.me/b", api=yk)
+    yk.payments["yk-1"].update(status="succeeded", paid=True)
+    assert await ph.process_links(yk) == 1
+    return oid
+
+
+async def test_ad_payment_is_recorded_for_revenue_receipts_and_refund(maker, tgbot, monkeypatch):
+    from app.models import Payment
+
+    oid = await paid_order(maker, tgbot, monkeypatch)
+    async with maker() as s:
+        pay = await s.scalar(select(Payment))
+        assert pay.days == 0 and pay.amount == 30000 and pay.provider_id == "yk-1" and not pay.refunded  # попадёт в выручку и чеки
+    # админу пришла кнопка возврата, возврат отменяет посты и НЕ трогает тариф и привязанную карту покупателя
+    async with maker() as s:
+        pay = await s.scalar(select(Payment))
+        yk_call = AsyncMock(return_value={"status": "succeeded"})
+        note = await payments.refund(s, pay, True, call=yk_call)
+        order = await s.get(AdOrder, oid)
+        user = await s.get(User, 70)
+        assert "возвращены" in note and order.status == "canceled" and pay.refunded
+        assert user.plan == "full" and user.renew_method == "pm"
+        assert (await s.scalar(select(AdPost))).status == "canceled"
+    mgr, client = manager()
+    assert await publisher.publish_one(mgr) is False  # отменённое не публикуется
+
+
+async def test_auto_approve_only_clean_orders(maker, tgbot):
+    await setup_group(maker, price=100)
+    await make_user(maker, 70)
+    async with maker() as s:
+        await settings.put(s, "adpost_auto_approve", "1")
+        gid = (await s.scalar(select(Group))).id
+
+    async def submit_text(text):
+        async with maker() as s:
+            o = await adposts.new_draft(s, 70, text)
+            await adposts.toggle_group(s, o, gid)
+            await adposts.submit(s, o)
+            return o.id
+
+    clean = await submit_text(TEXT)
+    dirty = await submit_text("Лучший алкоголь с доставкой по городу, звоните прямо сейчас")
+    async with maker() as s:
+        assert await adposts.maybe_auto_approve(s, await s.get(AdOrder, clean)) == "approved"  # сразу ждёт оплату
+        assert await adposts.maybe_auto_approve(s, await s.get(AdOrder, dirty)) is None  # подозрительный — админу
+        assert (await s.get(AdOrder, dirty)).status == "pending"
+        await settings.put(s, "adpost_auto_approve", "0")
+        c2 = await adposts.new_draft(s, 70, TEXT + " новый")
+        await adposts.toggle_group(s, c2, gid)
+        await adposts.submit(s, c2)
+        assert await adposts.maybe_auto_approve(s, c2) is None  # выключено — всё к админу
+
+
+async def test_unpaid_orders_get_reminder_then_expire(maker, tgbot):
+    await setup_group(maker, price=100)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        o = await s.get(AdOrder, oid)
+        await adposts.approve(s, o)
+        assert await publisher.nudge_unpaid() == 0  # только что одобрен — рано
+        o.decided_at = now() - timedelta(hours=25)
+        await s.commit()
+    assert await publisher.nudge_unpaid() == 1
+    assert any("ждёт оплаты" in t for t in tgbot.texts(70))
+    assert await publisher.nudge_unpaid() == 0  # напомнили один раз
+    async with maker() as s:
+        (await s.get(AdOrder, oid)).decided_at = now() - timedelta(hours=73)
+        await s.commit()
+    assert await publisher.nudge_unpaid() == 1
+    async with maker() as s:
+        assert (await s.get(AdOrder, oid)).status == "canceled"
+    assert any("отменён: не дождались оплаты" in t for t in tgbot.texts(70))

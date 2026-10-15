@@ -21,6 +21,19 @@ STATUS = {
 POST_STATUS = {"queued": "⏳ в очереди", "sent": "✅ опубликовано", "failed": "⚠️ не вышло", "canceled": "🚫 отменено"}
 
 
+# основы слов, при которых заказ автоматически не одобряется (идёт к администратору на проверку)
+FORBIDDEN_STEMS = (
+    "алкогол", "пиво", "водк", "коньяк", "табак", "сигарет", "вейп", "кальян", "казино", "ставк", "букмекер", "лотере",
+    "займ", "микрокред", "кредит под", "18+", "эскорт", "знакомств", "наркот", "оружи", "пирамид", "быстрый заработок",
+    "гадани", "порч", "магия", "экстрасенс", "астролог", "криптосхем", "свинин", "politic", "экстремизм",
+)
+
+
+def suspicious(text: str) -> list[str]:
+    low = text.lower()
+    return [w for w in FORBIDDEN_STEMS if w in low]
+
+
 class AdError(Exception):
     """Понятная причина отказа."""
 
@@ -104,6 +117,22 @@ async def approve(s: AsyncSession, order: AdOrder) -> str:
     return order.status
 
 
+async def maybe_auto_approve(s: AsyncSession, order: AdOrder) -> str | None:
+    """Автоодобрение (если включено): чистый заказ идёт дальше без админа. Возвращает новый статус или None."""
+    if order.status != "pending" or await settings.get(s, "adpost_auto_approve") != "1" or suspicious(order.text):
+        return None
+    return await approve(s, order)
+
+
+async def stale_unpaid(s: AsyncSession) -> tuple[list[AdOrder], list[AdOrder]]:
+    """Заказы, ждущие оплату: (напомнить через 24 ч, отменить через 72 ч). Отмену выполняет вызывающий."""
+    orders = (await s.scalars(select(AdOrder).where(AdOrder.status == "approved", AdOrder.decided_at.is_not(None)))).all()
+    remind = [o for o in orders if not o.reminded and now() - o.decided_at >= timedelta(hours=24)
+              and now() - o.decided_at < timedelta(hours=72)]
+    expire = [o for o in orders if now() - o.decided_at >= timedelta(hours=72)]
+    return remind, expire
+
+
 async def reject(s: AsyncSession, order: AdOrder) -> None:
     if order.status != "pending":
         raise AdError("Заказ уже обработан.")
@@ -121,14 +150,21 @@ async def start(s: AsyncSession, order: AdOrder) -> None:
     await s.commit()
 
 
-async def mark_paid(s: AsyncSession, order_id: int, yk_id: str) -> AdOrder | None:
-    """Платёж по заказу прошёл → в очередь. None — заказ не найден или уже оплачен."""
+async def mark_paid(s: AsyncSession, order_id: int, yk_id: str, amount_kop: int = 0, currency: str = "RUB"):
+    """Платёж по заказу прошёл → записываем оплату (выручка, напоминание про чек, возврат кнопкой) и ставим в очередь.
+
+    Возвращает (заказ, платёж) или None — заказ не найден или уже оплачен."""
+    from app.models import Payment
+
     order = await s.get(AdOrder, order_id)
     if order is None or order.status != "approved":
         return None
     order.yk_id = yk_id
+    pay = Payment(user_id=order.user_id, days=0, amount=amount_kop or order.price * 100, currency=currency,
+                  charge_id=f"yk:{yk_id}", provider_id=yk_id)  # days=0 — это реклама, тариф не трогаем
+    s.add(pay)
     await start(s, order)
-    return order
+    return order, pay
 
 
 async def cancel(s: AsyncSession, order: AdOrder) -> int:
