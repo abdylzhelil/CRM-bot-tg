@@ -192,6 +192,20 @@ async def set_order_price(s: AsyncSession, order: AdOrder, price: int) -> None:
     await s.commit()
 
 
+async def record_extra_payment(s: AsyncSession, order_id: int, user_id: int, yk_id: str, amount_kop: int, currency: str = "RUB"):
+    """Деньги пришли, а заказ уже оплачен или отменён (оплатили вторую ссылку, заплатили после автоотмены).
+
+    Платёж не теряем: записываем (для возврата кнопкой и учёта). None — уже записан ранее."""
+    from app.models import Payment
+
+    if await s.scalar(select(Payment.id).where(Payment.charge_id == f"yk:{yk_id}")):
+        return None
+    pay = Payment(user_id=user_id, days=0, amount=amount_kop, currency=currency, charge_id=f"yk:{yk_id}", provider_id=yk_id)
+    s.add(pay)
+    await s.commit()
+    return pay
+
+
 async def cancel(s: AsyncSession, order: AdOrder, reason: str = "") -> int:
     """Отмена: неопубликованные посты снимаются. Возвращает число снятых."""
     if order.status not in ("draft", "pending", "approved", "running"):

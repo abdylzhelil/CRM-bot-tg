@@ -55,6 +55,7 @@ async def test_free_order_published_and_user_gets_links(maker, tgbot):
     mgr, client = manager()
     assert await publisher.publish_one(mgr) is True
     sent_text = client.send_message.await_args.args[1]
+    assert client.send_message.await_args.kwargs["parse_mode"] is None  # текст как есть, без Markdown
     assert sent_text.startswith(TEXT) and sent_text.endswith("Реклама")  # подпись-пометка под постом
     async with maker() as s:
         post = await s.scalar(select(AdPost))
@@ -585,3 +586,46 @@ async def test_ready_message_for_client(maker, tgbot):
     text = c.message.answer.await_args_list[0].args[0]
     assert "Барахолка — 5000 уч. — 500 ₽" in text and "https://t.me/klientradarbot?start=ads" in text
     assert "название компании" in text  # правило для вакансий сразу в сообщении
+
+
+async def test_second_payment_for_same_order_is_not_lost(maker, tgbot, monkeypatch):
+    from app.models import Payment
+    from tests.test_payments import FakeYK
+
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    await setup_group(maker, price=300)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    yk = FakeYK()
+    for _ in range(2):  # покупатель нажал «Оплатить» дважды и оплатил обе ссылки
+        async with maker() as s:
+            await payments.create_ad_link(s, await s.get(AdOrder, oid), "https://t.me/b", api=yk)
+    for pid in ("yk-1", "yk-2"):
+        yk.payments[pid].update(status="succeeded", paid=True)
+    assert await ph.process_links(yk) == 2
+    assert await ph.process_links(yk) == 0
+    async with maker() as s:
+        pays = (await s.scalars(select(Payment).order_by(Payment.id))).all()
+        assert [p.provider_id for p in pays] == ["yk-1", "yk-2"] and all(p.days == 0 for p in pays)
+        assert (await s.scalar(select(func.count()).select_from(AdPost))) == 1  # посты поставлены один раз
+    assert any("Лишняя оплата" in t for t in tgbot.texts(ADMIN_ID))
+    assert any("Деньги вернём" in t for t in tgbot.texts(70))
+
+
+async def test_deleteme_cancels_ad_orders_and_wipes_texts(maker, tgbot):
+    from app.services import erase
+
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        assert await erase.erase_user(s, 70)
+        o = await s.get(AdOrder, oid)
+        assert o.status == "canceled" and TEXT not in o.text
+        assert (await s.scalar(select(AdPost))).status == "canceled"
+    mgr, client = manager()
+    assert await publisher.publish_one(mgr) is False

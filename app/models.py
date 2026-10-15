@@ -37,6 +37,7 @@ class ScoutAccount(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(32), default="new")  # new/ok/limited/dead
     can_post: Mapped[bool] = mapped_column(Boolean, default=True)  # аккаунту разрешено публиковать заказанную рекламу
+    tg_user_id: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # его Telegram ID: свои посты не считаем заявками
 
 
 class Group(Base):

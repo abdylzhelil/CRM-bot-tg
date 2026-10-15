@@ -32,6 +32,16 @@ REASON = {
 }
 
 
+async def resolve(client, g: Group):
+    """Сначала по ID из памяти клиента (без запроса к Telegram), иначе по @username.
+
+    Поиск по имени (ResolveUsername) Telegram сильно ограничивает — не тратим его на каждый пост."""
+    try:
+        return await client.get_input_entity(g.tg_id)
+    except Exception:
+        return await client.get_entity(g.username or g.tg_id)
+
+
 def post_link(g: Group, message_id: int) -> str:
     return f"https://t.me/{g.username}/{message_id}" if g.username else ""
 
@@ -65,8 +75,9 @@ async def publish_one(manager) -> bool:
         text = await adposts.compose(s, order)
         problem = None
         try:
-            entity = await client.get_entity(g.username or g.tg_id)
-            msg = await client.send_message(entity, text, link_preview=False)
+            entity = await resolve(client, g)
+            # parse_mode=None: текст рекламодателя публикуем как есть (Markdown Telethon испортил бы *, _, [ ])
+            msg = await client.send_message(entity, text, link_preview=False, parse_mode=None)
             post.status, post.sent_at, post.message_id = "sent", now(), msg.id
             post.link = post_link(g, msg.id)
         except (FloodWaitError, SlowModeWaitError) as e:

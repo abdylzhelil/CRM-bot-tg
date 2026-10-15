@@ -6,7 +6,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import BlacklistEntry, Group, Lead, SeenMessage, now
+from app.models import BlacklistEntry, Group, Lead, ScoutAccount, SeenMessage, now
 from app.services import geo, settings
 from app.services.antispam import AuthorInfo, Behavior, score_message, text_hash
 from app.services.rules import load_rules
@@ -26,6 +26,8 @@ class Incoming:
 async def process(session: AsyncSession, msg: Incoming) -> Lead | None:
     """Возвращает новый Lead или None (не заявка / спам / дубль)."""
     author = msg.author
+    if author.user_id and await session.scalar(select(ScoutAccount.id).where(ScoutAccount.tg_user_id == author.user_id)):
+        return None  # это наш разведчик (например, его рекламный пост) — не заявка
     entry = await session.get(BlacklistEntry, author.user_id)
     if entry and entry.status == "spam":
         return None

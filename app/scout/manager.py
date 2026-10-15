@@ -52,6 +52,15 @@ class ScoutManager:
             log.exception("не удалось подключить %s", acc.name)
             await notify.alert(f"Не удалось подключить разведчика «{acc.name}» (см. логи). Повторю при следующей проверке.")
             return
+        try:  # запоминаем Telegram ID аккаунта: его рекламные посты в группах не должны стать «заявками»
+            me = await client.get_me()
+            async with Session() as s:
+                row = await s.get(ScoutAccount, acc.id)
+                if row is not None and me is not None and row.tg_user_id != me.id:
+                    row.tg_user_id = me.id
+                    await s.commit()
+        except Exception:
+            log.warning("не удалось узнать Telegram ID разведчика %s", acc.name, exc_info=True)
         client.add_event_handler(self._on_message, events.NewMessage(incoming=True))
         self.clients[acc.id] = client
         await self._mark(acc.id, "ok")

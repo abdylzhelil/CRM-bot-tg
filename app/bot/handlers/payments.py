@@ -133,6 +133,11 @@ async def process_links(api=None) -> int:
                 if paid is not None:
                     await _ad_paid(paid[0].id, paid[0].user_id, link.amount, paid[1].id)
                     done += 1
+                    continue
+                extra = await adposts.record_extra_payment(s, link.order_id, link.user_id, link.yk_id, link.amount)
+                if extra is not None:  # лишняя/поздняя оплата: деньги не теряем, админу — кнопка возврата
+                    await _ad_extra(link.order_id, link.user_id, link.amount, extra.id)
+                    done += 1
                 continue
             amount = int(round(float((data.get("amount") or {}).get("value", link.amount / 100)) * 100))
             new, share = await payments.apply(s, link.user_id, link.days, amount, (data.get("amount") or {}).get("currency", "RUB"),
@@ -162,6 +167,16 @@ async def _ad_paid(order_id: int, user_id: int, amount: int, pay_id: int) -> Non
         pass
     await notify._send(f"💰 Оплачена реклама, заказ №{order_id}: {amount / 100:.0f} ₽.\n🧾 Не забудьте чек в «Мой налог».",
                        kb([[("↩️ Вернуть и отменить посты", f"rf:ask:{pay_id}")]]))
+
+
+async def _ad_extra(order_id: int, user_id: int, amount: int, pay_id: int) -> None:
+    try:
+        await notify._bot.send_message(user_id, f"ℹ️ Пришла оплата {amount / 100:.0f} ₽ по заказу рекламы №{order_id}, но он уже оплачен "
+                                       "или отменён. Деньги вернём — администратор уже получил уведомление.")
+    except Exception:
+        pass
+    await notify._send(f"⚠️ Лишняя оплата рекламы: заказ №{order_id} уже оплачен или отменён, а пришло ещё {amount / 100:.0f} ₽. "
+                       "Верните деньги кнопкой ниже.", kb([[("↩️ Вернуть деньги", f"rf:ask:{pay_id}")]]))
 
 
 @router.callback_query(F.data == "ren:ask")
@@ -287,8 +302,8 @@ async def refund_ask(cb: CallbackQuery, user: User) -> None:
     who = esc((buyer.name if buyer else "") or str(pay.user_id))
     rows = []
     if payments.refunds_enabled() and pay.provider_id:
-        rows.append([("💸 Вернуть деньги и снять тариф", f"rf:money:{pay.id}")])
-    rows.append([("Только снять тариф (деньги верну сам)", f"rf:tariff:{pay.id}")])
+        rows.append([("💸 Вернуть деньги и снять тариф" if pay.days else "💸 Вернуть деньги и отменить посты", f"rf:money:{pay.id}")])
+    rows.append([("Только снять тариф (деньги верну сам)" if pay.days else "Только отменить посты (деньги верну сам)", f"rf:tariff:{pay.id}")])
     rows.append([("Отмена", "noop")])
     hint = "" if payments.refunds_enabled() else "\n\nВозврат денег кнопкой не подключён (ключи ЮKassa в .env) — деньги верните в кабинете ЮKassa."
     await cb.message.answer(

@@ -1,6 +1,6 @@
 """Удаление данных пользователя по его просьбе (/deleteme).
 
-Удаляются профиль, настройки, заявки, клиенты CRM. Группы, которые он добавлял, остаются в базе без привязки к нему
+Удаляются профиль, настройки, заявки, клиенты CRM, тексты заказов рекламы (открытые заказы отменяются). Группы, которые он добавлял, остаются в базе без привязки к нему
 (они публичные). Записи об оплатах остаются для учёта (в них только числовой ID, без имени).
 """
 from sqlalchemy import delete, select
@@ -26,6 +26,15 @@ async def erase_user(s: AsyncSession, user_id: int) -> bool:
     await s.execute(Group.__table__.update().where(Group.submitted_by == user_id).values(
         submitted_by=0, ad_until=None, ad_pending=False, license_until=None))
     await s.execute(User.__table__.update().where(User.referred_by == user_id).values(referred_by=0))
+    # заказы рекламы: открытые отменяем, тексты (в них контакты) стираем; суммы и статусы остаются для учёта
+    from app.models import AdOrder, AdPost
+
+    orders = (await s.scalars(select(AdOrder).where(AdOrder.user_id == user_id))).all()
+    for o in orders:
+        if o.status in ("draft", "pending", "approved", "running"):
+            await s.execute(AdPost.__table__.update().where(AdPost.order_id == o.id, AdPost.status == "queued").values(status="canceled"))
+            o.status = "canceled"
+        o.text, o.reason = "[удалено по просьбе пользователя]", ""
     await s.delete(user)
     await s.commit()
     return True

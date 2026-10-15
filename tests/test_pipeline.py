@@ -47,3 +47,13 @@ async def test_spammer_gets_blacklisted(session):
                has_photo=False, bot=True)
     assert await process(session, spam) is None
     assert (await session.get(BlacklistEntry, 8_100_000_000)).status == "spam"
+
+
+async def test_own_scout_posts_are_not_leads(session):
+    from app.models import ScoutAccount
+
+    session.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", tg_user_id=777))
+    await session.commit()
+    text = "Ищу разработчика для лендинга, бюджет 10к"  # например, наш рекламный пост, увиденный ботом в группе
+    assert await process(session, msg(text, uid=777)) is None
+    assert await process(session, msg(text, uid=778)) is not None  # чужой человек с тем же текстом — заявка
