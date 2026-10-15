@@ -12,7 +12,7 @@ router = Router()
 # Менеджер разведчиков подставляется из main.py
 manager = None
 STATUS = {
-    "candidate": "кандидаты", "approved": "очередь", "joined": "вступили", "covered": "уже с нашим ботом",
+    "candidate": "кандидаты", "approved": "очередь", "requested": "ждут одобрения админа", "joined": "вступили", "covered": "уже с нашим ботом",
     "skipped": "пропущены", "left": "вышли",
 }
 REVIEW_PAGE = 8
@@ -44,7 +44,8 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [("▶️ Возобновить разведчика" if paused else "⏸ Пауза разведчика", "gr:pause"),
          ("🔄 Ротация сейчас", "gr:rotate")],
         [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"), (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
-        [("🏆 Рейтинг вступивших", "gr:list:joined"), ("🔎 Поисковые запросы", "gq:list")],
+        [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"), ("🏆 Рейтинг вступивших", "gr:list:joined")],
+        [("🔎 Поисковые запросы", "gq:list")],
     ]))
 
 
@@ -83,7 +84,9 @@ async def group_list(cb: CallbackQuery) -> None:
         return await cb.answer("Пусто", show_alert=True)
     if status == "candidate":
         return await review(cb)
-    lines = [f"• {esc(g.title)} — {g.members} уч., заявок: {g.leads_count}" for g in groups]
+    lines = [f"• {esc(g.title)} — {g.members} уч., заявок: {g.leads_count}"
+             + (f", заявка на вступление отправлена {g.join_attempts} р., повтор {g.join_retry_at:%d.%m}"
+                if status == "requested" and g.join_retry_at else "") for g in groups]
     await reply(cb, f"{STATUS[status].capitalize()}:\n" + "\n".join(lines), kb([[("◀️ Назад", "gr:menu")]]))
 
 

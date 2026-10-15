@@ -126,3 +126,72 @@ async def test_scout_groups_go_to_folders(maker):
     assert len(made[0].filter.include_peers) == 100 and len(made[1].filter.include_peers) == 50
     assert made[0].filter.title.text == "🔍 Разведка" and made[1].filter.title.text == "🔍 Разведка 2"
     assert len(removed) == 3  # лишние папки 12–14 удаляются
+
+
+async def add_scout_and_group(maker, **group):
+    async with maker() as s:
+        s.add(ScoutAccount(id=7, name="scout7", api_id=1, api_hash="x", daily_join_limit=10))
+        s.add(Group(tg_id=-888, username="closed_chat", title="Чат с одобрением", members=500, **group))
+        await s.commit()
+
+
+async def test_join_request_not_approved_is_retried_later_then_given_up(maker, monkeypatch):
+    from datetime import timedelta
+
+    from telethon.errors import InviteRequestSentError
+
+    from app.models import now
+    from app.services import settings
+
+    await add_scout_and_group(maker, status="approved")
+    async with maker() as s:
+        await settings.put(s, "join_retry_max", "2")
+    client = AsyncMock()
+    client.get_entity = AsyncMock(return_value=object())
+    client.side_effect = InviteRequestSentError(request=None)  # админ группы заявку ещё не одобрил
+    assert await joiner.join_one(client, 7) is True
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        acc = await s.get(ScoutAccount, 7)
+        assert g.status == "requested" and g.join_attempts == 1 and acc.joined_today == 1
+        assert timedelta(days=2) < g.join_retry_at - now() <= timedelta(days=3)  # повтор через 3 дня
+    assert await joiner.join_one(client, 7) is False  # срок повтора ещё не подошёл — заявку не шлём
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        g.join_retry_at = now() - timedelta(minutes=1)
+        await s.commit()
+    assert await joiner.join_one(client, 7) is True  # вторая попытка — последняя (join_retry_max=2)
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        assert g.status == "skipped" and g.join_attempts == 2
+
+
+async def test_pending_request_approved_by_admin_becomes_joined(maker, monkeypatch):
+    from datetime import timedelta
+
+    from telethon.errors import UserAlreadyParticipantError
+
+    from app.models import now
+    from app.scout import folders
+
+    monkeypatch.setattr(folders, "sync_folders", AsyncMock(return_value=1))
+    monkeypatch.setattr(folders, "mute", AsyncMock())
+    await add_scout_and_group(maker, status="requested", join_attempts=1, join_retry_at=now() - timedelta(hours=1))
+    client = AsyncMock()
+    client.get_entity = AsyncMock(return_value=object())
+    client.side_effect = UserAlreadyParticipantError(request=None)  # админ одобрил — мы уже в группе
+    assert await joiner.join_one(client, 7) is True
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+    assert g.status == "joined" and g.account_id == 7
+
+
+async def test_closed_group_is_not_retried(maker):
+    from telethon.errors import ChannelPrivateError
+
+    await add_scout_and_group(maker, status="approved")
+    client = AsyncMock()
+    client.get_entity = AsyncMock(return_value=object())
+    client.side_effect = ChannelPrivateError(request=None)
+    await joiner.join_one(client, 7)
+    assert await statuses(maker) == ["skipped"]

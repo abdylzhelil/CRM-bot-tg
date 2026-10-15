@@ -70,6 +70,8 @@ class Group(Base):
     license_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # лицензия бота модерации до
     license_off: Mapped[bool] = mapped_column(Boolean, default=False)  # владелец отключил лицензию вручную
     license_rewarded: Mapped[int] = mapped_column(Integer, default=0)  # заявок уже учтено в лицензии
+    join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
+    join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
 
 
 class FeedChat(Base):

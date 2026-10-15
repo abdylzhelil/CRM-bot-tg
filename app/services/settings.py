@@ -13,6 +13,8 @@ DEFAULTS: dict[str, str] = {
     "spam_block": "60",
     "dedupe_days": "7",
     "rotation_days": "30",
+    "join_retry_days": "3",
+    "join_retry_max": "4",
     "quiet_hours": "",
     "report_hour": "21",
     "max_recipients": "5",
@@ -61,6 +63,8 @@ LABELS: dict[str, str] = {
     "spam_block": "Порог «спам» (0–100)",
     "dedupe_days": "Окно антидублей, дней",
     "rotation_days": "Выходить из групп без заявок за N дней",
+    "join_retry_days": "Повторять заявку на вступление через N дней",
+    "join_retry_max": "Сколько раз пробовать вступить в группу",
     "report_hour": "Час вечернего отчёта",
     "max_recipients": "Сколько пользователей получают одну заявку",
     "free_daily_limit": "Бесплатный тариф: заявок в день",
@@ -124,7 +128,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
-                        "rotation_days"]),
+                        "rotation_days", "join_retry_days", "join_retry_max"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
@@ -144,6 +148,8 @@ SHORT: dict[str, str] = {
     "mode": "Режим вступления", "min_members": "Мин. участников", "min_msgs_per_day": "Мин. сообщений/сутки",
     "default_join_limit": "Вступлений/сутки", "search_interval_h": "Поиск раз в, ч",
     "rotation_days": "Выход из тихих групп, дн",
+    "join_retry_days": "Повтор заявки, дн",
+    "join_retry_max": "Попыток вступить",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
@@ -163,6 +169,8 @@ HINTS: dict[str, str] = {
     "spam_block": "Сообщение с оценкой выше — считается спамом и не раздаётся.",
     "dedupe_days": "Одинаковые сообщения за это окно считаются повтором.",
     "rotation_days": "Группу без заявок столько дней разведчик покидает и ищет новую.",
+    "join_retry_days": "Если админ группы не одобрил заявку на вступление, разведчик отправит её снова через столько дней.",
+    "join_retry_max": "Сколько всего раз разведчик пробует вступить в группу, где нужно одобрение админа. После этого группа пропускается.",
     "report_hour": "Во сколько вам приходит вечерний отчёт.",
     "max_recipients": "Больше людей на одну заявку — меньше шанс, что клиент ответит каждому.",
     "free_daily_limit": "Сколько заявок в день видит бесплатный пользователь.",
@@ -255,6 +263,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
+    "join_retry_days": (1, 60), "join_retry_max": (1, 20),  # 0 — заявку не пробовали бы вовсе
     "spam_suspicious": (0, 100), "spam_block": (0, 100),
     "ref_percent": (0, 100), "bonus_leads": (1, 1000), "free_delay_min": (0, 1440), "free_daily_limit": (0, 1000),
     "share_gap_min": (0, 60), "refund_days": (0, 60), "ad_days": (1, 365), "license_days": (1, 365),

@@ -32,6 +32,16 @@ async def paused() -> bool:
         return await settings.get(s, "scout_paused") == "1"
 
 
+async def _retry_later(s, g: Group) -> None:
+    """Заявка не одобрена (или сбой): повторим через join_retry_days, но не больше join_retry_max попыток."""
+    g.join_attempts += 1
+    if g.join_attempts >= await settings.get_int(s, "join_retry_max"):
+        g.status = "skipped"
+    else:
+        g.status = "requested"
+        g.join_retry_at = now() + timedelta(days=await settings.get_int(s, "join_retry_days"))
+
+
 async def join_one(client: TelegramClient, acc_id: int) -> bool:
     """Вступить в одну одобренную группу. True — если попытка была (нужна пауза)."""
     joined_entity = None
@@ -46,12 +56,13 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
         if acc.joined_today >= acc.daily_join_limit or total >= acc.max_groups:
             await s.commit()
             return False
-        g = await s.scalar(
-            # IN (NULL, …) в SQL не находит NULL — поэтому явно: ничья группа или уже назначенная этому аккаунту
-            select(Group).where(Group.status == "approved", Group.kind == "group",
-                                or_(Group.account_id.is_(None), Group.account_id == acc_id))
-            .order_by(Group.members.desc())
-        )
+        # IN (NULL, …) в SQL не находит NULL — поэтому явно: ничья группа или уже назначенная этому аккаунту
+        mine = or_(Group.account_id.is_(None), Group.account_id == acc_id)
+        g = await s.scalar(select(Group).where(Group.status == "approved", Group.kind == "group", mine)
+                           .order_by(Group.members.desc()))
+        if not g:  # новых нет — повторяем заявки, которые админы групп ещё не одобрили (срок повтора подошёл)
+            g = await s.scalar(select(Group).where(Group.status == "requested", Group.kind == "group", mine,
+                                                   Group.join_retry_at <= now()).order_by(Group.join_retry_at))
         if not g:
             await s.commit()
             return False
@@ -75,11 +86,14 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
         except ChannelsTooMuchError:
             acc.joined_today = acc.daily_join_limit
             await notify.alert(f"Аккаунт «{acc.name}» достиг лимита групп Telegram. Запустите ротацию.")
-        except (InviteRequestSentError, ChannelPrivateError):
-            g.status = "skipped"
+        except ChannelPrivateError:
+            g.status = "skipped"  # группа закрыта или нас заблокировали — повторять бессмысленно
+        except InviteRequestSentError:
+            acc.joined_today += 1  # заявка тоже действие в Telegram — считаем в суточный лимит
+            await _retry_later(s, g)
         except Exception:
             log.exception("вступление в %s", g.title)
-            g.status = "skipped"
+            await _retry_later(s, g)
         await s.commit()
     if joined_entity is not None:
         from app.scout.folders import mute, sync_folders
