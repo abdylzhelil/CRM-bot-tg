@@ -109,10 +109,24 @@ async def expiry_once() -> int:
             if u.renew_method and u.renew_for != u.plan_until:
                 continue  # автопродление ещё попробует — раньше времени «закончился» не пишем
             u.plan, u.plan_until, u.expiry_notice = "free", None, None
+            u.winback_at = now() + timedelta(days=3)
             if not u.blocked:
                 sent += 1
                 await send_to(u.tg_id, "⌛ 💎 Полный тариф закончился. Сейчас у вас бесплатный: заявок до 5 в день, "
                               "с задержкой. Продлить можно в любой момент.", button)
+        # через 3 дня после конца — одно мягкое «вернуть 💎», если человек так и не продлил
+        back = (await s.scalars(select(User).where(
+            User.plan == "free", User.winback_at.is_not(None), User.winback_at <= now(), ~User.blocked, ~User.is_admin))).all()
+        offers = await payments.packages(s)
+        for u in back:
+            u.winback_at = None  # больше не напоминаем
+            if not offers:
+                continue
+            days, price = offers[0]
+            sent += 1
+            await send_to(u.tg_id, "👋 Без 💎 заявки приходят с задержкой и не больше положенного в день — "
+                          "другие специалисты успевают раньше. Вернуть полный тариф: "
+                          f"{days} дн. — {price} ₽.", button)
         await s.commit()
     return sent
 

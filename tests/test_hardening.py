@@ -307,3 +307,23 @@ async def test_concurrent_writers_do_not_lock(tmp_path):
             assert len((await s.scalars(select(Setting))).all()) == 40
     finally:
         await engine.dispose()
+
+
+async def test_winback_message_once_three_days_after_end(maker, tgbot):
+    async with maker() as s:
+        await settings.put(s, "price_30", "490")
+    await make_user(maker, 91, plan="full", plan_until=now() - timedelta(hours=1))
+    await expiry_once()
+    assert any("закончился" in t for t in tgbot.texts(91))
+    async with maker() as s:
+        u = await s.get(User, 91)
+        assert u.plan == "free" and u.winback_at is not None
+        u.winback_at = now() - timedelta(minutes=1)  # прошло 3 дня
+        await s.commit()
+    await expiry_once()
+    assert any("Вернуть полный тариф: 30 дн. — 490" in t for t in tgbot.texts(91))
+    before = len(tgbot.texts(91))
+    await expiry_once()
+    assert len(tgbot.texts(91)) == before  # второй раз не пишем
+    async with maker() as s:
+        assert (await s.get(User, 91)).winback_at is None

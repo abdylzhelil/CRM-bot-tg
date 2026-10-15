@@ -243,6 +243,7 @@ class User(Base):
     renew_days: Mapped[int] = mapped_column(Integer, default=0)  # на сколько дней продлевать
     renew_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, для которого уже была попытка
     expiry_notice: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, о котором уже напомнили
+    winback_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда написать «вернуть 💎» (через 3 дня после конца), один раз
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
 
