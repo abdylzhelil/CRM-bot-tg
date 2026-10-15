@@ -19,6 +19,7 @@ DEFAULTS: dict[str, str] = {
     "adpost_auto_approve": "0",
     "adpost_price": "0",
     "adpost_daily_limit": "5",
+    "adpost_group_daily": "3",
     "adpost_gap_min": "10",
     "adpost_footer": "Реклама",
     "quiet_hours": "",
@@ -75,6 +76,7 @@ LABELS: dict[str, str] = {
     "adpost_auto_approve": "Реклама в группах: одобрять заказы без запрещённых слов сами (1/0)",
     "adpost_price": "Реклама в группах: цена за одну группу, ₽ (0 — бесплатно)",
     "adpost_daily_limit": "Реклама в группах: постов в сутки с одного аккаунта",
+    "adpost_group_daily": "Реклама в группах: постов в сутки в одной группе",
     "adpost_gap_min": "Реклама в группах: пауза между постами аккаунта, мин",
     "adpost_footer": "Реклама в группах: подпись под постом (- без подписи)",
     "report_hour": "Час вечернего отчёта",
@@ -141,7 +143,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
-                        "adpost_enabled", "adpost_auto_approve", "adpost_price", "adpost_daily_limit", "adpost_gap_min", "adpost_footer"]),
+                        "adpost_enabled", "adpost_auto_approve", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
@@ -164,6 +166,7 @@ SHORT: dict[str, str] = {
     "join_retry_days": "Повтор заявки, дн",
     "join_retry_max": "Попыток вступить",
     "adpost_enabled": "Реклама вкл (1/0)", "adpost_auto_approve": "Автоодобрение (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
+    "adpost_group_daily": "Постов в группу в сутки",
     "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "lead_keep_days": "Хранить заявки, дн",
@@ -190,6 +193,7 @@ HINTS: dict[str, str] = {
     "adpost_auto_approve": "1 — заказ без запрещённых слов сразу идёт на оплату, без вашей проверки (подозрительные всё равно придут вам). 0 — вы одобряете каждый заказ.",
     "adpost_price": "Сколько рублей стоит один пост в одной группе. 0 — реклама бесплатна (только с одобрением админа).",
     "adpost_daily_limit": "Сколько рекламных постов в сутки публикует один аккаунт-разведчик. Меньше — безопаснее для аккаунта.",
+    "adpost_group_daily": "Сколько рекламных постов в сутки может выйти в одной группе или канале, чтобы их не засыпать рекламой.",
     "adpost_gap_min": "Минимальная пауза между рекламными постами одного аккаунта. Слишком частые посты — риск блокировки.",
     "adpost_footer": "Текст под каждым рекламным постом (например, «Реклама. ИП …, erid …» по требованиям закона). «-» — без подписи.",
     "report_hour": "Во сколько вам приходит вечерний отчёт.",
@@ -284,7 +288,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
-    "join_retry_days": (1, 60), "join_retry_max": (1, 20), "adpost_price": (0, 100_000), "adpost_daily_limit": (1, 50),
+    "join_retry_days": (1, 60), "join_retry_max": (1, 20), "adpost_price": (0, 100_000), "adpost_daily_limit": (1, 50), "adpost_group_daily": (1, 50),
     "adpost_gap_min": (1, 1440),  # 0 — заявку не пробовали бы вовсе
     "spam_suspicious": (0, 100), "spam_block": (0, 100),
     "ref_percent": (0, 100), "bonus_leads": (1, 1000), "free_delay_min": (0, 1440), "free_daily_limit": (0, 1000),

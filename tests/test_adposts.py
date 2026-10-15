@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from telethon.errors import ChatWriteForbiddenError, FloodWaitError, PeerFloodError
 
 from app import config
@@ -470,3 +470,31 @@ async def test_group_card_toggle_and_channel_needs_publisher(maker, tgbot, monke
         g = await s.get(Group, gid)
         assert g.ad_account_id == 3 and g.ads_allowed
     assert "админом канала" in sent.await_args.args[1]
+
+
+async def test_per_group_daily_limit(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 70)
+    async with maker() as s:
+        await settings.put(s, "adpost_group_daily", "1")
+        await settings.put(s, "adpost_gap_min", "1")
+        await settings.put(s, "adpost_daily_limit", "50")
+        gid = (await s.scalar(select(Group))).id
+    ids = []
+    for i in range(2):  # два разных заказа в одну группу
+        async with maker() as s:
+            o = await adposts.new_draft(s, 70, TEXT + str(i))
+            await adposts.toggle_group(s, o, gid)
+            await adposts.submit(s, o)
+            await adposts.approve(s, o)
+            ids.append(o.id)
+    mgr, client = manager()
+    assert await publisher.publish_one(mgr) is True
+    async with maker() as s:
+        first = await s.scalar(select(AdPost).where(AdPost.status == "sent"))
+        first.sent_at = now() - timedelta(minutes=5)  # пауза аккаунта прошла
+        await s.commit()
+    assert await publisher.publish_one(mgr) is False  # в группу уже вышло 1 из 1 в сутки
+    assert client.send_message.await_count == 1
+    async with maker() as s:
+        assert (await s.scalar(select(func.count()).select_from(AdPost).where(AdPost.status == "queued"))) == 1

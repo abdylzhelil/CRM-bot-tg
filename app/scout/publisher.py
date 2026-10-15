@@ -53,6 +53,8 @@ async def publish_one(manager) -> bool:
                 continue
             if not await adposts.account_ready(s, acc.id):
                 continue
+            if await adposts.group_sent_today(s, g.id) >= await settings.get_int(s, "adpost_group_daily"):
+                continue  # в эту группу сегодня уже вышло достаточно рекламы — подождёт до завтра
             chosen = (post, g, acc, client)
             break
         if chosen is None:

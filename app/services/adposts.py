@@ -231,6 +231,12 @@ async def sent_today(s: AsyncSession, account_id: int) -> int:
         publisher_id() == account_id, AdPost.status == "sent", AdPost.sent_at >= start_of_day)) or 0
 
 
+async def group_sent_today(s: AsyncSession, group_id: int) -> int:
+    start_of_day = now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return await s.scalar(select(func.count()).select_from(AdPost).where(
+        AdPost.group_id == group_id, AdPost.status == "sent", AdPost.sent_at >= start_of_day)) or 0
+
+
 async def last_sent(s: AsyncSession, account_id: int):
     return await s.scalar(select(func.max(AdPost.sent_at)).join(Group, Group.id == AdPost.group_id).where(
         publisher_id() == account_id, AdPost.status == "sent"))
