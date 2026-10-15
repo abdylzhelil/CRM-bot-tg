@@ -292,6 +292,7 @@ async def unknown(m: Message, user: User) -> None:
 def build(scout_manager) -> tuple[Bot, Dispatcher]:
     groups.manager = scout_manager
     accounts.manager = scout_manager
+    adposts.manager = scout_manager
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     notify.init(bot)
     dp = Dispatcher(storage=MemoryStorage())

@@ -10,9 +10,10 @@ from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import AdOrder, AdPost, Group, Payment, ScoutAccount, User
-from app.services import adposts, payments, settings
+from app.services import adposts, payments, quiet, settings
 
 router = Router()        # пользователи
+manager = None           # разведчики (ставит setup.build) — для «🔎 Проверить группу»
 admin_router = Router()  # администратор (подключается к admin в setup.py)
 
 FORBIDDEN = ("алкоголь, табак, казино и ставки, займы под проценты, 18+, наркотики, оружие, пирамиды и обман, "
@@ -218,7 +219,14 @@ async def ap_review(cb: CallbackQuery, user: User) -> None:
             return await cb.answer("Выберите хотя бы одну группу", show_alert=True)
         total = await adposts.price_of_groups(s, adposts.selected(order))
         text = await summary(s, order)
+        when = await adposts.estimate(s, adposts.selected(order))
+        auto = await settings.get(s, "adpost_auto_refund") == "1"
     cost = f"\n\nИтого: {total} ₽" if total else "\n\nИтого: бесплатно"
+    if when:
+        cost += f"\n⏱ Публикация займёт {when}: посты выходят по очереди, чтобы Telegram не счёл это спамом."
+    if total:
+        cost += ("\n💸 Если в какой-то группе пост не выйдет или его удалят модераторы группы — деньги за эту группу "
+                 + ("вернутся автоматически." if auto else "вернём."))
     await reply(cb, text + cost + "\n\nОтправить заказ на проверку администратору?",
                 kb([[("📨 Отправить на проверку", f"ap:send:{order.id}")], [("✏️ Изменить группы", f"ap:pick:{order.id}")],
                     [("❌ Отмена", f"ap:cancel:{order.id}")]]))
@@ -443,6 +451,7 @@ async def partial_do(cb: CallbackQuery) -> None:
                 pay = await adposts.order_payment(s, order)
                 if pay is not None and value:
                     refunded = await payments.refund_part(s, pay, value * 100) // 100
+            await adposts.settle(s, order)  # решение принято (вернули или «без возврата») — автовозврат больше не тронет
         except (adposts.AdError, payments.RefundError) as e:
             return await cb.answer(str(e), show_alert=True)
         posts = await adposts.posts_of(s, oid)
@@ -553,6 +562,7 @@ async def groups_for_ads(cb: CallbackQuery) -> None:
             for g in groups]
     bulk = [[("💰 Одна цена всем", "apg:allprice"), ("📈 Цена по размеру (от–до)", "apg:algo")],
             [("✅ Разрешить везде", "apg:allow:1"), ("⏸ Запретить везде", "apg:allow:0")],
+            [("🔎 Проверить все разрешённые", "apg:checkall")],
             [("📨 Готовое сообщение клиенту", "apg:share")]]
     await reply(cb, ("📢 Группы и каналы для рекламы. ✅ — разрешено (покупатель видит и может выбрать). "
                      "Нажмите на любую — разрешить/запретить и цена. Кнопки внизу меняют сразу все:"),
@@ -573,14 +583,61 @@ async def show_group_card(cb: CallbackQuery, gid: int) -> None:
             if g.kind == "channel" else "")
     rows = [[("⏸ Запретить рекламу" if g.ads_allowed else "✅ Разрешить рекламу", f"apg:tog:{g.id}")],
             [("💰 Цена за пост", f"apg:price:{g.id}"), ("🕘 Часы", f"apg:hours:{g.id}")],
-            [("📝 Условия группы", f"apg:note:{g.id}")]]
+            [("📝 Условия группы", f"apg:note:{g.id}"), ("🔎 Проверить группу", f"apg:check:{g.id}")]]
     if g.kind == "channel":
         rows.append([("👤 Сменить аккаунт-публикатор", f"apg:acc:{g.id}")])
     hours = f"с {g.ad_hours.replace('-', ' до ')} ч" if g.ad_hours else "в любое время"
     await reply(cb, (f"{KIND.get(g.kind, '')} <b>{esc(g.title)}</b> — {g.members} уч.\n"
                      f"Реклама: {'✅ разрешена' if g.ads_allowed else '⏸ запрещена'}\n💰 Цена за пост: {own}\n"
                      f"🕘 Публиковать: {hours}\n📝 Условия: {esc(g.ad_note) or '—'}\n"
+                     + (f"🔎 Проверка {quiet.to_local(g.ad_checked_at):%d.%m %H:%M}: {esc(g.ad_check)}\n" if g.ad_checked_at
+                        else "🔎 Ещё не проверяли — нажмите «🔎 Проверить группу»\n")
+                     + ("🖼 Картинки запрещены — только текстовая реклама\n" if g.no_media else "") +
                      f"👤 Публикует: {who}{note}"), kb(rows + [[("◀️ К списку", "apg:list")]]))
+
+
+@admin_router.callback_query(F.data.regexp(r"^apg:check:\d+$"))
+async def group_check(cb: CallbackQuery) -> None:
+    """Проверка прав аккаунта в группе (без публикации)."""
+    from app.scout import publisher
+
+    if manager is None:
+        return await cb.answer("Разведчики не запущены", show_alert=True)
+    gid = int(cb.data.split(":")[2])
+    level, text = await publisher.check_group(manager, gid)
+    off = "\nРеклама здесь выключена." if level == "bad" else ""
+    await cb.answer({"ok": "✅ ", "warn": "⚠️ ", "bad": "⛔ "}[level] + text + off, show_alert=True)
+    await show_group_card(cb, gid)
+
+
+@admin_router.callback_query(F.data == "apg:checkall")
+async def groups_check_all(cb: CallbackQuery) -> None:
+    """Проверить все разрешённые группы по очереди (с паузами), неподходящие выключить, прислать итог."""
+    import asyncio
+
+    from app.scout import publisher
+
+    if manager is None:
+        return await cb.answer("Разведчики не запущены", show_alert=True)
+    async with Session() as s:
+        ids = list((await s.scalars(select(Group.id).where(Group.ads_allowed))).all())
+    await cb.answer(f"Проверяю {len(ids)} шт., пришлю итог", show_alert=True)
+
+    async def run() -> None:
+        bad, warn = [], []
+        for gid in ids:
+            level, text = await publisher.check_group(manager, gid)
+            async with Session() as s:
+                title = (await s.get(Group, gid)).title[:30]
+            (bad if level == "bad" else warn if level == "warn" else []).append(f"{esc(title)} — {esc(text)}")
+            await asyncio.sleep(3)  # не дёргаем Telegram слишком часто
+        await notify._send(f"🔎 Проверено групп и каналов: {len(ids)}.\n"
+                           + (f"\n⛔ Выключены ({len(bad)}):\n" + "\n".join(bad) if bad else "")
+                           + (f"\n\n⚠️ С оговорками ({len(warn)}):\n" + "\n".join(warn) if warn else "")
+                           + ("" if bad or warn else "\nВезде можно публиковать ✅"),
+                           kb([[("📢 Группы для рекламы", "apg:list")]]))
+
+    asyncio.create_task(run())
 
 
 @admin_router.callback_query(F.data.regexp(r"^apg:(hours|note):\d+$"))
@@ -636,7 +693,14 @@ async def groups_toggle(cb: CallbackQuery) -> None:
         if not g.ads_allowed and not (g.ad_account_id or g.account_id):
             return await cb.answer("Сначала назначьте аккаунт-публикатор (кнопка «👤 Сменить аккаунт-публикатор»)", show_alert=True)
         g.ads_allowed = not g.ads_allowed
+        turned_on = g.ads_allowed
         await s.commit()
+    if turned_on and manager is not None:  # сразу проверяем, сможет ли аккаунт сюда писать
+        from app.scout import publisher
+
+        level, text = await publisher.check_group(manager, gid)
+        if level != "ok":
+            await cb.answer(("⛔ Не включено: " if level == "bad" else "⚠️ Включено, но: ") + text, show_alert=True)
     await show_group_card(cb, gid)
 
 
@@ -754,6 +818,8 @@ async def allow_all_handler(cb: CallbackQuery) -> None:
     async with Session() as s:
         changed, skipped = await adposts.allow_all(s, flag)
     note = f"\nПропущено без аккаунта-публикатора: {skipped} (назначьте его в карточке)." if skipped else ""
+    if flag:
+        note += "\nСоветую нажать «🔎 Проверить все разрешённые» — неподходящие выключатся сами."
     await cb.answer(("Разрешено" if flag else "Запрещено") + f": {changed} шт." + note, show_alert=True)
     await groups_for_ads(cb)
 

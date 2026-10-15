@@ -307,9 +307,11 @@ async def retry_failed(s: AsyncSession, order: AdOrder) -> int:
         raise AdError("Заказ отменён — повторять нечего.")
     if await refunded(s, order):
         raise AdError("Деньги за этот заказ возвращены — повторять нельзя.")
-    posts = (await s.scalars(select(AdPost).where(AdPost.order_id == order.id, AdPost.status == "failed"))).all()
-    for p in posts:
+    posts = (await s.scalars(select(AdPost).where(
+        AdPost.order_id == order.id, AdPost.status.in_(("failed", "deleted")), ~AdPost.settled))).all()
+    for p in posts:  # по уже возвращённым деньгам не повторяем
         p.status, p.error, p.scheduled_at = "queued", "", now()
+        p.first_try_at, p.checked, p.link = None, False, ""
     if posts and order.status == "done":
         order.status = "running"
     await s.commit()
@@ -397,20 +399,67 @@ async def order_payment(s: AsyncSession, order: AdOrder):
     return await s.scalar(select(Payment).where(Payment.charge_id == f"yk:{order.yk_id}")) if order.yk_id else None
 
 
+async def open_posts(s: AsyncSession, order: AdOrder) -> list[AdPost]:
+    """Невышедшие (или удалённые) посты, по которым вопрос денег ещё не закрыт. У старых постов без цены — досчитываем."""
+    posts = list((await s.scalars(select(AdPost).where(AdPost.order_id == order.id))).all())
+    if posts and order.price and all(p.price == 0 for p in posts):  # посты до обновления — делим цену по ценам групп
+        by_group = {p.group_id: p.price for p in await _new_posts(s, order)}
+        for p in posts:
+            p.price = by_group.get(p.group_id, 0)
+    return [p for p in posts if p.status in NOT_PUBLISHED and not p.settled]
+
+
 async def unpublished_value(s: AsyncSession, order: AdOrder) -> int:
-    """Сколько ₽ приходится на группы, где пост не вышел (или удалён), минус то, что уже вернули."""
-    posts = (await s.scalars(select(AdPost).where(AdPost.order_id == order.id))).all()
-    if not posts or not order.price:
+    """Сколько ₽ ещё можно вернуть за группы, где пост не вышел (не больше, чем осталось от платежа)."""
+    value = sum(p.price for p in await open_posts(s, order))
+    if not value or not order.price:
         return 0
-    if all(p.price == 0 for p in posts):  # посты до обновления — делим цену заказа по нынешним ценам групп
-        fresh = await _new_posts(s, order)
-        by_group = {p.group_id: p.price for p in fresh}
-        value = sum(by_group.get(p.group_id, 0) for p in posts if p.status in NOT_PUBLISHED)
-    else:
-        value = sum(p.price for p in posts if p.status in NOT_PUBLISHED)
     pay = await order_payment(s, order)
-    already = (pay.refunded_amount // 100) if pay is not None else 0
-    return max(0, min(value, order.price) - already)
+    left = (pay.amount - pay.refunded_amount) // 100 if pay is not None and not pay.refunded else 0
+    return max(0, min(value, left))
+
+
+async def settle(s: AsyncSession, order: AdOrder) -> None:
+    """Вопрос денег по невышедшим постам закрыт (вернули или решили не возвращать) — повторно не вернём."""
+    for p in await open_posts(s, order):
+        p.settled = True
+    await s.commit()
+
+
+async def auto_refund(s: AsyncSession, order: AdOrder) -> int:
+    """Автовозврат за невышедшие группы (если включён). Возвращает ₽; 0 — нечего/выключено.
+    Ошибку ЮKassa (RefundError) пробрасывает — вызывающий сообщит админу."""
+    from app.services import payments
+
+    if await settings.get(s, "adpost_auto_refund") != "1":
+        return 0
+    value = await unpublished_value(s, order)
+    pay = await order_payment(s, order)
+    if not value or pay is None:
+        return 0
+    rub = await payments.refund_part(s, pay, value * 100) // 100
+    await settle(s, order)
+    return rub
+
+
+async def estimate(s: AsyncSession, group_ids: list[int]) -> str:
+    """Примерно сколько займёт публикация: посты идут по очереди с паузой и суточным лимитом на аккаунт."""
+    import math
+
+    groups = (await s.scalars(select(Group).where(Group.id.in_(group_ids)))).all() if group_ids else []
+    per_acc: dict[int, int] = {}
+    for g in groups:
+        acc = g.ad_account_id or g.account_id or 0
+        per_acc[acc] = per_acc.get(acc, 0) + 1
+    if not per_acc:
+        return ""
+    most = max(per_acc.values())
+    limit = max(await settings.get_int(s, "adpost_daily_limit"), 1)
+    gap = await settings.get_int(s, "adpost_gap_min")
+    if most > limit:
+        return f"примерно {math.ceil(most / limit)} дн. (не больше {limit} постов в сутки с одного аккаунта)"
+    hours = math.ceil((most - 1) * gap / 60) if most > 1 else 0
+    return "в течение часа" if hours <= 1 else f"примерно за {hours} ч"
 
 
 async def finish_partial(s: AsyncSession, order: AdOrder) -> int:

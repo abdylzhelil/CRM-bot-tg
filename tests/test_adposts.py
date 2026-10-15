@@ -907,3 +907,94 @@ async def test_failed_group_switched_off_and_no_media(maker, tgbot):
         assert len(await adposts.eligible_groups(s)) == 1
         assert await adposts.eligible_groups(s, photo=True) == []  # с картинкой туда не предлагаем
     assert ChatSendPhotosForbiddenError  # (ошибка «картинки запрещены» помечает группу no_media)
+
+
+async def test_auto_refund_when_order_finishes(maker, tgbot, monkeypatch):
+    """Пост не вышел (бан в группе) → заказ закончен → деньги за эту группу вернулись сами, обоим пришло сообщение."""
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    from telethon.errors import UserBannedInChannelError
+
+    from app.models import Payment
+
+    await setup_group(maker, price=400)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        await adposts.mark_paid(s, oid, "yk-5", 40000)
+    calls = []
+
+    async def fake_refund(pid, amount, cur, key):
+        calls.append(amount)
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(payments, "_yookassa_refund", fake_refund)
+    mgr, _ = manager(send=AsyncMock(side_effect=UserBannedInChannelError(request=None)))
+    await publisher.publish_one(mgr)
+    async with maker() as s:
+        assert (await s.get(AdOrder, oid)).status == "done"
+        pay = await s.scalar(select(Payment))
+        assert pay.refunded_amount == 40000 and pay.refunded
+        assert (await s.scalar(select(AdPost))).settled
+    assert calls == [40000]
+    assert any("вернули 400" in t for t in tgbot.texts(70)) and any("автоматически вернули 400" in t for t in tgbot.texts(ADMIN_ID))
+    # повторный итог (или проверка) ничего второй раз не вернёт
+    await publisher.notify_done(oid)
+    assert calls == [40000]
+
+
+async def test_auto_refund_off_tells_admin(maker, tgbot, monkeypatch):
+    from telethon.errors import UserBannedInChannelError
+
+    await setup_group(maker, price=400)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await settings.put(s, "adpost_auto_refund", "0")
+        await adposts.approve(s, await s.get(AdOrder, oid))
+        await adposts.mark_paid(s, oid, "yk-6", 40000)
+    mgr, _ = manager(send=AsyncMock(side_effect=UserBannedInChannelError(request=None)))
+    await publisher.publish_one(mgr)
+    assert any("к возврату 400" in t for t in tgbot.texts(ADMIN_ID))
+    assert any("администратор вернёт" in t for t in tgbot.texts(70))
+
+
+async def test_probe_group_rights(maker, tgbot):
+    from telethon.tl.types import ChatAdminRights, ChatBannedRights
+
+    await setup_group(maker)
+    mgr, client = manager()
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+    closed = SimpleNamespace(left=False, broadcast=False, creator=False, admin_rights=None, banned_rights=None,
+                             default_banned_rights=ChatBannedRights(until_date=None, send_messages=True))
+    client.get_entity = AsyncMock(return_value=closed)
+    assert (await publisher.probe(mgr, g))[0] == "warn"
+    nopics = SimpleNamespace(left=False, broadcast=False, creator=False, admin_rights=None, banned_rights=None,
+                             default_banned_rights=ChatBannedRights(until_date=None, send_media=True))
+    client.get_entity = AsyncMock(return_value=nopics)
+    level, text, no_media = await publisher.probe(mgr, g)
+    assert level == "warn" and no_media and "картинки" in text
+    channel = SimpleNamespace(left=False, broadcast=True, creator=False, admin_rights=None)
+    client.get_entity = AsyncMock(return_value=channel)
+    assert (await publisher.probe(mgr, g))[0] == "bad"
+    channel.admin_rights = ChatAdminRights(post_messages=True)
+    assert (await publisher.probe(mgr, g))[0] == "ok"
+    client.get_entity = AsyncMock(return_value=SimpleNamespace(left=True))
+    assert await publisher.check_group(mgr, g.id) == ("bad", "аккаунт не состоит в группе")
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        assert not g.ads_allowed and g.ad_check.startswith("⛔")
+
+
+async def test_estimate_text(maker):
+    await setup_group(maker)
+    async with maker() as s:
+        await settings.put(s, "adpost_daily_limit", "2")
+        for i in range(3):
+            s.add(Group(tg_id=-200 - i, username=f"e{i}", title=f"E{i}", members=10, status="joined", kind="group", account_id=1, ads_allowed=True))
+        await s.commit()
+        ids = list((await s.scalars(select(Group.id))).all())
+        assert "2 дн" in await adposts.estimate(s, ids)
+        assert await adposts.estimate(s, ids[:1]) == "в течение часа"

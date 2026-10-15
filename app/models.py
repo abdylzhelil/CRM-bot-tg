@@ -78,6 +78,8 @@ class Group(Base):
     ad_hours: Mapped[str] = mapped_column(String(16), default="")  # «9-21» — публиковать только в эти часы (местное время)
     ad_note: Mapped[str] = mapped_column(String(255), default="")  # условия группы для рекламы (заметка админа)
     no_media: Mapped[bool] = mapped_column(Boolean, default=False)  # картинки в группе запрещены — только текстовая реклама
+    ad_check: Mapped[str] = mapped_column(String(160), default="")  # итог «🔎 Проверить группу»: можно ли писать, что запрещено
+    ad_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
 
@@ -395,3 +397,4 @@ class AdPost(Base):
     first_try_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # группа была закрыта — ждём до суток
     price: Mapped[int] = mapped_column(Integer, default=0)  # доля цены заказа за эту группу, ₽ (для частичного возврата)
     checked: Mapped[bool] = mapped_column(Boolean, default=False)  # через 15 мин проверили, что пост не удалён
+    settled: Mapped[bool] = mapped_column(Boolean, default=False)  # пост не вышел и вопрос денег за него закрыт (вернули / решили не возвращать)

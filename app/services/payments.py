@@ -79,6 +79,7 @@ async def take_back(s: AsyncSession, payment: Payment) -> None:
                 await adposts.cancel(s, order)
             except adposts.AdError:
                 pass  # уже выполнен — деньги вернули, посты остаются
+            await adposts.settle(s, order)  # вернули всё — автовозврат по этим постам больше не нужен
         payment.refunded, payment.refunded_at = True, now()
         await s.commit()
         return

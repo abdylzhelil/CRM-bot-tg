@@ -23,7 +23,7 @@ from telethon.errors import (
 from app.bot import notify
 from app.db import Session
 from app.models import AdOrder, AdPost, Group, ScoutAccount, now
-from app.services import adposts, settings
+from app.services import adposts, payments, settings
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +166,58 @@ async def publish_one(manager) -> bool:
     return True
 
 
+async def probe(manager, g: Group) -> tuple[str, str, bool]:
+    """«🔎 Проверить группу»: может ли аккаунт-публикатор сейчас писать сюда. Ничего не публикует.
+
+    (итог: ok / warn / bad, пояснение, картинки запрещены). bad — реклама здесь не выйдет, warn — выйдет с оговоркой."""
+    acc_id = g.ad_account_id or g.account_id
+    client = manager.clients.get(acc_id) if acc_id else None
+    if client is None:
+        return "bad", "аккаунт-публикатор не назначен или не подключён", False
+    try:
+        ent = await client.get_entity(await resolve(client, g))
+    except (ChannelPrivateError, UserBannedInChannelError):
+        return "bad", "группа закрыта или аккаунт из неё удалён", False
+    except Exception as e:
+        return "warn", f"не удалось проверить ({type(e).__name__}) — попробуйте позже", False
+    if getattr(ent, "left", False):
+        return "bad", "аккаунт не состоит в группе", False
+    rights = getattr(ent, "admin_rights", None)
+    creator = bool(getattr(ent, "creator", False))
+    if getattr(ent, "broadcast", False):  # канал: пишут только админы с правом постов
+        if creator or (rights is not None and getattr(rights, "post_messages", False)):
+            return "ok", "аккаунт — админ канала, можно публиковать", False
+        return "bad", "аккаунт не админ канала с правом публиковать посты", False
+    if creator or rights is not None:
+        return "ok", "аккаунт — админ группы, ограничений нет", False
+    limits = [r for r in (getattr(ent, "banned_rights", None), getattr(ent, "default_banned_rights", None)) if r is not None]
+
+    def banned(name: str) -> bool:
+        return any(getattr(r, name, False) for r in limits)
+
+    if banned("send_messages") or banned("send_plain"):
+        return "warn", "сейчас писать нельзя (закрыта на время или новичкам нельзя) — бот будет пробовать до суток", False
+    no_media = banned("send_media") or banned("send_photos")
+    notes = (["картинки запрещены — только текст"] if no_media else []) + (["ссылки запрещены"] if banned("embed_links") else [])
+    return ("warn", ", ".join(notes), no_media) if notes else ("ok", "можно публиковать", False)
+
+
+async def check_group(manager, gid: int) -> tuple[str, str]:
+    """Проверить группу и запомнить итог в карточке. bad — реклама в группе выключается."""
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        if g is None:
+            return "bad", "группа не найдена"
+        level, text, no_media = await probe(manager, g)
+        g.ad_check = ({"ok": "✅ ", "warn": "⚠️ ", "bad": "⛔ "}[level] + text)[:160]
+        g.ad_checked_at = now()
+        g.no_media = no_media or (g.no_media and level != "ok")
+        if level == "bad":
+            g.ads_allowed = False
+        await s.commit()
+    return level, text
+
+
 async def check_posts(manager) -> int:
     """Через 15 минут после публикации: пост на месте? Если его удалили (правила группы, бот-модератор) —
     отмечаем «удалён», выключаем рекламу в этой группе и сообщаем админу и заказчику. Возвращает число удалённых."""
@@ -187,45 +239,84 @@ async def check_posts(manager) -> int:
                 post.status, post.error, post.link = "deleted", "удалён в группе (правила или бот группы)", ""
                 g.ads_allowed = False  # пока не разберётесь с условиями группы — туда больше не публикуем
                 order = await s.get(AdOrder, post.order_id)
-                gone.append((post.order_id, order.user_id if order else 0, g.id, g.title))
+                gone.append((post.order_id, order.user_id if order else 0, g.id, g.title,
+                             order is not None and order.status == "done"))
         await s.commit()
-    for order_id, user_id, gid, title in gone:
+    for order_id, user_id, gid, title, finished in gone:
+        refunded = (await refund_unpublished(order_id))[0] if finished else 0  # заказ ещё идёт — вернём при завершении
         await notify._send(
             f"🗑 Реклама, заказ №{order_id}: пост в «{html.escape(title)}» удалили через несколько минут — видимо, правила "
             "или бот группы. Реклама в этой группе выключена. Проверьте условия группы (подписка, «я не бот», согласие админа) "
-            "и включите снова в карточке группы. Деньги за заказ можно вернуть в карточке заказа.",
+            "и включите снова в карточке группы (там есть «🔎 Проверить группу»).",
             notify.InlineKeyboardMarkup(inline_keyboard=[
                 [notify.InlineKeyboardButton(text="📣 Открыть заказ", callback_data=f"apa:o:{order_id}")],
                 [notify.InlineKeyboardButton(text="📢 Карточка группы", callback_data=f"apg:o:{gid}")]]))
         if user_id:
+            back = (f"За эту группу вернули {refunded} ₽ — деньги придут тем же способом, обычно за 1–3 дня."
+                    if refunded else "Администратор уже знает — по этой группе вернём деньги.")
             try:
                 await notify._bot.send_message(
-                    user_id, f"⚠️ Ваш рекламный пост в «{html.escape(title)}» удалили модераторы группы. "
-                    "Администратор уже знает — по этой группе решим вопрос с возвратом.")
+                    user_id, f"⚠️ Ваш рекламный пост в «{html.escape(title)}» удалили модераторы группы. " + back)
             except Exception:
                 pass
     return len(gone)
 
 
+async def refund_unpublished(order_id: int) -> tuple[int, str]:
+    """Автовозврат за невышедшие группы заказа. (₽ возвращено, текст ошибки). Ошибку видит админ."""
+    async with Session() as s:
+        order = await s.get(AdOrder, order_id)
+        if order is None:
+            return 0, ""
+        try:
+            return await adposts.auto_refund(s, order), ""
+        except payments.RefundError as e:
+            return 0, str(e)
+
+
 async def notify_done(order_id: int) -> None:
-    """Сообщить заказчику итог: ссылки на опубликованное и что не вышло."""
+    """Заказ закончен: автовозврат за невышедшие группы (если включён) и итог заказчику — ссылки и что не вышло."""
+    refunded, problem = await refund_unpublished(order_id)
     async with Session() as s:
         order = await s.get(AdOrder, order_id)
         rows = await adposts.posts_of(s, order_id)
+        left = await adposts.unpublished_value(s, order)
     lines = []
     for p, g in rows:
         if p.status == "sent":
             lines.append(f"✅ <a href=\"{p.link}\">{html.escape(g.title[:40])}</a>" if p.link else f"✅ {html.escape(g.title[:40])}")
-        elif p.status == "failed":
+        elif p.status in ("failed", "deleted"):
             lines.append(f"⚠️ {html.escape(g.title[:40])} — {html.escape(p.error)}")
     ok = sum(1 for p, _ in rows if p.status == "sent")
     text = f"📣 Заказ рекламы №{order_id} выполнен: опубликовано {ok} из {len(rows)}.\n\n" + "\n".join(lines)
-    if ok < len(rows):
-        text += "\n\nПо тому, что не вышло, напишите администратору — решим вопрос с возвратом."
+    if refunded:
+        text += (f"\n\n💸 За группы, где пост не вышел, вернули {refunded} ₽ — деньги придут тем же способом, "
+                 "обычно за 1–3 дня.")
+    elif ok < len(rows) and left:
+        text += "\n\nПо тому, что не вышло, администратор вернёт деньги — ничего делать не нужно."
     try:
         await notify._bot.send_message(order.user_id, text, disable_web_page_preview=True)
     except Exception:
         log.warning("не удалось сообщить заказчику %s", order.user_id)
+    if refunded:
+        await notify._send(f"💸 Заказ №{order_id}: автоматически вернули {refunded} ₽ за невышедшие группы.", order_markup(order_id))
+    elif left:
+        why = f" Автовозврат не прошёл: {html.escape(problem)}" if problem else ""
+        await notify._send(f"⚠️ Заказ №{order_id} закончен, но не всё вышло: к возврату {left} ₽.{why} "
+                           "Верните кнопкой «💸 Вернуть за невышедшие» в карточке заказа.", order_markup(order_id))
+
+
+async def stuck_orders() -> int:
+    """Заказы, которые публикуются дольше 3 суток: напомнить админу (раз в сутки), что их можно завершить частично."""
+    async with Session() as s:
+        rows = (await s.scalars(select(AdOrder).where(
+            AdOrder.status == "running", AdOrder.decided_at.is_not(None),
+            AdOrder.decided_at < now() - timedelta(days=3)))).all()
+        ids = [o.id for o in rows]
+    for oid in ids:
+        await notify.alert_once(f"adpost_stuck_{oid}", f"Заказ рекламы №{oid} публикуется уже больше 3 суток. "
+                                "Откройте его: можно повторить или нажать «✂️ Выполнен частично».", cooldown=86400)
+    return len(ids)
 
 
 async def nudge_unpaid() -> int:
@@ -265,6 +356,7 @@ async def publish_loop(manager) -> None:
             ticks += 1
             if ticks % 30 == 0:  # примерно раз в 30 минут
                 await nudge_unpaid()
+                await stuck_orders()
         except Exception:
             log.exception("publish_loop")
         await asyncio.sleep(random.uniform(40, 120) if did else 60)
