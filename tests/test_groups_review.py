@@ -212,3 +212,23 @@ async def test_skipped_groups_can_be_returned_to_queue(maker):
     again = cb(f"gr:back:{first.id}")
     await groups.back_to_queue(again)  # повторное нажатие ничего не ломает
     assert again.answer.await_args.kwargs.get("show_alert") is True
+
+
+async def test_left_and_covered_groups_have_buttons(maker, monkeypatch):
+    sent = AsyncMock()
+    monkeypatch.setattr(groups, "reply", sent)
+    await add_groups(maker, 2, status="left")
+    async with maker() as s:
+        s.add(Group(tg_id=-5000, title="С ботом модерации", members=900, status="covered"))
+        await s.commit()
+    target = MagicMock()
+    target.bot.me = AsyncMock(return_value=MagicMock(can_read_all_group_messages=True, username="b"))
+    await groups.groups_menu(target)
+    markup = sent.await_args.args[2]
+    buttons = {b.callback_data: b.text for row in markup.inline_keyboard for b in row if b.callback_data}
+    assert "Вышли 2" in buttons["gr:list:left"] and "С нашим ботом 1" in buttons["gr:list:covered"]
+    await groups.group_list(cb("gr:list:covered"))  # список «с нашим ботом» открывается (только просмотр)
+    async with maker() as s:
+        left = await s.scalar(select(Group).where(Group.status == "left").order_by(Group.id))
+    await groups.back_to_queue(cb(f"gr:back:{left.id}"))  # покинутую можно вернуть в очередь
+    assert (await statuses(maker)).count("approved") == 1
