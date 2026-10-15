@@ -3,11 +3,14 @@
 Публикует аккаунт-разведчик, который состоит в группе. Только в группах, где админ разрешил (`groups.ads_allowed`),
 с суточным лимитом и паузами на аккаунт. Под постом — подпись `adpost_footer` (пометка «Реклама» и т. п.).
 """
+import uuid
 from datetime import timedelta
+from pathlib import Path
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import config
 from app.models import AdOrder, AdPost, Group, ScoutAccount, now
 from app.services import settings
 from app.services.distribute import day_start
@@ -76,19 +79,45 @@ def total_price(per_group: int, n: int) -> int:
     return per_group * n
 
 
-async def new_draft(s: AsyncSession, user_id: int, text: str) -> AdOrder:
+MAX_CAPTION_TEXT = 800  # подпись к картинке в Telegram — до 1024 знаков вместе с пометкой «Реклама» (до 200)
+
+
+def media_path(name: str) -> Path:
+    return Path(config.MEDIA_DIR) / name
+
+
+def new_photo_name() -> str:
+    """Имя файла для новой картинки (папку создаём здесь же)."""
+    Path(config.MEDIA_DIR).mkdir(parents=True, exist_ok=True)
+    return f"{uuid.uuid4().hex}.jpg"
+
+
+def remove_photo(name: str) -> None:
+    if name:
+        media_path(name).unlink(missing_ok=True)
+
+
+async def new_draft(s: AsyncSession, user_id: int, text: str, photo: str = "") -> AdOrder:
+    """Черновик заказа: текст (или подпись к картинке) и, если есть, файл картинки."""
     if not await enabled(s):
         raise AdError("Реклама в группах сейчас не подключена.")
     text = text.strip()
-    if not MIN_TEXT <= len(text) <= MAX_TEXT:
-        raise AdError(f"Текст рекламы — от {MIN_TEXT} до {MAX_TEXT} знаков (сейчас {len(text)}).")
+    limit = MAX_CAPTION_TEXT if photo else MAX_TEXT
+    if not MIN_TEXT <= len(text) <= limit:
+        if photo and not text:
+            raise AdError("Добавьте к картинке подпись — текст рекламы (что предлагаете, цена, как связаться).")
+        raise AdError(f"Текст рекламы — от {MIN_TEXT} до {limit} знаков (сейчас {len(text)})."
+                      + (" С картинкой Telegram разрешает подпись не длиннее." if photo else ""))
     # брошенные черновики (текст ввели, группы не выбрали) не видны в «Мои заказы» — новый заказ их заменяет
-    await s.execute(delete(AdOrder).where(AdOrder.user_id == user_id, AdOrder.status == "draft"))
+    old = (await s.scalars(select(AdOrder).where(AdOrder.user_id == user_id, AdOrder.status == "draft"))).all()
+    for o in old:
+        remove_photo(o.photo)
+        await s.delete(o)
     open_n = await s.scalar(select(func.count()).select_from(AdOrder).where(
         AdOrder.user_id == user_id, AdOrder.status.in_(OPEN_STATUSES)))
     if (open_n or 0) >= 3:
         raise AdError("У вас уже 3 незавершённых заказа. Дождитесь их или отмените лишние.")
-    order = AdOrder(user_id=user_id, text=text)
+    order = AdOrder(user_id=user_id, text=text, photo=photo)
     s.add(order)
     await s.commit()
     return order

@@ -33,6 +33,26 @@ async def on_input(m: Message, state: FSMContext, user=None) -> None:
         await state.clear()
 
 
+@router.message(Ask.value, ~F.text)
+async def on_media(m: Message, state: FSMContext, user=None) -> None:
+    """Не текст во время вопроса. Картинка с подписью годится для рекламы; остальное — просим текстом (не молчим)."""
+    data = await state.get_data()
+    if data.get("action") == "ap_text" and m.photo:
+        if m.media_group_id and not m.caption:
+            return  # остальные фото альбома: берём только первое (с подписью)
+        name = adposts_h.adposts.new_photo_name()
+        await m.bot.download(m.photo[-1], destination=adposts_h.adposts.media_path(name))
+        async with Session() as s:
+            ok = await adposts_h.ap_text(s, m, data, (m.caption or "").strip(), photo=name)
+        if ok is False:
+            adposts_h.adposts.remove_photo(name)
+        else:
+            await state.clear()
+        return
+    hint = " Можно картинку с подписью." if data.get("action") == "ap_text" else ""
+    await m.answer("✍️ Пришлите ответ текстом." + hint + "\n/cancel — отмена")
+
+
 async def setting(s, m, d, text):
     key = d["key"]
     try:

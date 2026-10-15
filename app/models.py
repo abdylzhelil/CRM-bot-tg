@@ -368,6 +368,7 @@ class AdOrder(Base):
     price: Mapped[int] = mapped_column(Integer, default=0)  # итого, ₽ (0 — бесплатно)
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
     yk_id: Mapped[str] = mapped_column(String(64), default="")  # платёж ЮKassa
+    photo: Mapped[str] = mapped_column(String(255), default="")  # картинка к рекламе: файл в data/ad_media ("" — без неё)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reminded: Mapped[bool] = mapped_column(Boolean, default=False)  # напомнили об оплате

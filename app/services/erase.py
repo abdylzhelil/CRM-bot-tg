@@ -35,6 +35,11 @@ async def erase_user(s: AsyncSession, user_id: int) -> bool:
             await s.execute(AdPost.__table__.update().where(AdPost.order_id == o.id, AdPost.status == "queued").values(status="canceled"))
             o.status = "canceled"
         o.text, o.reason = "[удалено по просьбе пользователя]", ""
+        if o.photo:
+            from app.services.adposts import remove_photo
+
+            remove_photo(o.photo)
+            o.photo = ""
     await s.delete(user)
     await s.commit()
     return True

@@ -104,7 +104,11 @@ async def publish_one(manager) -> bool:
         try:
             entity = await resolve(client, g)
             # parse_mode=None: текст рекламодателя публикуем как есть (Markdown Telethon испортил бы *, _, [ ])
-            msg = await client.send_message(entity, text, link_preview=False, parse_mode=None)
+            pic = adposts.media_path(order.photo) if order.photo else None
+            if pic is not None and pic.exists():  # с картинкой: текст идёт подписью к ней
+                msg = await client.send_file(entity, str(pic), caption=text, parse_mode=None)
+            else:
+                msg = await client.send_message(entity, text, link_preview=False, parse_mode=None)
             post.status, post.sent_at, post.message_id = "sent", now(), msg.id
             post.link = post_link(g, msg.id)
         except (FloodWaitError, SlowModeWaitError) as e:

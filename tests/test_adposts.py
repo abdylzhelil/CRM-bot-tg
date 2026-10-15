@@ -712,3 +712,57 @@ async def test_no_retry_after_refund_or_cancel(maker, tgbot):
 def test_rubles_input():
     assert adposts.rubles(" 1500 ") == 1500
     assert adposts.rubles("²") is None and adposts.rubles("9" * 5000) is None and adposts.rubles("2000000") is None
+
+
+async def test_photo_ad_published_with_caption(maker, tgbot, tmp_path, monkeypatch):
+    """Реклама картинкой с подписью: принимается и публикуется картинкой."""
+    monkeypatch.setattr(config, "MEDIA_DIR", str(tmp_path))
+    await setup_group(maker)
+    await make_user(maker, 70)
+    name = adposts.new_photo_name()
+    adposts.media_path(name).write_bytes(b"jpg")
+    async with maker() as s:
+        with pytest.raises(adposts.AdError, match="подпись"):
+            await adposts.new_draft(s, 70, "", photo=name)
+        with pytest.raises(adposts.AdError, match="800"):
+            await adposts.new_draft(s, 70, "я" * 850, photo=name)
+        order = await adposts.new_draft(s, 70, TEXT, photo=name)
+        await adposts.toggle_group(s, order, (await s.scalar(select(Group))).id)
+        await adposts.submit(s, order)
+        await adposts.approve(s, order)
+    mgr, client = manager()
+    client.send_file = AsyncMock(return_value=SimpleNamespace(id=777))
+    assert await publisher.publish_one(mgr) is True
+    client.send_file.assert_awaited_once()
+    assert client.send_file.call_args.kwargs["caption"].startswith(TEXT)
+    client.send_message.assert_not_awaited()
+
+
+async def test_photo_input_and_non_text_answer(maker, tgbot, tmp_path, monkeypatch):
+    from app.bot.handlers import inputs
+
+    monkeypatch.setattr(config, "MEDIA_DIR", str(tmp_path))
+    await setup_group(maker)
+    await make_user(maker, 70)
+
+    async def fake_download(file, destination):
+        destination.write_bytes(b"jpg")
+
+    state = MagicMock()
+    state.get_data, state.clear = AsyncMock(return_value={"action": "ap_text"}), AsyncMock()
+    m = MagicMock()
+    m.from_user.id, m.caption, m.media_group_id = 70, TEXT, None
+    m.photo = [SimpleNamespace(file_id="small"), SimpleNamespace(file_id="big")]
+    m.answer = AsyncMock()
+    m.bot.download = AsyncMock(side_effect=fake_download)
+    await inputs.on_media(m, state)
+    async with maker() as s:
+        order = await s.scalar(select(AdOrder))
+        assert order.photo and adposts.media_path(order.photo).exists() and order.text == TEXT
+    state.clear.assert_awaited()
+    # голосовое/стикер во время любого вопроса — бот не молчит
+    state.get_data = AsyncMock(return_value={"action": "client_note"})
+    m2 = MagicMock()
+    m2.photo, m2.answer = None, AsyncMock()
+    await inputs.on_media(m2, state)
+    assert "текстом" in m2.answer.call_args.args[0]

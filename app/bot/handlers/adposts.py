@@ -2,9 +2,10 @@
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 from sqlalchemy import func, select
 
+from app import config
 from app.bot import notify
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
@@ -103,16 +104,16 @@ async def ap_list(cb: CallbackQuery, user: User) -> None:
 async def ap_new(cb: CallbackQuery, state: FSMContext) -> None:
     await ask(cb, state, "ap_text", (
         f"Пришлите <b>текст рекламы</b> ({adposts.MIN_TEXT}–{adposts.MAX_TEXT} знаков): что предлагаете, цена, как связаться. "
-        "Ссылки и @ники можно."))
+        f"Ссылки и @ники можно.\n🖼 Можно <b>одну картинку с подписью</b> (подпись до {adposts.MAX_CAPTION_TEXT} знаков)."))
 
 
-async def ap_text(s, m: Message, d, text):
-    """Текст получен → черновик → выбор групп."""
+async def ap_text(s, m: Message, d, text, photo: str = ""):
+    """Текст (или картинка с подписью) получен → черновик → выбор групп."""
     try:
-        order = await adposts.new_draft(s, m.from_user.id, text)
+        order = await adposts.new_draft(s, m.from_user.id, text, photo)
     except adposts.AdError as e:
         await m.answer(str(e))
-        return False if "Текст рекламы" in str(e) else None
+        return False if ("Текст рекламы" in str(e) or "подпись" in str(e)) else None
     user = await s.get(User, m.from_user.id)
     await show_picker(m, s, order, user.city if user else "")
 
@@ -181,7 +182,8 @@ async def summary(s, order: AdOrder, admin: bool = False) -> str:
         u = await s.get(User, order.user_id)
         who = f"👤 {esc((u.name if u else '') or str(order.user_id))}" + (f" @{esc(u.username)}" if u and u.username else "") + "\n"
     price = f"{order.price} ₽" if order.price else "бесплатно"
-    return (f"📣 <b>Заказ №{order.id}</b> — {adposts.STATUS[order.status]}\n{who}💰 {price}\n\n"
+    pic = "🖼 С картинкой\n" if order.photo else ""
+    return (f"📣 <b>Заказ №{order.id}</b> — {adposts.STATUS[order.status]}\n{who}💰 {price}\n{pic}\n"
             f"{esc(order.text[:700])}\n\nГруппы:\n" + "\n".join(lines))
 
 
@@ -202,6 +204,28 @@ async def ap_review(cb: CallbackQuery, user: User) -> None:
                     [("❌ Отмена", f"ap:cancel:{order.id}")]]))
 
 
+async def send_photo_to_admins(photo: str, caption: str) -> None:
+    if not photo or not adposts.media_path(photo).exists():
+        return
+    for uid in config.OWNER_IDS:
+        try:
+            await notify._bot.send_photo(uid, FSInputFile(adposts.media_path(photo)), caption=caption)
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data.regexp(r"^ap:pic:\d+$"))
+async def show_pic(cb: CallbackQuery, user: User) -> None:
+    """Картинка заказа — заказчику и администратору."""
+    async with Session() as s:
+        order = await s.get(AdOrder, int(cb.data.split(":")[2]))
+    if order is None or not (order.user_id == user.tg_id or user.is_admin) or not order.photo \
+            or not adposts.media_path(order.photo).exists():
+        return await cb.answer("Картинки нет", show_alert=True)
+    await cb.message.answer_photo(FSInputFile(adposts.media_path(order.photo)), caption=f"🖼 Заказ №{order.id}")
+    await cb.answer()
+
+
 @router.callback_query(F.data.regexp(r"^ap:send:\d+$"))
 async def ap_send(cb: CallbackQuery, user: User) -> None:
     async with Session() as s:
@@ -215,12 +239,13 @@ async def ap_send(cb: CallbackQuery, user: User) -> None:
         auto = await adposts.maybe_auto_approve(s, order)  # чистый заказ — без участия администратора
         text = await summary(s, order, admin=True)
         flags = adposts.suspicious(order.text)
-        oid, price = order.id, order.price
+        oid, price, photo = order.id, order.price, order.photo
     if auto:
         msg, markup = approved_message(oid, price, auto)
         await reply(cb, msg, markup or kb([[("📋 Мои заказы", "ap:mine")]]))
         return
     warn = f"\n\n⚠️ Подозрительные слова: {', '.join(flags)}" if flags else ""
+    await send_photo_to_admins(photo, f"🖼 Картинка к заказу №{oid}")
     await notify._send("📣 Новый заказ рекламы:\n\n" + text + warn,
                        kb([[("✅ Одобрить", f"apa:ok:{oid}"), ("❌ Отклонить", f"apa:no:{oid}")]]))
     await reply(cb, f"✅ Заказ №{oid} отправлен на проверку. Напишу, когда администратор решит.",
@@ -245,7 +270,7 @@ async def ap_open(cb: CallbackQuery, user: User) -> None:
         if order is None:
             return
         text = await summary(s, order)
-    rows = []
+    rows = [[("🖼 Показать картинку", f"ap:pic:{order.id}")]] if order.photo else []
     if order.status == "approved":
         rows.append([("💳 Оплатить", f"ap:pay:{order.id}")])
     if order.status in ("pending", "approved"):
@@ -320,7 +345,7 @@ async def adm_open(cb: CallbackQuery) -> None:
 async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
     failed = await s.scalar(select(func.count()).select_from(adposts.AdPost).where(
         adposts.AdPost.order_id == order.id, adposts.AdPost.status == "failed"))
-    rows = []
+    rows = [[("🖼 Показать картинку", f"ap:pic:{order.id}")]] if order.photo else []
     if order.status == "pending":
         rows.append([("✅ Одобрить", f"apa:ok:{order.id}"), ("❌ Отклонить", f"apa:no:{order.id}")])
         rows.append([("💰 Изменить цену", f"apa:price:{order.id}")])
