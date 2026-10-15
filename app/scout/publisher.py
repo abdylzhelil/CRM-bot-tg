@@ -15,6 +15,7 @@ from telethon.errors import (
     ChatSendPlainForbiddenError,
     ChatWriteForbiddenError,
     FloodWaitError,
+    ForbiddenError,
     PeerFloodError,
     SlowModeWaitError,
     UserBannedInChannelError,
@@ -50,6 +51,21 @@ async def resolve(client, g: Group):
 
 def post_link(g: Group, message_id: int) -> str:
     return f"https://t.me/{g.username}/{message_id}" if g.username else ""
+
+
+async def exact_link(client, entity, g: Group, message_id: int) -> str:
+    """Точная ссылка на сам пост — её выдаёт Telegram (учитывает темы в группе и закрытые группы).
+    Не вышло — собираем t.me/группа/номер."""
+    from telethon import functions
+
+    try:
+        res = await client(functions.channels.ExportMessageLinkRequest(channel=entity, id=message_id))
+        link = getattr(res, "link", "")
+        if isinstance(link, str) and link.startswith("https://"):
+            return link
+    except Exception:
+        log.info("реклама: Telegram не дал ссылку на пост в %s", g.title)
+    return post_link(g, message_id)
 
 
 async def _after(closed: list[tuple[int, str]], done: set[int]) -> None:
@@ -119,7 +135,7 @@ async def publish_one(manager) -> bool:
             else:
                 msg = await client.send_message(entity, text, link_preview=False, parse_mode=None)
             post.status, post.sent_at, post.message_id = "sent", now(), msg.id
-            post.link = post_link(g, msg.id)
+            post.link = await exact_link(client, entity, g, msg.id)
             g.ad_closed_at = None  # раз вышло — группа открыта
         except (FloodWaitError, SlowModeWaitError) as e:
             post.scheduled_at = now() + timedelta(seconds=e.seconds + random.randint(30, 300))
@@ -147,9 +163,12 @@ async def publish_one(manager) -> bool:
         except PERMANENT as e:
             post.status, post.error = "failed", REASON.get(type(e).__name__, type(e).__name__)
             switched_off = True
+        except ForbiddenError as e:  # другой запрет Telegram (платные сообщения в группе, только премиум и т. п.)
+            post.status, post.error = "failed", f"Telegram запретил писать ({getattr(e, 'message', '') or type(e).__name__})"[:250]
+            switched_off = True
         except Exception as e:
             log.exception("реклама: не удалось опубликовать в %s", g.title)
-            post.status, post.error = "failed", type(e).__name__
+            post.status, post.error = "failed", f"{type(e).__name__}: {getattr(e, 'message', '') or e}"[:250]
         if switched_off:
             g.ads_allowed = False  # не вышло и не выйдет — убираем группу из списка для покупателей
         await s.commit()
@@ -256,7 +275,8 @@ async def check_posts(manager) -> int:
     gone = []
     async with Session() as s:
         for post in await adposts.due_checks(s):
-            post.checked = True
+            post.checks += 1
+            post.checked = post.checks >= len(adposts.CHECKS)
             g = await s.get(Group, post.group_id)
             acc_id = (g.ad_account_id or g.account_id) if g else None
             client = manager.clients.get(acc_id) if acc_id else None
@@ -267,8 +287,11 @@ async def check_posts(manager) -> int:
             except Exception:
                 log.warning("реклама: не удалось проверить пост %s в %s", post.id, g.title)
                 continue
+            if msg is not None:
+                post.verified_at = now()  # пост на месте
             if msg is None:
                 post.status, post.error, post.link = "deleted", "удалён в группе (правила или бот группы)", ""
+                post.checked = True
                 g.ads_allowed = False  # пока не разберётесь с условиями группы — туда больше не публикуем
                 order = await s.get(AdOrder, post.order_id)
                 gone.append((post.order_id, order.user_id if order else 0, g.id, g.title,
@@ -316,7 +339,8 @@ async def notify_done(order_id: int) -> None:
     lines = []
     for p, g in rows:
         if p.status == "sent":
-            lines.append(f"✅ <a href=\"{p.link}\">{html.escape(g.title[:40])}</a>" if p.link else f"✅ {html.escape(g.title[:40])}")
+            lines.append(f"✅ {html.escape(g.title[:40])} — <a href=\"{html.escape(p.link)}\">открыть пост</a>" if p.link
+                         else f"✅ {html.escape(g.title[:40])}")
         elif p.status in ("failed", "deleted"):
             lines.append(f"⚠️ {html.escape(g.title[:40])} — {html.escape(p.error)}")
     ok = sum(1 for p, _ in rows if p.status == "sent")

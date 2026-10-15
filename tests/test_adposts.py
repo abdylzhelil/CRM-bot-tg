@@ -1056,3 +1056,31 @@ async def test_picker_drops_closed_selected_group(maker, tgbot, monkeypatch):
         assert order.group_ids == ""
     buttons = [b.callback_data for row in shown.call_args.args[2].inline_keyboard for b in row]
     assert f"ap:locked:{g.id}" in buttons and f"ap:t:{order.id}:{g.id}" not in buttons
+
+
+async def test_exact_post_link_and_three_checks(maker, tgbot):
+    """Ссылка на сам пост берётся у Telegram; пост проверяется через 15 мин, 3 ч и сутки."""
+    await setup_group(maker)
+    await make_user(maker, 70)
+    oid = await make_order(maker)
+    async with maker() as s:
+        await adposts.approve(s, await s.get(AdOrder, oid))
+    mgr, client = manager()
+    client.side_effect = None
+    client.return_value = SimpleNamespace(link="https://t.me/barakholka/555?thread=7")
+    await publisher.publish_one(mgr)
+    async with maker() as s:
+        post = await s.scalar(select(AdPost))
+        assert post.link == "https://t.me/barakholka/555?thread=7"
+    client.get_messages = AsyncMock(return_value=SimpleNamespace(id=555))  # пост на месте
+    for hours, n in ((0.3, 1), (3.1, 2), (24.1, 3)):
+        async with maker() as s:
+            (await s.scalar(select(AdPost))).sent_at = now() - timedelta(hours=hours)
+            await s.commit()
+        await publisher.check_posts(mgr)
+        async with maker() as s:
+            post = await s.scalar(select(AdPost))
+            assert post.checks == n and post.verified_at is not None
+    assert post.checked and client.get_messages.await_count == 3
+    await publisher.check_posts(mgr)
+    assert client.get_messages.await_count == 3  # больше не проверяем

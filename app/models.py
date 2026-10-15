@@ -397,5 +397,7 @@ class AdPost(Base):
     error: Mapped[str] = mapped_column(String(255), default="")
     first_try_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # группа была закрыта — ждём до суток
     price: Mapped[int] = mapped_column(Integer, default=0)  # доля цены заказа за эту группу, ₽ (для частичного возврата)
-    checked: Mapped[bool] = mapped_column(Boolean, default=False)  # через 15 мин проверили, что пост не удалён
+    checked: Mapped[bool] = mapped_column(Boolean, default=False)  # все проверки «пост на месте» пройдены
+    checks: Mapped[int] = mapped_column(Integer, default=0)  # сколько проверок уже было (15 мин, 3 ч, сутки)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда последний раз видели пост на месте
     settled: Mapped[bool] = mapped_column(Boolean, default=False)  # пост не вышел и вопрос денег за него закрыт (вернули / решили не возвращать)

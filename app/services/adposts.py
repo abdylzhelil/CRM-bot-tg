@@ -25,7 +25,8 @@ STATUS = {
 POST_STATUS = {"queued": "⏳ в очереди", "sent": "✅ опубликовано", "failed": "⚠️ не вышло", "canceled": "🚫 отменено",
                "deleted": "🗑 удалён в группе"}
 CLOSED_WAIT = timedelta(hours=24)  # группа закрыта (ночной режим, «писать нельзя») — пробуем снова до суток
-CHECK_AFTER = timedelta(minutes=15)  # через сколько проверить, что пост не удалили правила/бот группы
+CHECK_AFTER = timedelta(minutes=15)  # первая проверка, что пост не удалили правила/бот группы
+CHECKS = (CHECK_AFTER, timedelta(hours=3), timedelta(hours=24))  # пост проверяем трижды: боты удаляют и позже
 
 
 # основы слов, при которых заказ автоматически не одобряется (идёт к администратору на проверку)
@@ -397,10 +398,12 @@ def closed_now(post: AdPost) -> bool:
 
 
 async def due_checks(s: AsyncSession, limit: int = 3) -> list[AdPost]:
-    """Опубликованные посты, которые пора проверить (не удалили ли их правила или бот группы)."""
-    return list((await s.scalars(select(AdPost).where(
+    """Опубликованные посты, которые пора проверить (не удалили ли их правила или бот группы): через 15 мин, 3 ч и сутки."""
+    rows = (await s.scalars(select(AdPost).where(
         AdPost.status == "sent", ~AdPost.checked, AdPost.sent_at <= now() - CHECK_AFTER,
-        AdPost.sent_at > now() - timedelta(days=2)).order_by(AdPost.id).limit(limit))).all())
+        AdPost.sent_at > now() - timedelta(days=3)).order_by(AdPost.sent_at))).all()
+    due = [p for p in rows if p.checks < len(CHECKS) and now() - p.sent_at >= CHECKS[p.checks]]
+    return due[:limit]
 
 
 async def due_posts(s: AsyncSession) -> list[AdPost]:

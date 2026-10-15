@@ -193,7 +193,7 @@ async def summary(s, order: AdOrder, admin: bool = False) -> str:
     tail = ""
     if posts:
         lines = [f"{adposts.POST_STATUS[p.status]} {esc(g.title[:40])}" + queue_note(p, g)
-                 + (f' (<a href="{p.link}">пост</a>)' if p.link else "") for p, g in posts]
+                 + (f' — <a href="{esc(p.link)}">открыть пост</a>' if p.link else "") for p, g in posts]
         if any(p.status == "queued" for p, _ in posts):
             gap, limit = await settings.get_int(s, "adpost_gap_min"), await settings.get_int(s, "adpost_daily_limit")
             tail = (f"\n\n⏳ Посты выходят по очереди, чтобы Telegram не счёл это спамом: с одного аккаунта не чаще "
@@ -217,6 +217,10 @@ def queue_note(p, g: Group) -> str:
     from app.models import now
     from app.services import quiet
 
+    if p.status == "sent":
+        if p.verified_at:
+            return f" — на месте (проверено {quiet.to_local(p.verified_at):%d.%m %H:%M})"
+        return " — проверю через 15 мин, 3 ч и сутки"
     if p.status == "queued":
         if p.scheduled_at > now():
             return f" — {esc(p.error) + ', ' if p.error else ''}следующая попытка ~{quiet.to_local(p.scheduled_at):%H:%M}"
@@ -475,7 +479,7 @@ async def partial_do(cb: CallbackQuery) -> None:
         posts = await adposts.posts_of(s, oid)
         user_id = order.user_id
     sent = sum(1 for p, _ in posts if p.status == "sent")
-    lines = [f"✅ <a href=\"{p.link}\">{esc(g.title[:40])}</a>" if p.link else f"✅ {esc(g.title[:40])}"
+    lines = [f"✅ {esc(g.title[:40])} — <a href=\"{esc(p.link)}\">открыть пост</a>" if p.link else f"✅ {esc(g.title[:40])}"
              for p, g in posts if p.status == "sent"]
     text = (f"📣 Заказ рекламы №{oid} выполнен частично: опубликовано {sent} из {len(posts)}.\n\n" + "\n".join(lines)
             + (f"\n\n💸 За группы, где пост не вышел, вернули {refunded} ₽ — деньги придут тем же способом, "
