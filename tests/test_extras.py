@@ -116,3 +116,23 @@ async def test_source_saved_once_and_shown_in_funnel(maker, tgbot):
     async with maker() as s:  # зарегистрированному метку уже не ставим
         await referrals.attach_source(s, await s.get(User, 83), "src_new")
         assert (await s.get(User, 83)).source == "site"
+
+
+async def test_radar_intro_never_breaks_registration():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.bot import intro
+
+    intro._file_id = None
+    assert intro.GIF.exists() and intro.GIF.stat().st_size < 1_000_000  # анимация в образе и не тяжёлая
+    bad = MagicMock()
+    bad.answer_animation = AsyncMock(side_effect=RuntimeError("telegram недоступен"))
+    await intro.send_radar(bad)  # ошибка не пробрасывается
+    good = MagicMock()
+    good.answer_animation = AsyncMock(return_value=SimpleNamespace(animation=SimpleNamespace(file_id="F1")))
+    await intro.send_radar(good)
+    assert intro._file_id == "F1"
+    await intro.send_radar(good)
+    assert good.answer_animation.await_args.args[0] == "F1"  # второй раз уходит по file_id, без загрузки файла
+    intro._file_id = None

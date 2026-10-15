@@ -12,7 +12,7 @@ from aiogram.types import (
 )
 
 from app import config
-from app.bot import captcha, notify
+from app.bot import captcha, intro, notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU, kb
 from app.bot.handlers import (
@@ -137,6 +137,8 @@ async def start(m: Message, state: FSMContext, user: User, command: CommandObjec
                 await referrals.attach(s, user, referrer)
             await referrals.attach_source(s, user, command.args)
     if not user.onboarded:
+        if user.verified and command.command == "start":  # непроверенным анимацию покажем после проверки «я не бот» (captcha)
+            await intro.send_radar(m)
         return await profile.show_niches(m, user)
     await m.answer("📡 Главное меню — выберите раздел:", reply_markup=menu_keyboard(user))
 

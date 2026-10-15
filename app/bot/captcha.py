@@ -46,6 +46,7 @@ async def gate(event, handler, data, user: User):
 
 @router.callback_query(F.data.regexp(r"^cap:\d$"))
 async def answer(cb: CallbackQuery, user: User) -> None:
+    from app.bot import intro
     from app.bot.handlers import profile
     from app.services import referrals
 
@@ -69,4 +70,5 @@ async def answer(cb: CallbackQuery, user: User) -> None:
     user.verified = True
     await cb.answer("✅ Проверка пройдена")
     await cb.message.delete()
+    await intro.send_radar(cb.message)
     await profile.show_niches(cb.message, user)
