@@ -45,7 +45,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
          ("🔄 Ротация сейчас", "gr:rotate")],
         [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"), (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
         [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"), ("🏆 Рейтинг вступивших", "gr:list:joined")],
-        [("🔎 Поисковые запросы", "gq:list")],
+        [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), ("🔎 Поисковые запросы", "gq:list")],
     ]))
 
 
@@ -75,7 +75,10 @@ async def bot_help(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("gr:list:"))
 async def group_list(cb: CallbackQuery) -> None:
-    status = cb.data.split(":")[2]
+    await show_list(cb, cb.data.split(":")[2])
+
+
+async def show_list(cb: CallbackQuery, status: str) -> None:
     async with Session() as s:
         q = select(Group).where(Group.status == status)
         q = q.order_by(Group.leads_count.desc() if status == "joined" else Group.members.desc()).limit(15)
@@ -84,10 +87,27 @@ async def group_list(cb: CallbackQuery) -> None:
         return await cb.answer("Пусто", show_alert=True)
     if status == "candidate":
         return await review(cb)
+    if status == "skipped":  # пропущенные можно вернуть в очередь по одной
+        rows = [[(f"↩️ {g.title[:40]} · {g.members} уч.", f"gr:back:{g.id}")] for g in groups if g.kind == "group"]
+        rows.append([("◀️ Назад", "gr:menu")])
+        return await reply(cb, "🚫 Пропущены (нажмите на группу, чтобы вернуть её в очередь на вступление; "
+                           "показаны самые большие):", kb(rows))
     lines = [f"• {esc(g.title)} — {g.members} уч., заявок: {g.leads_count}"
              + (f", заявка на вступление отправлена {g.join_attempts} р., повтор {g.join_retry_at:%d.%m}"
                 if status == "requested" and g.join_retry_at else "") for g in groups]
     await reply(cb, f"{STATUS[status].capitalize()}:\n" + "\n".join(lines), kb([[("◀️ Назад", "gr:menu")]]))
+
+
+@router.callback_query(F.data.startswith("gr:back:"))
+async def back_to_queue(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if g is None or g.status != "skipped":
+            return await cb.answer("Группа уже не в пропущенных", show_alert=True)
+        g.status, g.join_attempts, g.join_retry_at = "approved", 0, None
+        await s.commit()
+    await cb.answer("Вернули в очередь на вступление")
+    await show_list(cb, "skipped")
 
 
 @router.callback_query(F.data == "gr:menu")

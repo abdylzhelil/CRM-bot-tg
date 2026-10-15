@@ -195,3 +195,20 @@ async def test_closed_group_is_not_retried(maker):
     client.side_effect = ChannelPrivateError(request=None)
     await joiner.join_one(client, 7)
     assert await statuses(maker) == ["skipped"]
+
+
+async def test_skipped_groups_can_be_returned_to_queue(maker):
+    await add_groups(maker, 3, status="skipped")
+    async with maker() as s:
+        first = await s.scalar(select(Group).order_by(Group.id))
+        first.join_attempts = 4
+        await s.commit()
+    c = cb(f"gr:back:{first.id}")
+    await groups.back_to_queue(c)
+    assert await statuses(maker) == ["approved", "skipped", "skipped"]
+    async with maker() as s:
+        g = await s.get(Group, first.id)
+        assert g.join_attempts == 0 and g.join_retry_at is None
+    again = cb(f"gr:back:{first.id}")
+    await groups.back_to_queue(again)  # повторное нажатие ничего не ломает
+    assert again.answer.await_args.kwargs.get("show_alert") is True
