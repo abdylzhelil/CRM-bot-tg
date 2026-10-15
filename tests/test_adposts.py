@@ -351,3 +351,19 @@ async def test_unpaid_orders_get_reminder_then_expire(maker, tgbot):
     async with maker() as s:
         assert (await s.get(AdOrder, oid)).status == "canceled"
     assert any("отменён: не дождались оплаты" in t for t in tgbot.texts(70))
+
+
+async def test_buyer_can_view_group_list_before_ordering(maker, tgbot, monkeypatch):
+    sent = AsyncMock()
+    monkeypatch.setattr(ah, "reply", sent)
+    await setup_group(maker, price=500)
+    u = await make_user(maker, 70, city="Махачкала")
+    await ah.ap_list(cbq("ap:list"), u)
+    text = sent.await_args.args[1]
+    assert "Барахолка" in text and "5000 уч." in text and "500 ₽" in text and "Всего: 1 групп" in text
+    assert "ap:new" in str(sent.await_args.args[2])
+    async with maker() as s:
+        await settings.put(s, "adpost_enabled", "0")
+    off = cbq("ap:list")
+    await ah.ap_list(off, u)
+    assert off.answer.await_args.kwargs.get("show_alert") is True  # сервис выключен — списка нет

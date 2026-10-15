@@ -45,7 +45,27 @@ async def ap_menu(cb: CallbackQuery, user: User) -> None:
         "Вы присылаете текст, выбираете группы — мы публикуем ваше объявление в этих группах.\n\n"
         f"💰 Стоимость: {cost}\n👥 Доступно групп: {groups}\n\n"
         f"Не принимаем: {FORBIDDEN}. Каждый заказ проверяет администратор; под постом будет пометка «Реклама»."
-    ), kb(([[("➕ Новый заказ", "ap:new")]] if groups else []) + [[(f"📋 Мои заказы ({mine})", "ap:mine")], [("◀️ Назад", "cg:menu")]]))
+    ), kb(([[("➕ Новый заказ", "ap:new")], [("📋 Куда можно разместить (список и цены)", "ap:list")]] if groups else [])
+          + [[(f"🧾 Мои заказы ({mine})", "ap:mine")], [("◀️ Назад", "cg:menu")]]))
+
+
+@router.callback_query(F.data == "ap:list")
+async def ap_list(cb: CallbackQuery, user: User) -> None:
+    """Список групп с числом участников и ценой — посмотреть до заказа."""
+    async with Session() as s:
+        if not await adposts.enabled(s):
+            return await cb.answer("Реклама в группах пока не подключена", show_alert=True)
+        groups = await adposts.eligible_groups(s, user.city)
+        price = await settings.get_int(s, "adpost_price")
+    if not groups:
+        return await cb.answer("Пока нет групп, доступных для рекламы", show_alert=True)
+    cost = f"{price} ₽ за пост в одной группе" if price else "бесплатно (после проверки)"
+    lines = [(f"• <a href=\"https://t.me/{esc(g.username)}\">{esc(g.title[:44])}</a>" if g.username else f"• {esc(g.title[:44])}")
+             + f" — {g.members} уч." + (f", {esc(g.city)}" if g.city else "") for g in groups[:30]]
+    total = sum(g.members for g in groups[:30])
+    await reply(cb, (f"📋 <b>Где можно разместить рекламу</b>\n💰 {cost}\n\n" + "\n".join(lines)
+                     + f"\n\nВсего: {len(groups)} групп, около {total} участников.\nВыберите нужные при оформлении заказа."),
+                kb([[("➕ Новый заказ", "ap:new")], [("◀️ Назад", "ap:menu")]]))
 
 
 @router.callback_query(F.data == "ap:new")
