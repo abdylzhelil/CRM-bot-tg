@@ -52,8 +52,11 @@ def _flag(ok: bool) -> str:
 
 async def status_text() -> str:
     """Сводка «что включено и как идёт»: чтобы за один экран понять, в каком состоянии бот."""
+    from app.services import brain
+
     async with Session() as s:
         d = await admin_status.collect(s)
+        ai_line = await brain.today_line(s)
     accounts = ", ".join(f"{st} {n}" for st, n in d["accounts"].items()) or "нет"
     refund = d["refund_days"]
     return "\n".join([
@@ -68,6 +71,7 @@ async def status_text() -> str:
         f"{_flag(d['autorenew'])} Автопродление   {_flag(d['license'])} Лицензия   {_flag(d['ads'])} Реклама групп",
         f"{_flag(d['ai'])} Claude (платно)" + (f", модель {esc(d['ai_model'])}" if d["ai"] else "")
         + ("" if d["ai_key"] or not d["ai"] else " — ⚠️ нет ANTHROPIC_API_KEY"),
+        ai_line,
         f"{_flag(bool(d['stats_channel']))} Канал статистики: {esc(d['stats_channel']) or 'не подключён'}",
     ] + ([sysmem.line(d["memory"])] if d["memory"] else []))
 

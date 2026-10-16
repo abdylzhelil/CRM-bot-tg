@@ -83,6 +83,7 @@ class Group(Base):
     ad_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # с какого момента группа закрыта для сообщений
     ad_rules: Mapped[str] = mapped_column(Text, default="")  # что нашли при проверке: правила (описание, закреп), боты, админы
     ad_agreed: Mapped[bool] = mapped_column(Boolean, default=False)  # владелец договорился с админом группы — правила не мешают
+    ad_ai_channels: Mapped[str] = mapped_column(String(160), default="")  # каналы, на которые, по мнению ИИ, надо подписаться
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
 
@@ -367,6 +368,7 @@ class AiCall(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     model: Mapped[str] = mapped_column(String(48), default="")
+    purpose: Mapped[str] = mapped_column(String(24), default="")  # draft / leads / rules / bots / ad_text / groups / error
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
@@ -396,6 +398,7 @@ class AdOrder(Base):
     price: Mapped[int] = mapped_column(Integer, default=0)  # итого, ₽ (0 — бесплатно)
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
     yk_id: Mapped[str] = mapped_column(String(64), default="")  # платёж ЮKassa
+    ai_check: Mapped[str] = mapped_column(String(300), default="")  # что сказал ИИ-помощник о тексте рекламы (пусто — не проверял)
     photo: Mapped[str] = mapped_column(String(255), default="")  # картинка к рекламе: файл в data/ad_media ("" — без неё)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

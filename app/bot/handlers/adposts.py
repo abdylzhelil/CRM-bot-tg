@@ -142,6 +142,10 @@ async def show_picker(target, s, order: AdOrder, city: str) -> None:
     # закрытые сейчас группы видны, но выбрать их нельзя (кнопка только объясняет почему)
     rows += [[(f"🔒 {KIND.get(g.kind, '')} {g.title[:26]} · сейчас закрыта", f"ap:locked:{g.id}")]
              for g in (await adposts.closed_groups(s))[:5]]
+    from app.services import brain
+
+    if groups and await brain.available(s):
+        rows.append([("🤖 Подобрать группы под мою рекламу", f"ap:ai:{order.id}")])
     rows.append([(f"Готово ({len(chosen)})", f"ap:review:{order.id}")])
     rows.append([("❌ Отмена", f"ap:cancel:{order.id}")])
     await reply(target, f"Выберите, где разместить рекламу (группы 👥 и каналы 📢, до {adposts.MAX_GROUPS}), нажимая на них:", kb(rows))
@@ -153,6 +157,29 @@ async def _own(s, cb: CallbackQuery, user: User, order_id: int) -> AdOrder | Non
         await cb.answer("Заказ не найден", show_alert=True)
         return None
     return order
+
+
+@router.callback_query(F.data.regexp(r"^ap:ai:\d+$"))
+async def ap_ai_pick(cb: CallbackQuery, user: User) -> None:
+    """ИИ-помощник выбирает до 5 подходящих групп по тексту рекламы — покупатель может поменять выбор."""
+    from app.services import brain
+
+    async with Session() as s:
+        order = await _own(s, cb, user, int(cb.data.split(":")[2]))
+        if order is None:
+            return
+        if order.status != "draft":
+            return await cb.answer("Заказ уже отправлен", show_alert=True)
+        groups = await adposts.eligible_groups(s, user.city, photo=bool(order.photo))
+        await cb.answer("Подбираю…")
+        res = await brain.pick_groups(s, order.text, groups, await settings.get_int(s, "adpost_price"))
+        if not res or not res["ids"]:
+            await cb.message.answer("🤖 Не получилось подобрать — выберите группы сами.")
+            return await show_picker(cb, s, order, user.city)
+        order.group_ids = ",".join(map(str, res["ids"]))
+        await s.commit()
+        await cb.message.answer(f"🤖 Подобрал {len(res['ids'])}: {esc(res.get('why', ''))[:300]}\nМожно поменять выбор кнопками.")
+        await show_picker(cb, s, order, user.city)
 
 
 @router.callback_query(F.data.regexp(r"^ap:locked:\d+$"))
@@ -208,6 +235,8 @@ async def summary(s, order: AdOrder, admin: bool = False) -> str:
         who = f"👤 {esc((u.name if u else '') or str(order.user_id))}" + (f" @{esc(u.username)}" if u and u.username else "") + "\n"
     price = f"{order.price} ₽" if order.price else "бесплатно"
     pic = "🖼 С картинкой\n" if order.photo else ""
+    if admin and order.ai_check:
+        pic += f"🤖 ИИ о тексте: {esc(order.ai_check)}\n"
     return (f"📣 <b>Заказ №{order.id}</b> — {adposts.STATUS[order.status]}\n{who}💰 {price}\n{pic}\n"
             f"{esc(order.text[:700])}\n\nГруппы:\n" + "\n".join(lines) + tail)
 
@@ -286,7 +315,8 @@ async def ap_send(cb: CallbackQuery, user: User) -> None:
             await adposts.submit(s, order)
         except adposts.AdError as e:
             return await alert(cb, str(e))
-        auto = await adposts.maybe_auto_approve(s, order)  # чистый заказ — без участия администратора
+        ai_ok = await adposts.ai_check(s, order)  # ИИ-помощник проверяет текст (если подключён)
+        auto = await adposts.maybe_auto_approve(s, order, ai_ok)  # чистый заказ — без участия администратора
         text = await summary(s, order, admin=True)
         flags = adposts.suspicious(order.text)
         oid, price, photo = order.id, order.price, order.photo
@@ -482,7 +512,12 @@ async def partial_do(cb: CallbackQuery) -> None:
                                 else await payments.mark_manual_refund(s, pay, value * 100)) // 100
             await adposts.settle(s, order)  # решение принято (вернули или «без возврата») — автовозврат больше не тронет
         except (adposts.AdError, payments.RefundError) as e:
-            return await alert(cb, str(e))
+            await alert(cb, str(e))
+            if isinstance(e, payments.RefundError):
+                from app.bot.handlers.payments import explain
+
+                await explain(cb, s, "частичный возврат денег через ЮKassa", str(e))
+            return
         posts = await adposts.posts_of(s, oid)
         user_id = order.user_id
     sent = sum(1 for p, _ in posts if p.status == "sent")

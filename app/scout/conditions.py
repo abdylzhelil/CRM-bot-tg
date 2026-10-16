@@ -49,8 +49,9 @@ def _urls(msg) -> list[str]:
     return out
 
 
-async def demands(client, entity, me_id: int, since: datetime, my_ids: set[int] = frozenset()) -> tuple[set[str], int]:
-    """Что боты группы написали НАМ (упомянули, ответили на наш пост) с момента since."""
+async def demands(client, entity, me_id: int, since: datetime, my_ids: set[int] = frozenset(),
+                  texts: list[str] | None = None) -> tuple[set[str], int]:
+    """Что боты группы написали НАМ (упомянули, ответили на наш пост) с момента since. texts — сюда сложим их тексты (для ИИ)."""
     channels, need = set(), 0
     since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since
     async for msg in client.iter_messages(entity, limit=40):
@@ -62,6 +63,8 @@ async def demands(client, entity, me_id: int, since: datetime, my_ids: set[int] 
         reply = getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None)
         if not (getattr(msg, "mentioned", False) or reply in my_ids or str(me_id) in (msg.message or "")):
             continue
+        if texts is not None:
+            texts.append((msg.message or "") + " " + " ".join(_urls(msg)))
         ch, n = parse(msg.message or "", _urls(msg))
         channels |= ch
         need = max(need, n)
@@ -113,9 +116,19 @@ async def invite_scouts(manager, inviter_acc_id: int, client, entity, need: int)
 
 
 async def fulfill(manager, acc_id: int, client, entity, me_id: int, since: datetime, my_ids: set[int] = frozenset(),
-                  rules_text: str = "") -> list[str]:
-    """Найти условия (сообщения ботов + правила группы) и выполнить, что можем. Возвращает, что сделали (для отчёта)."""
-    channels, need = await demands(client, entity, me_id, since, my_ids)
+                  rules_text: str = "", s=None) -> list[str]:
+    """Найти условия (сообщения ботов + правила группы) и выполнить, что можем. Возвращает, что сделали (для отчёта).
+    s — сессия базы: тогда сообщения ботов дополнительно разбирает ИИ-помощник (понимает любые формулировки)."""
+    texts: list[str] = []
+    channels, need = await demands(client, entity, me_id, since, my_ids, texts)
+    if s is not None and texts:
+        from app.services import brain
+
+        ai = await brain.bot_demands(s, "\n---\n".join(texts[:8]))
+        if ai is not None:
+            channels |= {c.lstrip("@") for c in ai.get("subscribe_channels", []) if c}
+            n = int(ai.get("invite_count") or 0)
+            need = max(need, n if 0 < n <= MAX_INVITE else 0)
     if rules_text:
         ch2, n2 = parse(rules_text)
         channels |= ch2

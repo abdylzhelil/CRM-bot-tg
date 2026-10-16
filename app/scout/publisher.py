@@ -231,7 +231,7 @@ async def probe(manager, g: Group) -> tuple[str, str, bool, bool]:
     return ("warn", ", ".join(notes), no_media, False) if notes else ("ok", "можно публиковать", False, False)
 
 
-async def inspect_rules(manager, g: Group) -> tuple[str, str, list[str]]:
+async def inspect_rules(manager, g: Group, s=None) -> tuple[str, str, list[str]]:
     """Что за группа изнутри: описание и закреплённое сообщение (правила), боты, админы, медленный режим.
     Возвращает (текст для карточки, запрет рекламы в правилах — или пусто, боты-модераторы)."""
     from telethon import functions
@@ -259,8 +259,24 @@ async def inspect_rules(manager, g: Group) -> tuple[str, str, list[str]]:
     except Exception:
         log.info("реклама: список ботов/админов %s скрыт", g.title)
     verdict = adposts.rules_verdict(about + "\n" + pinned)
+    ai = None
+    if s is not None and (about or pinned):  # ИИ читает правила целиком — точнее, чем поиск по словам
+        from app.services import brain
+
+        ai = await brain.group_rules(s, about, pinned)
+    if ai is not None:
+        verdict = {"forbidden": "в правилах группы реклама запрещена", "only_admin": "реклама только через админа группы",
+                   "paid": "реклама в группе платная (у админа)"}.get(ai.get("ads"), "")
+        if ai.get("hours") and not g.ad_hours:
+            from app.services import quiet
+
+            if quiet.parse_hours(ai["hours"].replace(" ", "")):
+                g.ad_hours = ai["hours"].replace(" ", "")[:16]
+        g.ad_ai_channels = ",".join(c.lstrip("@") for c in ai.get("subscribe_channels", [])[:3])
     mods = adposts.moderation_bots(bots)
     lines = []
+    if ai is not None and ai.get("summary"):
+        lines.append("🤖 " + ai["summary"][:200])
     if verdict:
         lines.append("📜 " + verdict)
     if about:
@@ -285,7 +301,7 @@ async def check_group(manager, gid: int) -> tuple[str, str]:
         level, text, no_media, closed = await probe(manager, g)
         if level != "bad" and g.kind != "channel":  # правила и боты группы (в своём канале — не нужно)
             try:
-                g.ad_rules, verdict, mods = await inspect_rules(manager, g)
+                g.ad_rules, verdict, mods = await inspect_rules(manager, g, s)
             except Exception:
                 verdict, mods = "", []
                 log.info("реклама: не удалось прочитать правила %s", g.title)
@@ -293,6 +309,7 @@ async def check_group(manager, gid: int) -> tuple[str, str]:
                 from app.scout import conditions
 
                 channels, _ = conditions.parse(g.ad_rules)
+                channels |= {c for c in g.ad_ai_channels.split(",") if c}  # что нашёл ИИ
                 client = manager.clients.get(g.ad_account_id or g.account_id)
                 subscribed = await conditions.subscribe(client, channels) if channels and client else []
                 if subscribed:
@@ -354,7 +371,7 @@ async def try_conditions(s, manager, post: AdPost, g: Group, acc_id: int, client
     acc = await s.get(ScoutAccount, acc_id)
     try:
         did = await conditions.fulfill(manager, acc_id, client, entity, acc.tg_user_id if acc else 0, since,
-                                       {post.message_id} if post.message_id else set(), g.ad_rules)
+                                       {post.message_id} if post.message_id else set(), g.ad_rules, s)
     except Exception:
         log.exception("реклама: условия группы %s", g.title)
         return []
@@ -469,6 +486,12 @@ async def notify_done(order_id: int) -> None:
         await notify._send(f"💸 Заказ №{order_id}: автоматически вернули {refunded} ₽ за невышедшие группы.", order_markup(order_id))
     elif left:
         why = f" Автовозврат не прошёл: {html.escape(problem)}" if problem else ""
+        if problem:
+            from app.services import brain
+
+            async with Session() as s:
+                hint = await brain.explain_error(s, "автовозврат денег за рекламу через ЮKassa", problem)
+            why += ("\n" + html.escape(hint)) if hint else ""
         await notify._send(f"⚠️ Заказ №{order_id} закончен, но не всё вышло: к возврату {left} ₽.{why} "
                            "Карточка заказа → «💸 Вернуть за невышедшие»: вернуть кнопкой или, если ЮKassa не даёт, "
                            "вернуть в кабинете ЮKassa и нажать «✔ Вернул сам».", order_markup(order_id))

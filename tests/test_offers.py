@@ -51,7 +51,7 @@ async def test_ai_decides_unsure(maker, tgbot, monkeypatch):
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "k")
     client = MagicMock()
     client.messages.create = AsyncMock(return_value=SimpleNamespace(
-        stop_reason="end_turn", content=[SimpleNamespace(type="text", text="ИСПОЛНИТЕЛЬ")],
+        stop_reason="end_turn", content=[SimpleNamespace(type="text", text='{"kind": "ИСПОЛНИТЕЛЬ"}')],
         usage=SimpleNamespace(input_tokens=200, output_tokens=3)))
     async with maker() as s:
         assert await offers.verdict(s, "Делаю сайты. Кто знает, где найти клиентов?", client) == ("offer", "ИИ")

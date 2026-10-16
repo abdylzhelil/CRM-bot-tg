@@ -315,6 +315,15 @@ async def refund_ask(cb: CallbackQuery, user: User) -> None:
 
 
 @router.callback_query(F.data.regexp(r"^rf:(money|tariff):\d+$"))
+async def explain(cb: CallbackQuery, s, where: str, error: str) -> None:
+    """ИИ-помощник объясняет непонятную ошибку (часто по-английски) простыми словами — если подключён."""
+    from app.services import brain
+
+    text = await brain.explain_error(s, where, error)
+    if text:
+        await cb.message.answer(esc(text))
+
+
 async def refund_do(cb: CallbackQuery, user: User) -> None:
     loaded = await _load(cb, user)
     if loaded is None:
@@ -326,7 +335,8 @@ async def refund_do(cb: CallbackQuery, user: User) -> None:
         try:
             note = await payments.refund(s, pay, money)
         except payments.RefundError as e:
-            return await alert(cb, str(e))
+            await alert(cb, str(e))
+            return await explain(cb, s, "возврат денег через ЮKassa", str(e))
     await cb.message.edit_text(f"✅ Готово. {'Тариф снят.' if pay.days else 'Неопубликованные посты отменены.'} {note}")
     await cb.answer()
     try:

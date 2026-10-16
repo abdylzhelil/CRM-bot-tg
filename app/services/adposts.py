@@ -231,9 +231,26 @@ async def approve(s: AsyncSession, order: AdOrder) -> str:
     return order.status
 
 
-async def maybe_auto_approve(s: AsyncSession, order: AdOrder) -> str | None:
-    """Автоодобрение (если включено): чистый заказ идёт дальше без админа. Возвращает новый статус или None."""
-    if order.status != "pending" or await settings.get(s, "adpost_auto_approve") != "1" or suspicious(order.text):
+async def ai_check(s: AsyncSession, order: AdOrder) -> bool | None:
+    """ИИ-помощник проверяет текст рекламы. True — чисто, False — нашёл нарушения (в order.ai_check), None — не проверял."""
+    from app.services import brain
+
+    res = await brain.check_ad(s, order.text)
+    if res is None:
+        return None
+    problems = [p for p in res.get("problems", []) if p][:4]
+    ok = bool(res.get("ok")) and not problems
+    order.ai_check = ("✅ нарушений не нашёл" if ok else "⚠️ " + "; ".join(problems))[:300]
+    await s.commit()
+    return ok
+
+
+async def maybe_auto_approve(s: AsyncSession, order: AdOrder, ai_ok: bool | None = None) -> str | None:
+    """Автоодобрение (если включено): чистый заказ идёт дальше без админа. Возвращает новый статус или None.
+    ai_ok — мнение ИИ-помощника (если проверял): его «есть нарушения» всегда отправляет заказ админу."""
+    if order.status != "pending" or await settings.get(s, "adpost_auto_approve") != "1" or ai_ok is False:
+        return None
+    if ai_ok is None and suspicious(order.text):
         return None
     return await approve(s, order)
 
