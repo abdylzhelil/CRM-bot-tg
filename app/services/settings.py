@@ -53,6 +53,8 @@ DEFAULTS: dict[str, str] = {
     "ai_model": "claude-haiku-5-5",
     "ai_free_daily": "3",
     "ai_paid_daily": "30",
+    "ai_classify": "1",
+    "ai_classify_daily": "500",
     "channel_hour": "12",
     "niche_daily_limit": "3",
     "ref_limit": "10",
@@ -110,6 +112,8 @@ LABELS: dict[str, str] = {
     "ai_model": "Модель ИИ (claude-haiku-5-5 — рекомендуем, самая дешёвая; claude-sonnet-5-5; claude-opus-5-5)",
     "ai_free_daily": "ИИ: запросов в сутки на бесплатном тарифе",
     "ai_paid_daily": "ИИ: запросов в сутки на платном тарифе",
+    "ai_classify": "ИИ-фильтр: отличать заказчика от исполнителя, рекламирующего услуги (1/0; нужен ANTHROPIC_API_KEY)",
+    "ai_classify_daily": "ИИ-фильтр: проверок в сутки (защита от расходов)",
     "channel_hour": "Час публикации статистики в канале",
     "niche_daily_limit": "Предложений новых ниш от пользователя в сутки",
     "ref_limit": "Сколько приглашений на человека награждается (всего)",
@@ -149,7 +153,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                         "rotation_days", "join_retry_days", "join_retry_max",
                         "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
-    ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily"]),
+    ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_classify_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
 ]
 
@@ -176,7 +180,7 @@ SHORT: dict[str, str] = {
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
     "ai_enabled": "Claude (1/0)", "ai_model": "Модель ИИ", "ai_free_daily": "ИИ в сутки: бесплатные",
-    "ai_paid_daily": "ИИ в сутки: платные",
+    "ai_paid_daily": "ИИ в сутки: платные", "ai_classify": "ИИ-фильтр заявок (1/0)", "ai_classify_daily": "ИИ-фильтр в сутки",
 }
 
 
@@ -229,6 +233,8 @@ HINTS: dict[str, str] = {
     "ai_model": "Haiku — самая дешёвая, для коротких черновиков её обычно хватает. Sonnet примерно в 20 раз дороже, Opus примерно в 40 раз. Сравнить качество на ваших заявках: команда /aitest.",
     "ai_free_daily": "Лимит на бесплатном тарифе, чтобы не тратить деньги.",
     "ai_paid_daily": "Лимит на платном тарифе.",
+    "ai_classify": "Спорные сообщения (не ясно, ищет человек исполнителя или сам предлагает услуги) спрашиваем у Claude Haiku 5.5 — около $0.03 на 1000 проверок. Явную рекламу услуг бесплатный фильтр отсеивает и без ИИ. Без ключа ANTHROPIC_API_KEY ничего не тратится. Отсеянное: 🛡 Чёрный список → «🙅 Отсеянные».",
+    "ai_classify_daily": "Больше этого числа проверок в сутки ИИ не спрашиваем — сообщения просто остаются заявками.",
     "channel_hour": "Во сколько публикуется сводка в канал.",
     "niche_daily_limit": "Защита от заваливания предложениями ниш.",
     "ref_limit": "Максимум наград за приглашения на одного человека.",
@@ -287,7 +293,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),          # 0 — заявки перестали бы доходить до людей

@@ -161,6 +161,25 @@ class SpamSample(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class FilteredMessage(Base):
+    """Сообщение, которое похоже на заявку по словам, но отсеяно как реклама услуг (исполнитель, а не заказчик).
+
+    Хранится 3 дня: админ видит их в 🛡 Чёрный список → «🙅 Отсеянные» и может вернуть кнопкой «↩️ Это заявка»."""
+
+    __tablename__ = "filtered_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    author_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    first_name: Mapped[str] = mapped_column(String(128), default="")
+    group_tg_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    group_title: Mapped[str] = mapped_column(String(255), default="")
+    message_id: Mapped[int] = mapped_column(Integer, default=0)
+    link: Mapped[str] = mapped_column(String(255), default="")
+    reason: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
 class SeenMessage(Base):
     """Хеши текстов — для поиска одинаковых сообщений в разных группах и антидублей."""
 

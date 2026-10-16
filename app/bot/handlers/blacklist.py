@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, select
 
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import BlacklistEntry, SpamSample, SpamVote
+from app.models import BlacklistEntry, FilteredMessage, SpamSample, SpamVote
 from app.services import spamtexts
 
 router = Router()
@@ -22,11 +22,13 @@ async def blacklist_menu(target: Message | CallbackQuery) -> None:
     async with Session() as s:
         cnt = dict((await s.execute(select(BlacklistEntry.status, func.count()).group_by(BlacklistEntry.status))).all())
         samples = await spamtexts.count(s)
+        filtered = await s.scalar(select(func.count()).select_from(FilteredMessage)) or 0
     await reply(target, "🛡 <b>Списки авторов заявок</b>\n"
                 "🚫 Чёрный — их сообщения не становятся заявками.\n👍 Белый — всегда заявки, даже если похожи на спам.\n"
-                "🧩 Спам-тексты — похожий текст с любого аккаунта не станет заявкой (появляются, когда вы жмёте «🚫 Спам»).",
+                "🧩 Спам-тексты — похожий текст с любого аккаунта не станет заявкой (появляются, когда вы жмёте «🚫 Спам»).\n"
+                "🙅 Отсеянные — реклама услуг от исполнителей (не заказчики) за 3 дня; можно вернуть «↩️ Это заявка».",
                 kb([[(f"🚫 Чёрный · {cnt.get('spam', 0)}", "bl:ls:spam:0"), (f"👍 Белый · {cnt.get('client', 0)}", "bl:ls:client:0")],
-                    [(f"🧩 Спам-тексты · {samples}", "bl:sp:0")],
+                    [(f"🧩 Спам-тексты · {samples}", "bl:sp:0"), (f"🙅 Отсеянные · {filtered}", "bl:fl:0")],
                     [("🔎 Найти по ID или @нику", "bl:find"), ("➕ Добавить по ID", "bl:add")]]))
 
 
@@ -173,3 +175,69 @@ async def bl_sample(s, m: Message, d, text):
                               reply_markup=kb([[("🧩 Спам-тексты", "bl:sp:0")]]))
     await s.commit()
     await m.answer(f"✔ Спам-текст №{sample.id} сохранён.", reply_markup=kb([[("🧩 Спам-тексты", "bl:sp:0")]]))
+
+
+# ---------- отсеянные как реклама услуг ----------
+@router.callback_query(F.data.regexp(r"^bl:fl:\d{1,6}$"))
+async def filtered_list(cb: CallbackQuery) -> None:
+    offset = int(cb.data.split(":")[2])
+    async with Session() as s:
+        total = await s.scalar(select(func.count()).select_from(FilteredMessage)) or 0
+        rows_ = (await s.scalars(select(FilteredMessage).order_by(FilteredMessage.id.desc()).offset(offset).limit(PAGE))).all()
+    rows = [[(f"{' '.join(x.text.split())[:45]}", f"bl:fo:{x.id}")] for x in rows_]
+    nav = []
+    if offset:
+        nav.append(("⬅️", f"bl:fl:{max(offset - PAGE, 0)}"))
+    if offset + PAGE < total:
+        nav.append(("➡️", f"bl:fl:{offset + PAGE}"))
+    if nav:
+        rows.append(nav)
+    rows.append([("◀️ Назад", "bl:menu")])
+    await reply(cb, f"🙅 Отсеяно как реклама услуг (за 3 дня): {total}\nНажмите, чтобы посмотреть и, если это заказчик, вернуть."
+                + ("" if rows_ else "\nПока пусто."), kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^bl:fo:\d{1,9}$"))
+async def filtered_open(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        x = await s.get(FilteredMessage, int(cb.data.split(":")[2]))
+    if x is None:
+        return await cb.answer("Уже обработано", show_alert=True)
+    who = f"@{x.username}" if x.username else (x.first_name or str(x.author_id))
+    link = f'\n<a href="{esc(x.link)}">Ссылка на сообщение</a>' if x.link else ""
+    await reply(cb, f"🙅 Отсеяно: {esc(x.reason)}\nГруппа: {esc(x.group_title)}\nКто: {esc(who)}{link}\n\n{esc(x.text[:1500])}",
+                kb([[("↩️ Это заявка — раздать", f"bl:fok:{x.id}")], [("🗑 Убрать из списка", f"bl:fdel:{x.id}")],
+                    [("◀️ К списку", "bl:fl:0")]]))
+
+
+@router.callback_query(F.data.regexp(r"^bl:fok:\d{1,9}$"))
+async def filtered_restore(cb: CallbackQuery) -> None:
+    """Фильтр ошибся: это заказчик. Пропускаем сообщение через обычный путь заявки, но без фильтра «реклама услуг»."""
+    from app.services import intake
+    from app.services.antispam import AuthorInfo
+    from app.services.pipeline import Incoming
+
+    async with Session() as s:
+        x = await s.get(FilteredMessage, int(cb.data.split(":")[2]))
+        if x is None:
+            return await cb.answer("Уже обработано", show_alert=True)
+        msg = Incoming(text=x.text, author=AuthorInfo(user_id=x.author_id, username=x.username, first_name=x.first_name),
+                       group_tg_id=x.group_tg_id, group_title=x.group_title, message_id=x.message_id, link=x.link)
+        await s.delete(x)
+        await s.commit()
+    lead = await intake.handle(msg, force=True)
+    await cb.answer("Заявка разослана" if lead else "Не стала заявкой (дубль или спам)", show_alert=True)
+    cb.data = "bl:fl:0"
+    await filtered_list(cb)
+
+
+@router.callback_query(F.data.regexp(r"^bl:fdel:\d{1,9}$"))
+async def filtered_delete(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        x = await s.get(FilteredMessage, int(cb.data.split(":")[2]))
+        if x is not None:
+            await s.delete(x)
+            await s.commit()
+    await cb.answer("Убрано")
+    cb.data = "bl:fl:0"
+    await filtered_list(cb)

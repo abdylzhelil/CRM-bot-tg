@@ -9,7 +9,7 @@ from datetime import timedelta
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import BlacklistEntry, Client, ClientEvent, Delivery, Lead, SeenMessage, SpamVote, User, now
+from app.models import BlacklistEntry, Client, ClientEvent, Delivery, FilteredMessage, Lead, SeenMessage, SpamVote, User, now
 
 CHUNK = 500
 
@@ -20,6 +20,7 @@ async def purge_old(s: AsyncSession, days: int) -> int:
     Отпечатки сообщений для антиспама (seen_messages) нужны только за последние сутки — их чистим всегда.
     """
     await s.execute(delete(SeenMessage).where(SeenMessage.created_at < now() - timedelta(days=2)))
+    await s.execute(delete(FilteredMessage).where(FilteredMessage.created_at < now() - timedelta(days=3)))
     await s.commit()
     if days <= 0:
         return 0
@@ -75,6 +76,7 @@ async def forget_author(s: AsyncSession, author_id: int) -> dict:
     await s.execute(delete(Lead).where(Lead.author_id == author_id))
     await s.execute(delete(SpamVote).where(SpamVote.author_id == author_id))
     await s.execute(delete(SeenMessage).where(SeenMessage.author_id == author_id))
+    await s.execute(delete(FilteredMessage).where(FilteredMessage.author_id == author_id))
     await s.execute(delete(BlacklistEntry).where(BlacklistEntry.user_id == author_id))
     if author_id:
         cards = list((await s.scalars(select(Client.id).where(Client.tg_id == author_id))).all())

@@ -15,10 +15,10 @@ from app.services.pipeline import Incoming, process
 log = logging.getLogger(__name__)
 
 
-async def handle(msg: Incoming) -> Lead | None:
+async def handle(msg: Incoming, force: bool = False) -> Lead | None:
     bonuses, new_level, finder = [], None, 0
     async with Session() as s:
-        lead = await process(s, msg)
+        lead = await process(s, msg, force)
         if lead:
             await distribute(s, lead)
             bonuses = await catalog.award_bonus(s, lead.group_id)

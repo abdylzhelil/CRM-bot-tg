@@ -6,8 +6,8 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import BlacklistEntry, Group, Lead, ScoutAccount, SeenMessage, SpamSample, now
-from app.services import geo, settings, spamtexts
+from app.models import BlacklistEntry, FilteredMessage, Group, Lead, ScoutAccount, SeenMessage, SpamSample, now
+from app.services import geo, offers, settings, spamtexts
 from app.services.antispam import AuthorInfo, Behavior, score_message, text_hash
 from app.services.rules import load_rules
 from app.services.text import match
@@ -23,7 +23,7 @@ class Incoming:
     link: str = ""
 
 
-async def process(session: AsyncSession, msg: Incoming) -> Lead | None:
+async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> Lead | None:
     """Возвращает новый Lead или None (не заявка / спам / дубль)."""
     author = msg.author
     if author.user_id and await session.scalar(select(ScoutAccount.id).where(ScoutAccount.tg_user_id == author.user_id)):
@@ -91,6 +91,17 @@ async def process(session: AsyncSession, msg: Incoming) -> Lead | None:
     )
     for old in prev:
         if difflib.SequenceMatcher(None, old.lower(), msg.text.lower()).ratio() >= 0.85:
+            await session.commit()
+            return None
+
+    # исполнитель рекламирует свои услуги («Сделаю сайт за 3 дня…») — это не заказчик (force — админ вернул вручную)
+    if not force and not whitelisted:
+        kind, by = await offers.verdict(session, msg.text)
+        if kind != "request":
+            session.add(FilteredMessage(
+                text=msg.text[:2000], author_id=author.user_id, username=author.username, first_name=author.first_name,
+                group_tg_id=msg.group_tg_id, group_title=msg.group_title, message_id=msg.message_id, link=msg.link,
+                reason=("реклама услуг" if kind == "offer" else "не заявка") + f" ({by})"))
             await session.commit()
             return None
 
