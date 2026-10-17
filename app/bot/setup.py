@@ -294,6 +294,9 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     accounts.manager = scout_manager
     adposts.manager = scout_manager
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    from app.bot.safe_buttons import UserButtonFix
+
+    bot.session.middleware(UserButtonFix())  # кнопка «Ответить» человеку без ника не роняет сообщение (BUTTON_USER_INVALID)
     notify.init(bot)
     dp = Dispatcher(storage=MemoryStorage())
     dp.message.outer_middleware(UserMiddleware())
