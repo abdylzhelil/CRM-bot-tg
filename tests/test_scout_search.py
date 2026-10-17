@@ -32,9 +32,8 @@ async def test_discover_reports_even_when_nothing_new(maker, tgbot, monkeypatch)
     monkeypatch.setattr(search, "Channel", SimpleNamespace)
     monkeypatch.setattr(search.utils, "get_peer_id", lambda c: -1001)
 
-    async def client(req):
-        return SimpleNamespace(chats=[chat])
-
+    client = FakeClient()
+    client.__class__ = type("C", (FakeClient,), {"__call__": lambda self, req: _chats(chat)})
     assert await search.discover(client, report=True) == 0
     assert "Новых групп нет" in sent.call_args.args[0] and "уже знали" in sent.call_args.args[0]
     assert "новых 0" in await search.last_search()
@@ -51,3 +50,69 @@ async def test_diagnosis_explains_why_not_joining(maker):
         level, lines = await scoutdiag.join_diagnosis(s, SimpleNamespace(clients={}))
         assert level == "bad" and any("на паузе" in x for x in lines) and any("НЕ ПОДКЛЮЧЁН" in x for x in lines)
         assert await s.get(Setting, "search_offset") is None
+
+
+class FakeClient:
+    """Клиент Telethon, у которого посреди поиска обрывается связь."""
+
+    def __init__(self, connected=True, drop_after=None, reconnect=False):
+        self.connected, self.calls, self.drop_after, self.reconnect = connected, 0, drop_after, reconnect
+
+    def is_connected(self):
+        return self.connected
+
+    async def connect(self):
+        self.connected = self.reconnect
+
+    async def __call__(self, req):
+        if not self.connected:
+            raise ConnectionError("Cannot send requests while disconnected")
+        self.calls += 1
+        if self.drop_after is not None and self.calls > self.drop_after:
+            self.connected = False
+            raise ConnectionError("Cannot send requests while disconnected")
+        return SimpleNamespace(chats=[])
+
+
+async def test_search_without_connection_does_not_waste_queries(maker, tgbot, monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(search.asyncio, "sleep", AsyncMock())
+    sent = AsyncMock()
+    monkeypatch.setattr(search.notify, "_send", sent)
+    with pytest.raises(ConnectionError):
+        await search.discover(FakeClient(connected=False), report=True)
+    assert "без связи" in sent.call_args.args[0]
+    async with maker() as s:
+        assert await s.get(Setting, "search_offset") is None  # очередь запросов не сдвинулась
+    # связь оборвалась после 3 запросов и не вернулась — следующий проход начнётся с 4-го
+    with pytest.raises(ConnectionError):
+        await search.discover(FakeClient(drop_after=3), report=True)
+    async with maker() as s:
+        assert (await s.get(Setting, "search_offset")).value == "3"
+    assert "прервался" in sent.call_args.args[0]
+
+
+async def test_search_reconnects_and_continues(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(search.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(search.notify, "_send", AsyncMock())
+    client = FakeClient(connected=False, reconnect=True)
+    assert await search.discover(client) == 0
+    assert client.calls == search.PER_PASS
+
+
+async def test_join_without_connection_does_not_touch_groups(maker):
+    from app.scout import joiner
+
+    async with maker() as s:
+        s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, status="ok"))
+        s.add(Group(tg_id=-7, title="G", username="g", status="approved", kind="group"))
+        await s.commit()
+    assert await joiner.join_one(FakeClient(connected=False), 1) is False
+    async with maker() as s:
+        g = await s.scalar(select(Group).where(Group.tg_id == -7))
+        assert g.status == "approved" and g.join_attempts == 0
+
+
+async def _chats(chat):
+    return SimpleNamespace(chats=[chat])

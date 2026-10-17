@@ -145,8 +145,14 @@ async def search_now(cb: CallbackQuery) -> None:
     if not manager or not manager.clients:
         return await cb.answer("Нет подключённых разведчиков", show_alert=True)
     await cb.answer("Поиск запущен — итог пришлю сообщением")
+    async def run(client):
+        try:
+            await discover(client, report=True)
+        except ConnectionError:
+            pass  # о связи уже написали сообщением; фоновый поиск повторит сам
+
     for client in manager.clients.values():
-        asyncio.create_task(discover(client, report=True))
+        asyncio.create_task(run(client))
 
 
 @router.callback_query(F.data == "gr:rotate")

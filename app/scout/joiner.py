@@ -44,6 +44,10 @@ async def _retry_later(s, g: Group) -> None:
 
 async def join_one(client: TelegramClient, acc_id: int) -> bool:
     """Вступить в одну одобренную группу. True — если попытка была (нужна пауза)."""
+    from app.scout.client import ensure_connected
+
+    if not await ensure_connected(client):
+        return False  # без связи не пытаемся: иначе группа зря ушла бы в «повторить через N дней»
     joined_entity = None
     async with Session() as s:
         acc = await s.get(ScoutAccount, acc_id)
@@ -88,6 +92,10 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             await notify.alert(f"Аккаунт «{acc.name}» достиг лимита групп Telegram. Запустите ротацию.")
         except ChannelPrivateError:
             g.status = "skipped"  # группа закрыта или нас заблокировали — повторять бессмысленно
+        except ConnectionError:
+            log.warning("вступление в %s: оборвалась связь — попробую позже", g.title)
+            await s.commit()
+            return False
         except InviteRequestSentError:
             acc.joined_today += 1  # заявка тоже действие в Telegram — считаем в суточный лимит
             await _retry_later(s, g)
@@ -153,21 +161,26 @@ async def rotate(client: TelegramClient, acc_id: int, limit: int = 10) -> int:
 async def search_loop(manager) -> None:
     from app.scout.search import discover
 
+    await asyncio.sleep(180)  # после запуска даём разведчикам спокойно подключиться
     while True:
-        hours = 6
+        hours, offline = 6, False
         try:
             for acc_id, client in list(manager.clients.items()):
                 if await paused():
                     break
                 try:
                     await discover(client)
+                except ConnectionError:
+                    offline = True
+                    log.warning("search_loop #%s: нет связи с Telegram — повторю через 10 мин", acc_id)
                 except Exception:
                     log.exception("search_loop #%s", acc_id)
             async with Session() as s:
                 hours = await settings.get_int(s, "search_interval_h")
         except Exception:
             log.exception("search_loop")
-        await asyncio.sleep(max(hours, 1) * 3600)
+        # оборвалась связь — не ждём 6 часов, пробуем снова через 10 минут
+        await asyncio.sleep(600 if offline else max(hours, 1) * 3600)
 
 
 ROTATION_KEY = "rotation_at"  # когда последний раз выходили из пустых групп (переживает перезапуск)
