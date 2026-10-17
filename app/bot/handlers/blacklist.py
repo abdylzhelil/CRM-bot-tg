@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, select
 
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
-from app.models import BlacklistEntry, FilteredMessage, SpamSample, SpamVote
+from app.models import BlacklistEntry, FilteredMessage, LabeledText, SpamSample, SpamVote
 from app.services import spamtexts
 
 router = Router()
@@ -23,12 +23,14 @@ async def blacklist_menu(target: Message | CallbackQuery) -> None:
         cnt = dict((await s.execute(select(BlacklistEntry.status, func.count()).group_by(BlacklistEntry.status))).all())
         samples = await spamtexts.count(s)
         filtered = await s.scalar(select(func.count()).select_from(FilteredMessage)) or 0
+        labeled = await s.scalar(select(func.count()).select_from(LabeledText)) or 0
     await reply(target, "🛡 <b>Списки авторов заявок</b>\n"
                 "🚫 Чёрный — их сообщения не становятся заявками.\n👍 Белый — всегда заявки, даже если похожи на спам.\n"
                 "🧩 Спам-тексты — похожий текст с любого аккаунта не станет заявкой (появляются, когда вы жмёте «🚫 Спам»).\n"
                 "🙅 Отсеянные — реклама услуг от исполнителей (не заказчики) за 3 дня; можно вернуть «↩️ Это заявка».",
                 kb([[(f"🚫 Чёрный · {cnt.get('spam', 0)}", "bl:ls:spam:0"), (f"👍 Белый · {cnt.get('client', 0)}", "bl:ls:client:0")],
                     [(f"🧩 Спам-тексты · {samples}", "bl:sp:0"), (f"🙅 Отсеянные · {filtered}", "bl:fl:0")],
+                    [(f"🎓 Обучение фильтра · {labeled}", "bl:lb:0")],
                     [("🔎 Найти по ID или @нику", "bl:find"), ("➕ Добавить по ID", "bl:add")]]))
 
 
@@ -223,6 +225,9 @@ async def filtered_restore(cb: CallbackQuery) -> None:
             return await cb.answer("Уже обработано", show_alert=True)
         msg = Incoming(text=x.text, author=AuthorInfo(user_id=x.author_id, username=x.username, first_name=x.first_name),
                        group_tg_id=x.group_tg_id, group_title=x.group_title, message_id=x.message_id, link=x.link)
+        from app.services import offers
+
+        await offers.learn(s, x.text, "request")  # фильтр запомнит: похожие — заявки
         await s.delete(x)
         await s.commit()
     lead = await intake.handle(msg, force=True)
@@ -241,3 +246,46 @@ async def filtered_delete(cb: CallbackQuery) -> None:
     await cb.answer("Убрано")
     cb.data = "bl:fl:0"
     await filtered_list(cb)
+
+
+# ---------- обучение фильтра «заказчик или исполнитель» ----------
+@router.callback_query(F.data.regexp(r"^bl:lb:\d{1,6}$"))
+async def labeled_list(cb: CallbackQuery) -> None:
+    offset = int(cb.data.split(":")[2])
+    async with Session() as s:
+        total = await s.scalar(select(func.count()).select_from(LabeledText)) or 0
+        rows_ = (await s.scalars(select(LabeledText).order_by(LabeledText.id.desc()).offset(offset).limit(PAGE))).all()
+    rows = [[(("🙅 " if x.kind == "offer" else "✅ ") + " ".join(x.text.split())[:42], f"bl:lbo:{x.id}")] for x in rows_]
+    nav = []
+    if offset:
+        nav.append(("⬅️", f"bl:lb:{max(offset - PAGE, 0)}"))
+    if offset + PAGE < total:
+        nav.append(("➡️", f"bl:lb:{offset + PAGE}"))
+    if nav:
+        rows.append(nav)
+    rows.append([("◀️ Назад", "bl:menu")])
+    await reply(cb, f"🎓 Ваши отметки: {total}\n🙅 — исполнитель (похожие отсеиваются), ✅ — заказчик (похожие доходят).\n"
+                "Появляются, когда вы жмёте «🙅 Исполнитель» под заявкой или «↩️ Это заявка» в отсеянных. Нажмите, чтобы удалить ошибочную."
+                + ("" if rows_ else "\nПока пусто."), kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^bl:lbo:\d{1,9}$"))
+async def labeled_open(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        x = await s.get(LabeledText, int(cb.data.split(":")[2]))
+    if x is None:
+        return await cb.answer("Уже удалено", show_alert=True)
+    await reply(cb, ("🙅 Исполнитель" if x.kind == "offer" else "✅ Заказчик") + f" (отмечено {x.created_at:%d.%m})\n\n{esc(x.text[:1500])}",
+                kb([[("🗑 Удалить отметку", f"bl:lbd:{x.id}")], [("◀️ К списку", "bl:lb:0")]]))
+
+
+@router.callback_query(F.data.regexp(r"^bl:lbd:\d{1,9}$"))
+async def labeled_delete(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        x = await s.get(LabeledText, int(cb.data.split(":")[2]))
+        if x is not None:
+            await s.delete(x)
+            await s.commit()
+    await cb.answer("Удалено — фильтр больше не опирается на этот пример")
+    cb.data = "bl:lb:0"
+    await labeled_list(cb)

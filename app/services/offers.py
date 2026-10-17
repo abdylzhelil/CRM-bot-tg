@@ -71,8 +71,38 @@ async def ai_verdict(s: AsyncSession, text: str, client=None) -> str | None:
     return {"ЗАКАЗЧИК": "request", "ИСПОЛНИТЕЛЬ": "offer", "ДРУГОЕ": "other"}.get((res or {}).get("kind"))
 
 
+async def learn(s: AsyncSession, text: str, kind: str) -> None:
+    """Админ отметил пример (offer — «🙅 Исполнитель», request — «↩️ Это заявка»). Коммит — на вызывающем."""
+    from app.models import LabeledText
+    from app.services import spamtexts
+
+    if len(spamtexts.words(text)) >= spamtexts.MIN_WORDS:
+        s.add(LabeledText(kind=kind, text=text[:2000]))
+        await s.flush()
+
+
+async def by_examples(s: AsyncSession, text: str) -> str | None:
+    """Похоже на сообщение, которое админ уже отмечал? Тогда решаем так же (бесплатно, учится на ваших нажатиях)."""
+    from sqlalchemy import select
+
+    from app.models import LabeledText
+    from app.services import spamtexts
+
+    w = spamtexts.words(text)
+    if len(w) < spamtexts.MIN_WORDS:
+        return None
+    rows = (await s.execute(select(LabeledText.kind, LabeledText.text).order_by(LabeledText.id.desc()).limit(500))).all()
+    for kind, sample in rows:  # свежие примеры первыми: последнее решение админа важнее
+        if spamtexts.similar(w, spamtexts.words(sample)):
+            return kind
+    return None
+
+
 async def verdict(s: AsyncSession, text: str, client=None) -> tuple[str, str]:
-    """(offer|other|request, кто решил: правила/ИИ). Только offer и other отсеиваются."""
+    """(offer|other|request, кто решил: примеры/правила/ИИ). Только offer и other отсеиваются."""
+    learned = await by_examples(s, text)
+    if learned:
+        return learned, "ваши отметки"
     v = rule_verdict(text)
     if v != "unsure":
         return v, "правила"

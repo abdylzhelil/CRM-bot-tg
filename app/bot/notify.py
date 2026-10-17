@@ -38,6 +38,7 @@ async def alert_once(key: str, text: str, cooldown: float = 900) -> None:
     """Тревога администраторам, не чаще раза в cooldown секунд на один ключ (чтобы не засыпать сообщениями)."""
     import time
 
+    await _log_error(key, text)
     if time.monotonic() - _last_alert.get(key, -cooldown - 1) < cooldown:
         return
     _last_alert[key] = time.monotonic()
@@ -45,6 +46,18 @@ async def alert_once(key: str, text: str, cooldown: float = 900) -> None:
         await alert(text)
     except Exception:
         log.exception("не удалось отправить тревогу")
+
+
+async def _log_error(key: str, text: str) -> None:
+    """Записать сбой в журнал (для «🩺 Отчёт о проблемах»); сам журнал никогда не роняет бота."""
+    from app.models import ErrorLog
+
+    try:
+        async with Session() as s:
+            s.add(ErrorLog(key=key[:64], text=text[:500]))
+            await s.commit()
+    except Exception:
+        log.warning("журнал ошибок недоступен")
 
 
 async def alert(text: str) -> None:
@@ -68,8 +81,11 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
         ],
     ]
     rows.append([InlineKeyboardButton(text="✨ Черновик ответа", callback_data=f"lead:ai:{d}")])
-    if lead.suspicious and admin:
-        rows.append([InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}")])
+    if admin:  # админ учит фильтр: «это реклама услуг», похожие больше не придут
+        extra = [InlineKeyboardButton(text="🙅 Исполнитель", callback_data=f"lead:offer:{d}")]
+        if lead.suspicious:
+            extra.insert(0, InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}"))
+        rows.append(extra)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

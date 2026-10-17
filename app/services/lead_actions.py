@@ -6,7 +6,7 @@ from app.services import draft, settings, spamtexts, templates
 from app.services.distribute import root_category
 
 STATUS_NOTES = {"later": ("postponed", "Отложено"), "reject": ("rejected", "Отказ")}
-ACTIONS = ("take", "later", "reject", "spam", "client", "restore")
+ACTIONS = ("take", "later", "reject", "spam", "client", "restore", "offer")
 RESTORABLE = ("postponed", "rejected", "spam")
 
 
@@ -81,6 +81,15 @@ async def apply_status(s, user: User, d: Delivery, lead: Lead, action: str) -> s
         return "Это спам — автор больше не придёт"
     if action == "restore":
         return await restore(s, user, d, lead)
+    if action == "offer" and user.is_admin:  # реклама услуг, а не заказчик: учим фильтр и убираем у остальных
+        from app.services import offers
+
+        await offers.learn(s, lead.text, "offer")
+        d.status = "rejected"
+        pending = (await s.scalars(select(Delivery).where(Delivery.lead_id == lead.id, ~Delivery.sent))).all()
+        for other in pending:
+            other.status, other.sent = "rejected", True
+        return "Исполнитель — похожие больше не придут"
     if action == "client" and user.is_admin:
         await blacklist(s, lead, "client", "отмечено администратором")
         lead.suspicious = False
@@ -106,6 +115,11 @@ async def restore(s, user: User, d: Delivery, lead: Lead) -> str:
             if user.is_admin or votes < await settings.get_int(s, "spam_votes_to_ban"):
                 await s.delete(entry)
                 await spamtexts.forget_lead(s, lead.id)
+    if user.is_admin:  # админ передумал «🙅 Исполнитель» — убираем этот пример из обучения фильтра
+        from app.models import LabeledText
+
+        for x in (await s.scalars(select(LabeledText).where(LabeledText.kind == "offer", LabeledText.text == lead.text[:2000]))).all():
+            await s.delete(x)
     d.status = "new"
     return "Вернул в новые"
 

@@ -181,6 +181,28 @@ class FilteredMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
 
 
+class LabeledText(Base):
+    """Пример, на котором учится бесплатный фильтр «заказчик или исполнитель»: админ сам отметил сообщение.
+
+    kind: offer — «🙅 Исполнитель» под заявкой; request — «↩️ Это заявка» в отсеянных. Похожие тексты дальше решаются так же."""
+
+    __tablename__ = "labeled_texts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+class ErrorLog(Base):
+    """Журнал сбоев (то же, что приходит тревогой 🚨) — для «🩺 Отчёт о проблемах»."""
+
+    __tablename__ = "error_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    text: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
 class SeenMessage(Base):
     """Хеши текстов — для поиска одинаковых сообщений в разных группах и антидублей."""
 

@@ -78,7 +78,23 @@ async def status_text() -> str:
 
 @router.callback_query(F.data == "st:status")
 async def status(cb: CallbackQuery) -> None:
-    await reply(cb, await status_text(), kb([[("🔄 Обновить", "st:status")], [("◀️ Все настройки", "st:menu")]]))
+    await reply(cb, await status_text(), kb([[("🔄 Обновить", "st:status"), ("🩺 Отчёт о проблемах", "st:diag")],
+                                              [("◀️ Все настройки", "st:menu")]]))
+
+
+@router.callback_query(F.data == "st:diag")
+async def diagnostics_report(cb: CallbackQuery) -> None:
+    """Сводка за неделю файлом — переслать разработчику (в чат с Claude Code), чтобы найти и исправить проблемы."""
+    from aiogram.types import BufferedInputFile
+
+    from app.services import diagnostics
+
+    async with Session() as s:
+        text = await diagnostics.report(s)
+    await cb.answer()
+    await cb.message.answer(esc(text[:3800]))
+    await cb.message.answer_document(BufferedInputFile(text.encode("utf-8"), filename="report.txt"),
+                                     caption="📎 Перешлите этот файл в чат с разработчиком — по нему найдём, что исправить.")
 
 
 @router.callback_query(F.data == "st:auto")
