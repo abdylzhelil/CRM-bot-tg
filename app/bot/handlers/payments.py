@@ -300,9 +300,22 @@ async def refund_ask(cb: CallbackQuery, user: User) -> None:
     if pay.refunded:
         return await cb.answer("Этот платёж уже возвращён", show_alert=True)
     who = esc((buyer.name if buyer else "") or str(pay.user_id))
-    rows = []
+    rows, warn = [], ""
+    from app.services import adposts
+
+    async with Session() as s:  # реклама, где часть постов уже вышла: сначала — вернуть только за невышедшие
+        order = await adposts.order_of_payment(s, pay)
+        if order is not None:
+            sent, total = await adposts.published_count(s, order)
+            value = await adposts.unpublished_value(s, order)
+            if sent:
+                warn = (f"\n\n⚠️ Заказ №{order.id}: вышло {sent} из {total} постов — эта работа сделана. "
+                        "Обычно возвращают только за невышедшие" + (f" ({value} ₽)." if value else " (за них уже вернули или нечего возвращать)."))
+                if value:
+                    rows.append([(f"💸 Вернуть только за невышедшие ({value} ₽)", f"apa:part:{order.id}")])
     if payments.refunds_enabled() and pay.provider_id:
-        rows.append([("💸 Вернуть деньги и снять тариф" if pay.days else "💸 Вернуть деньги и отменить посты", f"rf:money:{pay.id}")])
+        rows.append([("💸 Вернуть деньги и снять тариф" if pay.days else
+                      ("💸 Вернуть ВСЁ, включая вышедшие" if warn else "💸 Вернуть деньги и отменить посты"), f"rf:money:{pay.id}")])
     rows.append([("Только снять тариф (деньги верну сам)" if pay.days else "Только отменить посты (деньги верну сам)", f"rf:tariff:{pay.id}")])
     rows.append([("Отмена", "noop")])
     hint = "" if payments.refunds_enabled() else "\n\nВозврат денег кнопкой не подключён (ключи ЮKassa в .env) — деньги верните в кабинете ЮKassa."
@@ -312,7 +325,7 @@ async def refund_ask(cb: CallbackQuery, user: User) -> None:
         f"↩️ Платёж: {who} — {pay.amount / 100:.0f} {esc(pay.currency)}{part}, "
         + (f"{pay.days} дн." if pay.days else "реклама в группах (неопубликованные посты будут отменены)")
         + (f"\nID платежа в ЮKassa: <code>{esc(pay.provider_id)}</code> (нажмите, чтобы скопировать — для поддержки)"
-           if pay.provider_id else "") + hint, reply_markup=kb(rows))
+           if pay.provider_id else "") + hint + warn, reply_markup=kb(rows))
     await cb.answer()
 
 

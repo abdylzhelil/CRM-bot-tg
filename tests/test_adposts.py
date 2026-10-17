@@ -897,6 +897,45 @@ async def test_partial_finish_refunds_unpublished_part(maker, tgbot, monkeypatch
     assert any("выполнен частично" in t and f"вернули {expected}" in t for t in tgbot.texts(70))
 
 
+
+async def test_refund_screen_offers_partial_when_some_posts_published(maker, tgbot, monkeypatch):
+    """Часть постов вышла — экран возврата предлагает вернуть только за невышедшие, а «вернуть всё» — с предупреждением."""
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    from app.models import Payment
+
+    await setup_group(maker, price=300)
+    await make_user(maker, 70)
+    async with maker() as s:
+        s.add(Group(tg_id=-102, username="g3", title="Вторая", members=100, status="joined", kind="group",
+                    account_id=1, ads_allowed=True, ad_price=700))
+        await s.commit()
+        order = await adposts.new_draft(s, 70, TEXT)
+        for g in (await s.scalars(select(Group))).all():
+            await adposts.toggle_group(s, order, g.id)
+        await adposts.submit(s, order)
+        await adposts.approve(s, order)
+        await adposts.mark_paid(s, order.id, "yk-11", 100000)
+        oid = order.id
+    mgr, client = manager()
+    await publisher.publish_one(mgr)  # один пост вышел
+    async with maker() as s:
+        pay = await s.scalar(select(Payment))
+        admin = await s.get(User, ADMIN_ID)
+        order = await s.get(AdOrder, oid)
+        assert await adposts.published_count(s, order) == (1, 2)
+        card = await ah.order_buttons(s, order)
+    assert any(t == "↩️ Вернуть всё, включая вышедшие посты" for row in card for t, _ in row)
+    c = MagicMock()
+    c.data, c.from_user.id = f"rf:ask:{pay.id}", ADMIN_ID
+    c.answer, c.message.answer = AsyncMock(), AsyncMock()
+    await ph.refund_ask(c, admin)
+    text = c.message.answer.call_args.args[0]
+    buttons = [(b.text, b.callback_data) for row in c.message.answer.call_args.kwargs["reply_markup"].inline_keyboard for b in row]
+    assert "вышло 1 из 2" in text
+    assert buttons[0][1] == f"apa:part:{oid}" and "только за невышедшие" in buttons[0][0]
+    assert any("ВСЁ, включая вышедшие" in b for b, _ in buttons)
+
 async def test_failed_group_switched_off_and_no_media(maker, tgbot):
     """Аккаунт забанен в группе — группа сама уходит из списка для покупателей; картинки запрещены — только текст."""
     from telethon.errors import ChatSendPhotosForbiddenError, UserBannedInChannelError

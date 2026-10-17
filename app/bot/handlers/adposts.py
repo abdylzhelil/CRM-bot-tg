@@ -475,8 +475,12 @@ async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
     elif order.status == "done" and missing and await adposts.unpublished_value(s, order):
         rows.append([("💸 Вернуть за невышедшие", f"apa:part:{order.id}")])
     pay = await s.scalar(select(Payment).where(Payment.charge_id == f"yk:{order.yk_id}")) if order.yk_id else None
+    sent, _ = await adposts.published_count(s, order)
     if pay is not None and not pay.refunded:
-        rows.append([("↩️ Вернуть всю сумму" if pay.refunded_amount else "↩️ Вернуть деньги", f"rf:ask:{pay.id}")])
+        # часть постов вышла — работа частично сделана: полный возврат не главная кнопка (за невышедшие — выше)
+        label = ("↩️ Вернуть всё, включая вышедшие посты" if sent
+                 else "↩️ Вернуть всю сумму" if pay.refunded_amount else "↩️ Вернуть деньги")
+        rows.append([(label, f"rf:ask:{pay.id}")])
     if order.status in ("approved", "running", "pending"):
         rows.append([("🚫 Отменить заказ (с причиной)", f"apa:cancel:{order.id}")])
     if order.status in adposts.REPEATABLE:

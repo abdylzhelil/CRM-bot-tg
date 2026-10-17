@@ -507,6 +507,18 @@ async def unpublished_value(s: AsyncSession, order: AdOrder) -> int:
     return max(0, min(value, left))
 
 
+async def published_count(s: AsyncSession, order: AdOrder) -> tuple[int, int]:
+    """(вышло постов, всего постов) — чтобы не предлагать полный возврат за уже выполненную работу."""
+    rows = (await s.scalars(select(AdPost.status).where(AdPost.order_id == order.id))).all()
+    return sum(st == "sent" for st in rows), len(rows)
+
+
+async def order_of_payment(s: AsyncSession, pay) -> AdOrder | None:
+    if not pay or pay.days or not (pay.charge_id or "").startswith("yk:"):
+        return None
+    return await s.scalar(select(AdOrder).where(AdOrder.yk_id == pay.charge_id[3:]))
+
+
 async def settle(s: AsyncSession, order: AdOrder) -> None:
     """Вопрос денег по невышедшим постам закрыт (вернули или решили не возвращать) — повторно не вернём."""
     for p in await open_posts(s, order):
