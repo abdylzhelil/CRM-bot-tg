@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import FeedChat, Group, SearchQuery
-from app.services import catalog, settings
+from app.services import catalog, scoutdiag, settings
 
 router = Router()
 # Менеджер разведчиков подставляется из main.py
@@ -35,10 +35,13 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         "\n⚠️ Privacy mode включён — бот не видит сообщения в группах, где он не админ. "
         "@BotFather → /setprivacy → Disable."
     )
+    async with Session() as s:
+        _, diag = await scoutdiag.join_diagnosis(s, manager)
     text = (
         f"🤖 Бот в группах: {bot_groups}{privacy}\n"
         f"🔍 Разведчик{' (⏸ на паузе)' if paused else ''}: "
         + ", ".join(f"{v} {cnt.get(k, 0)}" for k, v in STATUS.items())
+        + "\n\n<b>Вступление в новые группы:</b>\n" + "\n".join(esc(x) for x in diag)
     )
     await reply(target, text, kb([
         [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=true")],
@@ -141,9 +144,9 @@ async def search_now(cb: CallbackQuery) -> None:
 
     if not manager or not manager.clients:
         return await cb.answer("Нет подключённых разведчиков", show_alert=True)
-    await cb.answer("Поиск запущен, карточки придут сами")
+    await cb.answer("Поиск запущен — итог пришлю сообщением")
     for client in manager.clients.values():
-        asyncio.create_task(discover(client))
+        asyncio.create_task(discover(client, report=True))
 
 
 @router.callback_query(F.data == "gr:rotate")

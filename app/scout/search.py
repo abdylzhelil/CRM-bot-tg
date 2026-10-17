@@ -50,19 +50,75 @@ async def is_covered(s, tg_id: int) -> bool:
     return g is not None and g.status == "joined"
 
 
-async def discover(client: TelegramClient) -> int:
-    """Один проход по всем включённым запросам. Возвращает число новых кандидатов.
+PER_PASS = 20          # запросов за один проход (больше — Telegram начнёт притормаживать поиск)
+OFFSET_KEY = "search_offset"
+LAST_KEY = "search_last"  # итог последнего поиска — виден в 🔍 Группы и «🧪 Самопроверке»
+_PLACES = ("{c}", "объявления {c}", "барахолка {c}", "услуги {c}", "работа {c}", "бизнес {c}", "мастера {c}")
+
+
+async def build_queries(s) -> list[str]:
+    """Свои запросы админа + автоматические: города × «объявления/барахолка/услуги…» и главное слово каждой ниши.
+    Раньше были только ~10 ручных запросов — Telegram на них отдаёт одни и те же группы, и через пару дней
+    поиск переставал находить новые."""
+    from app.models import Category, Keyword, User
+    from app.services import geo
+
+    manual = [q.text for q in (await s.scalars(select(SearchQuery).where(SearchQuery.enabled))).all()]
+    cities = list(geo.MENU_CITIES)
+    for c in (await s.scalars(select(User.city).where(User.city != "").distinct().limit(20))).all():
+        if c not in cities:
+            cities.append(c)
+    auto = [p.format(c=c) for c in cities[:15] for p in _PLACES]
+    roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), Category.enabled,
+                                                    ~Category.pending).order_by(Category.id))).all()
+    for cat in roots:
+        word = await s.scalar(select(Keyword.word).where(Keyword.category_id == cat.id, Keyword.kind == "category")
+                              .order_by(Keyword.id))
+        if word:
+            auto.append(word)
+            auto.append(f"{word} {cities[0]}")
+    out, seen = [], set()
+    for q in manual + auto:
+        k = q.strip().casefold()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(q.strip())
+    return out
+
+
+async def next_batch(s) -> tuple[list[str], int, int]:
+    """Следующие PER_PASS запросов по кругу: (запросы, с какого номера, всего)."""
+    from app.models import Setting
+
+    queries = await build_queries(s)
+    if not queries:
+        return [], 0, 0
+    row = await s.get(Setting, OFFSET_KEY)
+    start = int(row.value) % len(queries) if row and row.value.isdigit() else 0
+    batch = [queries[(start + i) % len(queries)] for i in range(min(PER_PASS, len(queries)))]
+    value = str((start + len(batch)) % len(queries))
+    if row:
+        row.value = value
+    else:
+        s.add(Setting(key=OFFSET_KEY, value=value))
+    await s.commit()
+    return batch, start, len(queries)
+
+
+async def discover(client: TelegramClient, report: bool = False) -> int:
+    """Один проход по следующей порции запросов. Возвращает число новых кандидатов.
 
     Карточки по одной не шлём — в конце одно сообщение «найдено N», отбор — списком в 🔍 Группы.
+    report — поиск запущен кнопкой: сообщить итог, даже если новых нет.
     """
     global _stop_requested
     _stop_requested = False
     async with Session() as s:
-        queries = [q.text for q in (await s.scalars(select(SearchQuery).where(SearchQuery.enabled))).all()]
+        queries, start, total = await next_batch(s)
         min_members = await settings.get_int(s, "min_members")
         min_msgs = await settings.get_int(s, "min_msgs_per_day")
         auto = await settings.get(s, "mode") == "auto"
-    found = 0
+    found = known = small = errors = 0
     for q in queries:
         if _stop_requested:
             break
@@ -74,6 +130,7 @@ async def discover(client: TelegramClient) -> int:
             continue
         except Exception:
             log.exception("поиск «%s»", q)
+            errors += 1
             continue
         for chat in res.chats:
             if _stop_requested:
@@ -83,6 +140,7 @@ async def discover(client: TelegramClient) -> int:
             tg_id = utils.get_peer_id(chat)
             async with Session() as s:
                 if await s.scalar(select(Group.id).where(Group.tg_id == tg_id)) or await is_covered(s, tg_id):
+                    known += 1
                     continue
             try:
                 full = await client(functions.channels.GetFullChannelRequest(chat))
@@ -105,8 +163,38 @@ async def discover(client: TelegramClient) -> int:
                 await s.commit()
             if ok:
                 found += 1
+            else:
+                small += 1
             await asyncio.sleep(random.uniform(2, 6))
         await asyncio.sleep(random.uniform(10, 30))
+    summary = (f"запросов {len(queries)} (с {start + 1}-го из {total}), новых {found}, уже знали {known}, "
+               f"мелких или тихих {small}" + (f", ошибок {errors}" if errors else ""))
+    await save_last(summary)
     if found:
         await notify.groups_found(found, auto)
+    elif report:
+        await notify._send(f"🔍 Поиск закончен: {summary}.\nНовых групп нет — следующий поиск возьмёт другие запросы "
+                           "(их можно добавить: 🔍 Группы → 🔎 Поисковые запросы).")
     return found
+
+
+async def save_last(summary: str) -> None:
+    from app.models import Setting, now
+    from app.services import quiet
+
+    async with Session() as s:
+        row = await s.get(Setting, LAST_KEY)
+        value = f"{quiet.to_local(now()):%d.%m %H:%M} — {summary}"
+        if row:
+            row.value = value
+        else:
+            s.add(Setting(key=LAST_KEY, value=value))
+        await s.commit()
+
+
+async def last_search() -> str:
+    from app.models import Setting
+
+    async with Session() as s:
+        row = await s.get(Setting, LAST_KEY)
+    return row.value if row else "ещё не было"

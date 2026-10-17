@@ -84,6 +84,12 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
         except Exception as e:
             add(BAD, f"Разведчик «{acc.name}»", f"не отвечает ({type(e).__name__})")
 
+    # вступление в новые группы и поиск
+    from app.services import scoutdiag
+
+    level, diag = await scoutdiag.join_diagnosis(s, manager)
+    add({"ok": OK, "warn": WARN, "bad": BAD}[level], "Вступление в группы", "; ".join(diag))
+
     # фоновые задачи
     dead = []
     for name, task in TASKS.items():
