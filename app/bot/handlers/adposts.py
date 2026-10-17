@@ -472,7 +472,7 @@ async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
         AdPost.order_id == order.id, AdPost.status.in_(adposts.NOT_PUBLISHED)))
     if order.status == "running" and missing:
         rows.append([("✂️ Выполнен частично", f"apa:part:{order.id}")])
-    elif order.status == "done" and missing and await adposts.unpublished_value(s, order):
+    elif order.status in ("done", "canceled") and missing and await adposts.unpublished_value(s, order):
         rows.append([("💸 Вернуть за невышедшие", f"apa:part:{order.id}")])
     pay = await s.scalar(select(Payment).where(Payment.charge_id == f"yk:{order.yk_id}")) if order.yk_id else None
     sent, _ = await adposts.published_count(s, order)
@@ -629,8 +629,23 @@ async def apa_reason(s, m: Message, d, text):
             msg = f"❌ Заказ рекламы №{order.id} отклонён." + (f"\nПричина: {esc(reason)}" if reason else "")
         else:
             await adposts.cancel(s, order, reason)
-            msg = (f"🚫 Заказ рекламы №{order.id} отменён администратором." + (f"\nПричина: {esc(reason)}" if reason else "")
-                   + ("\nЕсли вы уже платили — напишите, вернём деньги за неопубликованное." if order.price else ""))
+            msg = f"🚫 Заказ рекламы №{order.id} отменён администратором." + (f"\nПричина: {esc(reason)}" if reason else "")
+            refunded, problem = 0, ""
+            if order.yk_id:  # оплачен: автовозврат только за невышедшие посты (вышедшие — сделанная работа)
+                try:
+                    refunded = await adposts.auto_refund(s, order)
+                except payments.RefundError as e:
+                    problem = str(e)
+            sent, _ = await adposts.published_count(s, order)
+            if refunded:
+                msg += (f"\n💸 За неопубликованные посты вернули {refunded} ₽" + (f" (вышло постов: {sent} — за них не возвращаем)" if sent else "")
+                        + " — деньги придут тем же способом, обычно за 1–3 дня.")
+            elif order.price and order.yk_id:
+                msg += "\nДеньги за неопубликованные посты вернём — администратор уже знает."
+            if problem or (order.yk_id and not refunded and await adposts.unpublished_value(s, order)):
+                await m.answer(f"⚠️ Автовозврат по заказу №{order.id} не прошёл{': ' + esc(problem[:300]) if problem else ' (выключен)'}. "
+                               "Верните за невышедшие вручную: откройте заказ → «💸 Вернуть за невышедшие».",
+                               reply_markup=kb([[("Открыть заказ", f"apa:o:{order.id}")]]))
     except adposts.AdError as e:
         return await m.answer(str(e))
     try:

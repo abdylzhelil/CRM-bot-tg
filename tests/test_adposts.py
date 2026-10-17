@@ -1337,3 +1337,47 @@ async def test_repeat_not_allowed_for_running_or_strangers(maker, tgbot):
     c = cbq(f"ap:again:{o.id}", 72)
     await ah.ap_again(c, SimpleNamespace(tg_id=72, is_admin=False, city=""))
     assert "не найден" in c.answer.call_args.args[0]
+
+
+
+async def test_admin_cancel_paid_running_order_refunds_only_unpublished(maker, tgbot, monkeypatch):
+    """Админ отменил оплаченный заказ, где 1 пост из 2 вышел: автовозврат — только доля невышедшего."""
+    monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
+    from app.models import Payment
+
+    await setup_group(maker, price=300)
+    await make_user(maker, 70)
+    async with maker() as s:
+        s.add(Group(tg_id=-102, username="g3", title="Вторая", members=100, status="joined", kind="group",
+                    account_id=1, ads_allowed=True, ad_price=700))
+        await s.commit()
+        order = await adposts.new_draft(s, 70, TEXT)
+        for g in (await s.scalars(select(Group))).all():
+            await adposts.toggle_group(s, order, g.id)
+        await adposts.submit(s, order)
+        await adposts.approve(s, order)
+        await adposts.mark_paid(s, order.id, "yk-12", 100000)
+        oid = order.id
+    mgr, client = manager()
+    await publisher.publish_one(mgr)
+    calls = []
+
+    async def fake_refund(pid, amount, cur, key):
+        calls.append(amount)
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(payments, "_yookassa_refund", fake_refund)
+    async with maker() as s:
+        sent_group = (await s.scalar(select(AdPost).where(AdPost.status == "sent"))).group_id
+        expected = 700 if (await s.get(Group, sent_group)).ad_price != 700 else 300
+        m = MagicMock()
+        m.answer = AsyncMock()
+        await ah.apa_reason(s, m, {"order_id": oid, "op": "cancel"}, "-")
+    async with maker() as s:
+        pay = await s.scalar(select(Payment))
+        order = await s.get(AdOrder, oid)
+        assert order.status == "canceled" and pay.refunded_amount == expected * 100 and not pay.refunded
+        assert await adposts.unpublished_value(s, order) == 0
+    assert calls == [expected * 100]
+    assert any(f"вернули {expected} ₽" in t and "за них не возвращаем" in t for t in tgbot.texts(70))
