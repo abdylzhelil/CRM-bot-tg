@@ -3,6 +3,7 @@ import asyncio
 import html
 import logging
 import random
+import re
 from datetime import timedelta
 
 from sqlalchemy import select, update
@@ -170,7 +171,12 @@ async def publish_one(manager) -> bool:
             post.status, post.error = "failed", REASON.get(type(e).__name__, type(e).__name__)
             switched_off = True
         except ForbiddenError as e:  # другой запрет Telegram (платные сообщения в группе, только премиум и т. п.)
-            post.status, post.error = "failed", f"Telegram запретил писать ({getattr(e, 'message', '') or type(e).__name__})"[:250]
+            code = getattr(e, "message", "") or type(e).__name__
+            m = re.match(r"ALLOW_PAYMENT_REQUIRED_?(\d*)", code)
+            human = (f"в группе платные сообщения ({m.group(1) or '?'} ⭐ за сообщение)" if m
+                     else "писать могут только Premium-пользователи" if "PREMIUM" in code
+                     else f"Telegram запретил писать ({code})")
+            post.status, post.error = "failed", human[:250]
             switched_off = True
         except Exception as e:
             log.exception("реклама: не удалось опубликовать в %s", g.title)

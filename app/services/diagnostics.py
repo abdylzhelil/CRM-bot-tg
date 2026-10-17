@@ -48,9 +48,15 @@ async def report(s: AsyncSession, days: int = 7) -> str:
             f"   отсеяно как реклама услуг: {filtered} (за 3 дня хранится); ошибочно отсеяно и возвращено: {restored}",
             f"   пропущено фильтром (вы нажали «🙅 Исполнитель»): {marked_offer}; спам-текстов отсеяно всего: {hits}"]
     total_marks = restored + marked_offer
-    if leads:
+    if leads and (total_marks or filtered):
         out.append(f"   ≈ точность фильтра: {100 - round(100 * total_marks / max(leads + filtered, 1))}% "
                    "(чем больше ваших исправлений, тем ниже)")
+    elif leads:
+        out.append("   точность фильтра: пока не оценить — нет ни отсеянных, ни ваших исправлений "
+                   "(отмечайте «🙅 Исполнитель» / «↩️ Это заявка»)")
+    untouched = st.get("new", 0)
+    if untouched:
+        out.append(f"   без действий (никто не нажал «В работу/Отказ/Спам»): {untouched}")
     ex = (await s.execute(select(LabeledText.kind, LabeledText.text).where(LabeledText.created_at >= since)
                           .order_by(LabeledText.id.desc()).limit(12))).all()
     if ex:
@@ -71,6 +77,15 @@ async def report(s: AsyncSession, days: int = 7) -> str:
     closed = await _count(s, Group, Group.ads_allowed, Group.ad_closed_at.is_not(None))
     unchecked = await _count(s, Group, Group.ads_allowed, Group.ad_checked_at.is_(None))
     out.append(f"   групп для рекламы: {allowed}, закрыто сейчас: {closed}, ещё не проверено: {unchecked}")
+    sent_n, deleted_n = posts.get("sent", 0), posts.get("deleted", 0)
+    if sent_n + deleted_n:
+        out.append(f"   из опубликованных удалено группами: {deleted_n} из {sent_n + deleted_n} "
+                   f"({round(100 * deleted_n / (sent_n + deleted_n))}%)")
+    closed_rows = (await s.execute(select(Group.title, Group.ad_check).where(Group.ads_allowed, Group.ad_closed_at.is_not(None))
+                                   .limit(15))).all()
+    if closed_rows:
+        out.append("   Закрытые сейчас (почему):")
+        out += [f"   • {_anon(tt, 50)} — {_anon(chk, 120) or 'нет данных'}" for tt, chk in closed_rows]
 
     # 4. разведчики и группы
     accs = (await s.execute(select(ScoutAccount.name, ScoutAccount.status, ScoutAccount.enabled))).all()
@@ -99,5 +114,13 @@ async def report(s: AsyncSession, days: int = 7) -> str:
         tips.append("есть непроверенные группы для рекламы — 🔍 Группы → 📢 → «🔎 Проверить все разрешённые»")
     if reasons:
         tips.append("посты не выходят — посмотрите причины в пункте 3")
+    if allowed and closed * 2 >= allowed:
+        tips.append("больше половины групп для рекламы закрыты — чаще всего разведчик «замьючен» ботом-капчей: зайдите "
+                    "в аккаунт разведчика с телефона и вручную нажмите «я не бот» / выполните условия в этих группах "
+                    "(список — в 📢 Группы для рекламы, отмечены 🔒), потом «🔎 Проверить все разрешённые»")
+    if sent_n + deleted_n and deleted_n * 2 >= sent_n + deleted_n:
+        tips.append("группы удаляют много рекламы — оставьте для рекламы только свои группы и те, где договорились с админом")
+    if untouched >= 20:
+        tips.append("много заявок без действий — спросите пользователей, те ли заявки им приходят (ниши, слова)")
     out += ["", "6) ЧТО СДЕЛАТЬ: " + ("; ".join(tips) if tips else "явных проблем нет 👍")]
     return "\n".join(out)
