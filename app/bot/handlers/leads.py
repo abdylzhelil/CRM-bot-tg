@@ -24,13 +24,6 @@ async def category_name(s, cat_id: int | None) -> str:
     return f"{(parent or cat).emoji} {parent.name + ' → ' if parent else ''}{cat.name}".strip()
 
 
-async def send_card(msg: Message, s, d: Delivery, lead: Lead, user: User) -> None:
-    await msg.answer(
-        notify.lead_text(lead, await category_name(s, lead.category_id)),
-        reply_markup=notify.lead_keyboard(lead, d.id, user.is_admin), disable_web_page_preview=True,
-    )
-
-
 LISTS = (("new", "🆕 Новые"), ("postponed", "⏰ Отложенные"), ("taken", "✅ В работе"),
          ("rejected", "❌ Отказ"), ("spam", "🚫 Спам"))
 PAGE = 5

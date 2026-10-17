@@ -14,13 +14,14 @@ class ValidationError(Exception):
 
 async def get_profile(s, user: User) -> dict:
     user = await s.get(User, user.tg_id)  # свежие данные из базы, а не копия из начала запроса
-    roots = (await s.scalars(
-        select(Category).where(Category.parent_id.is_(None), Category.enabled, ~Category.pending).order_by(Category.id)
-    )).all()
+    from app.services import niches
+
+    groups = await niches.grouped(s)
     mine = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == user.tg_id))).all())
     negatives = (await s.scalars(select(UserNegative.word).where(UserNegative.user_id == user.tg_id).order_by(UserNegative.id))).all()
     return {
-        "niches": [{"id": c.id, "name": c.name, "emoji": c.emoji, "on": c.id in mine} for c in roots],
+        "niches": [{"id": c.id, "name": c.name, "emoji": c.emoji, "on": c.id in mine, "section": title}
+                   for title, cats in groups for c in cats],
         "city": user.city,
         "only_city": user.only_city,
         "quiet_hours": user.quiet_hours,

@@ -7,8 +7,8 @@ from sqlalchemy import select
 from app.bot import notify
 from app.bot.common import alert, ask, esc, kb, reply, pairs
 from app.db import Session
-from app.models import Category, Group, User, UserCategory
-from app.services import ads, catalog, geo, levels, settings
+from app.models import Group, User, UserCategory
+from app.services import ads, catalog, geo, levels, niches, settings
 
 router = Router()
 
@@ -92,8 +92,7 @@ async def grp_link(s, m: Message, d, text):
         g = await catalog.start_submission(s, user, info)
     except catalog.SubmitError as e:
         return await m.answer(f"⚠️ {esc(str(e))}")
-    roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), Category.enabled).order_by(Category.id))).all()
-    rows = pairs([(f"{c.emoji} {c.name}", f"cg:cat:{g.id}:{c.id}") for c in roots])
+    rows = await _section_rows(s, g.id)
     await m.answer(
         f"{KIND[g.kind]} <b>{esc(g.title)}</b> — {g.members} уч.\nК какой нише относится?",
         reply_markup=kb(rows), disable_web_page_preview=True)
@@ -105,6 +104,37 @@ async def grp_city(s, m: Message, d, text):
         return await m.answer("Эта заявка уже обработана.")
     g.city = text.strip()[:64]
     await submit(m, s, g)
+
+
+async def _section_rows(s, gid: int) -> list:
+    """Сначала раздел ниш (их 10), потом ниша внутри — вместо 45 кнопок подряд."""
+    groups = await niches.grouped(s)
+    return pairs([(title, f"cg:sec:{gid}:{i}") for i, (title, _) in enumerate(groups)])
+
+
+@router.callback_query(F.data.regexp(r"^cg:sec:\d+:\d+$"))
+async def pick_section(cb: CallbackQuery, user: User) -> None:
+    _, _, gid, i = cb.data.split(":")
+    async with Session() as s:
+        if not _mine_draft(await s.get(Group, int(gid)), user):
+            return await cb.answer("Эта заявка уже обработана", show_alert=True)
+        groups = await niches.grouped(s)
+    if int(i) >= len(groups):
+        return await cb.answer("Список ниш обновился — откройте заново", show_alert=True)
+    title, cats = groups[int(i)]
+    rows = pairs([(f"{c.emoji} {c.name}", f"cg:cat:{gid}:{c.id}") for c in cats])
+    rows.append([("◀️ Все разделы", f"cg:secs:{gid}")])
+    await reply(cb, f"<b>{esc(title)}</b>\nК какой нише относится группа?", kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^cg:secs:\d+$"))
+async def pick_sections(cb: CallbackQuery, user: User) -> None:
+    gid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        if not _mine_draft(await s.get(Group, gid), user):
+            return await cb.answer("Эта заявка уже обработана", show_alert=True)
+        rows = await _section_rows(s, gid)
+    await reply(cb, "К какой нише относится группа? Выберите раздел:", kb(rows))
 
 
 def _mine_draft(g: Group | None, user: User) -> bool:
@@ -178,8 +208,7 @@ async def resume(cb: CallbackQuery, user: User) -> None:
         g = await s.get(Group, int(cb.data.split(":")[2]))
         if not await catalog.resume(s, g, user):
             return await cb.answer("Эта группа уже обработана", show_alert=True)
-        roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), Category.enabled).order_by(Category.id))).all()
-    rows = pairs([(f"{c.emoji} {c.name}", f"cg:cat:{g.id}:{c.id}") for c in roots])
+        rows = await _section_rows(s, g.id)
     await reply(cb, f"{KIND[g.kind]} <b>{esc(g.title)}</b>\nК какой нише относится? (дальше — город и отправка на проверку)",
                 kb(rows + [[("◀️ Мои группы", "cg:my")]]))
 

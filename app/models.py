@@ -119,6 +119,7 @@ class Category(Base):
     city: Mapped[str] = mapped_column(String(64), default="")  # фильтр по городу (напр. Махачкала)
     reply_template: Mapped[str] = mapped_column(Text, default="")
     prices: Mapped[str] = mapped_column(Text, default="")
+    section: Mapped[str] = mapped_column(String(48), default="")  # раздел в списке ниш («💻 Онлайн и IT»); пусто — «📌 Другое»
     # ниша, которую предложил пользователь: ждёт проверки администратором (пока pending — никому не показывается)
     proposed_by: Mapped[int] = mapped_column(BigInteger, default=0)
     pending: Mapped[bool] = mapped_column(Boolean, default=False)

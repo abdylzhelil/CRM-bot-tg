@@ -30,7 +30,10 @@ async def back(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("cat:open:"))
 async def open_cat(cb: CallbackQuery) -> None:
-    cid = int(cb.data.split(":")[2])
+    await show_cat(cb, int(cb.data.split(":")[2]))
+
+
+async def show_cat(cb: CallbackQuery, cid: int) -> None:
     async with Session() as s:
         c = await s.get(Category, cid)
         subs = (await s.scalars(select(Category).where(Category.parent_id == cid).order_by(Category.id))).all()
@@ -39,7 +42,8 @@ async def open_cat(cb: CallbackQuery) -> None:
         return await categories_menu(cb)
     text = (
         f"{c.emoji} <b>{esc(c.name)}</b> {'' if c.enabled else '(выключена)'}\n"
-        f"Город: {esc(c.city) or 'любой'}\n"
+        + (f"Раздел в списке ниш: {esc(c.section or '📌 Другое')}\n" if not c.parent_id else "")
+        + f"Город: {esc(c.city) or 'любой'}\n"
         f"Шаблон ответа: {esc(c.reply_template[:200]) or '—'}\nЦены: {esc(c.prices[:200]) or '—'}"
     )
     rows = [[(("" if x.enabled else "⏸ ") + x.name, f"cat:open:{x.id}")] for x in subs]
@@ -49,7 +53,36 @@ async def open_cat(cb: CallbackQuery) -> None:
         [("✏️ Переименовать", f"cat:ren:{cid}"), ("⏯ Вкл/выкл", f"cat:tog:{cid}"), ("🗑 Удалить", f"cat:del:{cid}")],
         [("➕ Подкатегория", f"cat:add:{cid}"), ("◀️ Назад", f"cat:open:{c.parent_id}" if c.parent_id else "cat:menu")],
     ]
+    if not c.parent_id:
+        rows.insert(-1, [("📂 Раздел", f"cat:sec:{cid}")])
     await reply(cb, text, kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^cat:sec:\d+$"))
+async def choose_section(cb: CallbackQuery) -> None:
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        c = await s.get(Category, cid)
+        names = await niches.all_sections(s)
+    if c is None:
+        return await cb.answer("Категория уже удалена", show_alert=True)
+    rows = pairs([(("✅ " if (c.section or "📌 Другое") == n else "") + n, f"cat:secset:{cid}:{i}") for i, n in enumerate(names)])
+    rows.append([("◀️ Назад", f"cat:open:{cid}")])
+    await reply(cb, f"📂 В каком разделе показывать нишу «{esc(c.name)}»?", kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^cat:secset:\d+:\d+$"))
+async def set_section(cb: CallbackQuery) -> None:
+    _, _, cid, i = cb.data.split(":")
+    async with Session() as s:
+        c = await s.get(Category, int(cid))
+        names = await niches.all_sections(s)
+        if c is None or int(i) >= len(names):
+            return await cb.answer("Список изменился — откройте заново", show_alert=True)
+        c.section = names[int(i)]
+        await s.commit()
+    await cb.answer("Раздел сохранён")
+    await show_cat(cb, int(cid))
 
 
 @router.callback_query(F.data.startswith("cat:tog:"))

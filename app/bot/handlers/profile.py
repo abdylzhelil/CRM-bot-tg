@@ -9,7 +9,7 @@ from app import config
 from app.bot.common import ask, esc, kb, reply, pairs
 from app.db import Session
 from app.models import PLANS, Category, Delivery, Lead, User, UserCategory, UserNegative
-from app.services import autosetup, geo, payments, referrals, settings
+from app.services import autosetup, geo, niches, payments, referrals, settings
 from app.services.distribute import is_paid, preview
 
 router = Router()
@@ -20,21 +20,32 @@ WELCOME = (
 )
 
 
+async def _chosen(s, user_id: int) -> set[int]:
+    return set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == user_id))).all())
+
+
 async def niches_keyboard(user_id: int, onboarding: bool):
+    """Главный экран ниш: разделы (с числом выбранных), поиск, своя ниша, далее."""
     async with Session() as s:
-        roots = (await s.scalars(
-            select(Category).where(Category.parent_id.is_(None), Category.enabled).order_by(Category.id)
-        )).all()
-        mine = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == user_id))).all())
-    rows = pairs([(("✅ " if c.id in mine else "⬜ ") + f"{c.emoji} {c.name}", f"ob:cat:{c.id}") for c in roots])
-    rows.append([("➕ Предложить свою нишу", "ob:propose")])
+        groups = await niches.grouped(s)
+        mine = await _chosen(s, user_id)
+    names = [c.name for _, cats in groups for c in cats if c.id in mine]
+    buttons = []
+    for i, (title, cats) in enumerate(groups):
+        n = sum(c.id in mine for c in cats)
+        buttons.append((title + (f" · ✅{n}" if n else ""), f"ob:sec:{i}"))
+    rows = pairs(buttons)
+    rows.append([("🔎 Найти нишу по слову", "ob:find")])
+    rows.append([("➕ Нет моей ниши — предложить", "ob:propose")])
     rows.append([("Далее ➡️" if onboarding else "✔ Готово", "ob:done")])
-    return kb(rows), len(mine)
+    return kb(rows), names
 
 
 async def show_niches(target, user: User) -> None:
-    markup, count = await niches_keyboard(user.tg_id, not user.onboarded)
-    text = "🎯 <b>Ваши ниши</b> — по ним приходят заявки. Отметьте одну или несколько:"
+    markup, names = await niches_keyboard(user.tg_id, not user.onboarded)
+    chosen = ("Выбрано: " + esc(", ".join(names))) if names else "Пока ничего не выбрано."
+    text = ("🎯 <b>Ваши ниши</b> — по ним приходят заявки.\nОткройте раздел и отметьте свои "
+            "или нажмите «🔎 Найти» и напишите, чем занимаетесь (например: сантехник, торты, сайты).\n\n" + chosen)
     if not user.onboarded:
         async with Session() as s:
             days = await settings.get_int(s, "cleanup_days")
@@ -43,6 +54,32 @@ async def show_niches(target, user: User) -> None:
     if not user.onboarded and isinstance(target, Message):
         text = WELCOME + "\n\n" + text
     await reply(target, text, markup)
+
+
+async def show_section(target, user: User, index: int) -> None:
+    async with Session() as s:
+        groups = await niches.grouped(s)
+        mine = await _chosen(s, user.tg_id)
+    if not 0 <= index < len(groups):
+        return await show_niches(target, user)
+    title, cats = groups[index]
+    rows = pairs([(("✅ " if c.id in mine else "⬜ ") + f"{c.emoji} {c.name}", f"ob:cat:{c.id}") for c in cats])
+    rows.append([("◀️ Все разделы", "ob:secs"), ("✔ Готово" if user.onboarded else "Далее ➡️", "ob:done")])
+    await reply(target, f"<b>{esc(title)}</b>\nОтметьте свои ниши (можно несколько):", kb(rows))
+
+
+async def show_found(target, user: User, query: str) -> None:
+    async with Session() as s:
+        found = await niches.find(s, query)
+        mine = await _chosen(s, user.tg_id)
+    if not found:
+        return await reply(target, f"🔎 По слову «{esc(query)}» ниши не нашлось.", kb([
+            [("🔎 Другое слово", "ob:find"), ("◀️ Все разделы", "ob:secs")],
+            [("➕ Предложить свою нишу", "ob:propose")]]))
+    rows = [[(("✅ " if c.id in mine else "⬜ ") + f"{c.emoji} {c.name}", f"ob:fcat:{c.id}")] for c in found]
+    rows.append([("🔎 Искать ещё", "ob:find"), ("◀️ Все разделы", "ob:secs")])
+    rows.append([("✔ Готово" if user.onboarded else "Далее ➡️", "ob:done")])
+    await reply(target, f"🔎 Нашёл по «{esc(query)}» — нажмите, чтобы отметить:", kb(rows))
 
 
 def city_keyboard(user: User):
@@ -69,17 +106,48 @@ async def city_menu(m: Message, user: User) -> None:
     await show_city(m, user)
 
 
-@router.callback_query(F.data.startswith("ob:cat:"))
-async def toggle_niche(cb: CallbackQuery, user: User) -> None:
-    cid = int(cb.data.split(":")[2])
+async def _toggle(user: User, cid: int) -> Category | None:
     async with Session() as s:
+        cat = await s.get(Category, cid)
         row = await s.get(UserCategory, (user.tg_id, cid))
         if row:
             await s.delete(row)
-        elif await s.get(Category, cid):
+        elif cat:
             s.add(UserCategory(user_id=user.tg_id, category_id=cid))
         await s.commit()
+    return cat
+
+
+@router.callback_query(F.data.regexp(r"^ob:cat:\d+$"))
+async def toggle_niche(cb: CallbackQuery, user: User) -> None:
+    cat = await _toggle(user, int(cb.data.split(":")[2]))
+    async with Session() as s:
+        groups = await niches.grouped(s)
+    index = next((i for i, (_, cats) in enumerate(groups) if cat and any(c.id == cat.id for c in cats)), -1)
+    await show_section(cb, user, index)
+
+
+@router.callback_query(F.data.regexp(r"^ob:fcat:\d+$"))
+async def toggle_found(cb: CallbackQuery, user: User) -> None:
+    """Отметка из результатов поиска: отмечаем и показываем общий экран с выбранными."""
+    await _toggle(user, int(cb.data.split(":")[2]))
     await show_niches(cb, user)
+
+
+@router.callback_query(F.data.regexp(r"^ob:sec:\d+$"))
+async def open_section(cb: CallbackQuery, user: User) -> None:
+    await show_section(cb, user, int(cb.data.split(":")[2]))
+
+
+@router.callback_query(F.data == "ob:secs")
+async def all_sections(cb: CallbackQuery, user: User) -> None:
+    await show_niches(cb, user)
+
+
+@router.callback_query(F.data == "ob:find")
+async def find_niche(cb: CallbackQuery, state: FSMContext) -> None:
+    await ask(cb, state, "niche_find", "🔎 Напишите одним-двумя словами, чем занимаетесь или что продаёте.\n"
+              "Например: <i>сантехник</i>, <i>торты</i>, <i>сайты</i>, <i>маникюр</i>, <i>грузоперевозки</i>.")
 
 
 @router.callback_query(F.data == "reg:go")
@@ -94,9 +162,26 @@ async def resume_registration(cb: CallbackQuery, user: User) -> None:
 @router.callback_query(F.data == "ob:propose")
 async def propose_niche(cb: CallbackQuery, state: FSMContext) -> None:
     await ask(cb, state, "niche_propose", (
-        "➕ <b>Своя ниша</b>\nНапишите название и через двоеточие слова, по которым искать заявки (минимум 3):\n\n"
-        "<code>Ремонт квартир: ремонт, отделка, плитка, натяжные потолки</code>\n\n"
+        "➕ <b>Своя ниша</b>\nСначала загляните в «🔎 Найти нишу по слову» — почти всё уже есть.\n\n"
+        "Если не нашли: напишите название и через двоеточие слова, по которым искать заявки (минимум 3):\n\n"
+        "<code>Пчеловодство: пасека, улей, пчёлы, мёд</code>\n\n"
         "Администратор проверит, и ниша появится в списке (вам подключится сразу)."))
+
+
+@router.callback_query(F.data == "ob:propforce")
+async def propose_anyway(cb: CallbackQuery, user: User) -> None:
+    """«Всё равно предложить» после подсказки похожих ниш."""
+    from app.bot.handlers.inputs import send_proposal
+
+    text = PENDING_PROPOSALS.pop(user.tg_id, "")
+    if not text:
+        return await cb.answer("Напишите предложение ещё раз: ➕ Нет моей ниши — предложить", show_alert=True)
+    await cb.answer()
+    async with Session() as s:
+        await send_proposal(s, cb.message, user.tg_id, text)
+
+
+PENDING_PROPOSALS: dict[int, str] = {}  # текст предложения, пока человек смотрит похожие ниши
 
 
 @router.callback_query(F.data == "ob:done")
@@ -152,7 +237,7 @@ async def finish_onboarding(target, user: User) -> None:
     if isinstance(target, CallbackQuery):
         await target.answer()
     async with Session() as s:
-        niches = (await s.scalars(select(Category.name).join(UserCategory, UserCategory.category_id == Category.id)
+        names = (await s.scalars(select(Category.name).join(UserCategory, UserCategory.category_id == Category.id)
                                   .where(UserCategory.user_id == user.tg_id))).all()
         shown = await preview(s, user)
     async with Session() as s:
@@ -172,7 +257,7 @@ async def finish_onboarding(target, user: User) -> None:
         from app.bot import notify
 
         who = esc(user.name or str(user.tg_id)) + (f" (@{esc(user.username)})" if user.username else "")
-        await notify._send(f"🆕 Новый пользователь: {who}\nНиши: {esc(', '.join(niches))}\n"
+        await notify._send(f"🆕 Новый пользователь: {who}\nНиши: {esc(', '.join(names))}\n"
                            f"Город: {esc(user.city or 'вся Россия')}")
     async with Session() as s:
         await msg.answer(
@@ -210,7 +295,7 @@ async def plan_line(s, user: User) -> str:
 async def profile(target, user: User) -> None:
     async with Session() as s:
         user = await s.get(User, user.tg_id)
-        niches = (await s.scalars(
+        names = (await s.scalars(
             select(Category.name).join(UserCategory, UserCategory.category_id == Category.id)
             .where(UserCategory.user_id == user.tg_id)
         )).all()
@@ -220,7 +305,7 @@ async def profile(target, user: User) -> None:
     text = (
         f"👤 <b>Профиль</b>\n"
         f"Тариф: {plan}\n"
-        f"Ниши: {esc(', '.join(niches)) or '—'}\n"
+        f"Ниши: {esc(', '.join(names)) or '—'}\n"
         f"Город: {esc(user.city or 'вся Россия')}{' (только мой город)' if user.only_city else ''}\n"
         f"Минус-слова: {esc(', '.join(negatives)) or '—'}\n"
         f"Режим тишины: {esc(user.quiet_hours) or 'выключен'}\n"

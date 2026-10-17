@@ -9,7 +9,7 @@ from app.bot.handlers import adposts as adposts_h
 from app.bot.handlers import blacklist as blacklist_h
 from app.bot.handlers import clients as clients_h
 from app.db import Session
-from app.models import BlacklistEntry, Category, Keyword, ScoutAccount, SearchQuery
+from app.models import BlacklistEntry, Category, Keyword, ScoutAccount, SearchQuery, UserCategory
 from app.scout.client import parse_proxy
 from app.services import crm, quiet, rules, settings
 
@@ -261,22 +261,47 @@ async def pass_to(s, m, d, text):
 
 
 async def niche_propose(s, m, d, text):
+    from app.bot.handlers.profile import PENDING_PROPOSALS
+    from app.models import User
+    from app.services import niches
+
+    name, words = niches.parse(text)
+    if len(name) >= 3 and len(words) >= niches.MIN_WORDS:
+        same = await niches.similar(s, text)
+        if same and not any(c.name.casefold() == name.casefold() for c in same):  # точное совпадение — скажет propose
+            user = await s.get(User, m.from_user.id)
+            mine = {c.id for c in same if await s.get(UserCategory, (user.tg_id, c.id))}
+            PENDING_PROPOSALS[user.tg_id] = text
+            rows = [[(("✅ " if c.id in mine else "⬜ ") + f"{c.emoji} {c.name}", f"ob:fcat:{c.id}")] for c in same]
+            rows.append([("➕ Моей нет — всё равно предложить", "ob:propforce")])
+            return await m.answer("🔎 Похоже, такая ниша уже есть — нажмите, чтобы отметить:", reply_markup=kb(rows))
+    return await send_proposal(s, m, m.from_user.id, text)
+
+
+async def send_proposal(s, m, user_id: int, text: str):
     from app.bot import notify
     from app.bot.handlers.categories import proposal_card
     from app.models import User
     from app.services import niches
 
-    user = await s.get(User, m.from_user.id)
+    user = await s.get(User, user_id)
     try:
         cat = await niches.propose(s, user, text)
     except niches.NicheError as e:
         return await m.answer(f"⚠️ {esc(str(e))}") and False
     if user.is_admin:
         return await m.answer(f"✔ Ниша «{esc(cat.name)}» добавлена и подключена вам. "
-                              "Слова можно уточнить: 🛠 Управление → 🗂 Категории.")
+                              "Раздел и слова можно поменять: 🛠 Управление → 🗂 Категории.")
     await m.answer("✅ Отправлено администратору. Как только ниша появится в списке — напишу.")
     body, markup = await proposal_card(s, cat, user)
     await notify._send("📌 Новая ниша от пользователя:\n\n" + body, markup)
+
+
+async def niche_find(s, m, d, text):
+    from app.bot.handlers.profile import show_found
+    from app.models import User
+
+    await show_found(m, await s.get(User, m.from_user.id), text[:60])
 
 
 async def bc_text(s, m, d, text):
@@ -289,6 +314,7 @@ async def bc_text(s, m, d, text):
 HANDLERS = {
     "bc_text": bc_text,
     "niche_propose": niche_propose,
+    "niche_find": niche_find,
     "pass_to": pass_to,
     "ap_text": adposts_h.ap_text,
     "apa_reason": adposts_h.apa_reason,

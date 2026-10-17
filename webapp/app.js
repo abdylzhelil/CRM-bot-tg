@@ -223,11 +223,20 @@
   function buildProfile(p, auto) {
     var chosen = {};
     p.niches.forEach(function (n) { if (n.on) chosen[n.id] = true; });
-    var chips = el("div", { class: "chips" }, p.niches.map(function (n) {
+    // ниши по разделам: заголовок раздела, под ним его ниши
+    var chips = el("div", {}, []);
+    var lastSection = null, box = null;
+    p.niches.forEach(function (n) {
+      if (n.section !== lastSection) {
+        lastSection = n.section;
+        chips.appendChild(el("div", { class: "muted", text: n.section || "" }));
+        box = el("div", { class: "chips" }, []);
+        chips.appendChild(box);
+      }
       var b = el("button", { class: "chip" + (n.on ? " on" : ""), type: "button", text: n.emoji + " " + n.name });
       b.onclick = function () { if (chosen[n.id]) delete chosen[n.id]; else chosen[n.id] = true; b.className = "chip" + (chosen[n.id] ? " on" : ""); };
-      return b;
-    }));
+      box.appendChild(b);
+    });
     var city = el("input", { type: "text", maxlength: "64", value: p.city, placeholder: "Пусто — вся Россия" });
     var only = el("input", { type: "checkbox", checked: p.only_city });
     var quiet = el("input", { type: "text", maxlength: "8", value: p.quiet_hours, placeholder: "например 23-8" });
