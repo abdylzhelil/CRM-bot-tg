@@ -119,3 +119,32 @@ async def test_intents_added_to_old_base_once(session):
     await session.commit()
     await add_missing(session)
     assert not await session.scalar(select(Keyword.id).where(Keyword.kind == "intent", Keyword.word == "надо"))
+
+
+@pytest.mark.parametrize("text, lead", [
+    ("Ищу репетитора по английскому, нужен курс подготовки к ЕГЭ", True),
+    ("Ищу курсы вождения, нужен инструктор", True),
+    ("Кто продаёт кирпич? нужно 2 поддона", True),
+    ("Кто сдаёт квартиру посуточно? нужна на выходные", True),
+    ("Продам кирпич, нужно освободить склад", False),
+    ("Сдам квартиру посуточно, кто ищет пишите", False),
+    ("Бесплатное обучение с нуля! Нужен ноутбук и желание", False),
+])
+async def test_global_negatives(session, text, lead):
+    await seed(session)
+    assert bool(match(text, await rules.load_rules(session))) is lead
+
+
+async def test_negatives_fixed_on_old_base_once(session):
+    for w in ("делаю", "обучение", "курс", "резюме"):
+        session.add(Keyword(kind="negative", word=w))
+    await session.commit()
+    added = await add_missing(session)
+    assert "убрано минус-слово «курс»" in added and "минус-слово «продам»" in added
+    words = set((await session.scalars(select(Keyword.word).where(Keyword.kind == "negative"))).all())
+    assert "курс" not in words and "продам" in words and "делаю" in words
+    # админ вернул «курс» сам — повторно не убираем
+    session.add(Keyword(kind="negative", word="курс"))
+    await session.commit()
+    await add_missing(session)
+    assert await session.scalar(select(Keyword.id).where(Keyword.kind == "negative", Keyword.word == "курс"))

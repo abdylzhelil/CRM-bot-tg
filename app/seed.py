@@ -14,9 +14,16 @@ INTENTS = [
 ]
 INTENTS_KEY = "seed_intents"  # слова-намерения, которые уже добавлялись: удалённое админом не возвращаем
 NEGATIVES = [
-    "делаю", "предлагаю", "оказываю услуги", "наша студия", "вакансия", "резюме", "обучение",
-    "курс", "заработок",
+    "делаю", "предлагаю", "предлагаем", "оказываю услуги", "оказываем услуги", "наша студия", "вакансия",
+    "присылайте резюме", "отправляйте резюме", "заработок", "пассивный доход",
+    # 17.10: продавцы и арендодатели («Продам кирпич», «Сдам квартиру») — не заказчики; кто ищет — пишет «кто продаёт/сдаёт»
+    "продам", "продаю", "сдам", "сдаю",
+    "ищу работу", "ищу подработку", "в поиске работы", "розыгрыш", "подписывайтесь",
+    "бесплатное обучение", "обучение с нуля", "запись на курс", "онлайн-курс",
 ]
+# 17.10: убраны из общих минус-слов — резали настоящие заявки («нужен курс к ЕГЭ», «составить резюме», «обучение персонала»)
+NEGATIVES_REMOVED = ["обучение", "курс", "резюме"]
+NEGATIVES_KEY = "seed_negatives_v2"
 QUERIES = [
     "бизнес", "предприниматели", "фриланс", "заказы", "объявления", "Москва бизнес",
     "Махачкала", "Дагестан", "Avito продавцы", "маркетплейсы", "аренда",
@@ -317,6 +324,19 @@ async def add_missing(session: AsyncSession) -> list[str]:
         row.value = value
     else:
         session.add(Setting(key=SEEN_KEY, value=value))
+    # общие минус-слова: один раз убрать вредные и добавить новые (потом админ правит сам — не трогаем)
+    if await session.get(Setting, NEGATIVES_KEY) is None:
+        glob = (await session.scalars(select(Keyword).where(Keyword.kind == "negative", Keyword.category_id.is_(None)))).all()
+        have_n = {k.word.casefold() for k in glob}
+        for k in glob:
+            if k.word.casefold() in NEGATIVES_REMOVED:
+                await session.delete(k)
+                added.append(f"убрано минус-слово «{k.word}»")
+        for w in NEGATIVES:
+            if w.casefold() not in have_n:
+                session.add(Keyword(kind="negative", word=w))
+                added.append(f"минус-слово «{w}»")
+        session.add(Setting(key=NEGATIVES_KEY, value="1"))
     # новые слова-намерения — тоже только недостающие и только один раз
     irow = await session.get(Setting, INTENTS_KEY)
     iseen = set(filter(None, (irow.value if irow else "").split("|")))
