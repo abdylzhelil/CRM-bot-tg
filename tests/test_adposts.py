@@ -1381,3 +1381,16 @@ async def test_admin_cancel_paid_running_order_refunds_only_unpublished(maker, t
         assert await adposts.unpublished_value(s, order) == 0
     assert calls == [expected * 100]
     assert any(f"вернули {expected} ₽" in t and "за них не возвращаем" in t for t in tgbot.texts(70))
+
+
+async def test_availability_explains_few_groups(maker, tgbot):
+    await setup_group(maker, price=100)
+    async with maker() as s:
+        s.add(Group(tg_id=-201, username="off", title="Выключена", members=50, status="joined", kind="group", account_id=1))
+        s.add(Group(tg_id=-202, username="cl", title="Закрыта", members=50, status="joined", kind="group", account_id=1,
+                    ads_allowed=True, ad_closed_at=now()))
+        s.add(Group(tg_id=-203, username="q", title="В очереди", members=500, status="approved", kind="group"))
+        await s.commit()
+        text = "\n".join(await adposts.availability(s))
+    assert "видит сейчас: <b>1</b>" in text and "Закрыты для сообщений сейчас: 1" in text
+    assert "Выключены (вами" in text and "Ещё 1 групп ждут вступления" in text

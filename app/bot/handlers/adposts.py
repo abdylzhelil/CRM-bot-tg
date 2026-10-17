@@ -677,8 +677,9 @@ async def groups_for_ads(cb: CallbackQuery) -> None:
         groups = (await s.scalars(select(Group).where(Group.status == "joined", Group.username != "")
                                   .order_by(Group.ads_allowed.desc(), Group.members.desc()).limit(30))).all()
         default = await settings.get_int(s, "adpost_price")
+        summary = "\n".join(await adposts.availability(s))
     if not groups:
-        return await cb.answer("Пока нет подходящих групп и каналов", show_alert=True)
+        return await reply(cb, "📢 Пока нет групп, где состоит разведчик.\n\n" + summary, kb([[("◀️ Назад", "gr:menu")]]))
     rows = [[(("✅ " if g.ads_allowed else "⏸ ") + f"{KIND.get(g.kind, '')} {g.title[:28]} · {adposts.group_price(g, default)} ₽"
                + (" · 🕘" if g.ad_hours else "") + (" · 📝" if g.ad_note else "") + (" · 🔒" if g.ad_closed_at else ""), f"apg:o:{g.id}")]
             for g in groups]
@@ -686,7 +687,7 @@ async def groups_for_ads(cb: CallbackQuery) -> None:
             [("✅ Разрешить везде", "apg:allow:1"), ("⏸ Запретить везде", "apg:allow:0")],
             [("🔎 Проверить все разрешённые", "apg:checkall")],
             [("📨 Готовое сообщение клиенту", "apg:share")]]
-    await reply(cb, ("📢 Группы и каналы для рекламы. ✅ — разрешено (покупатель видит и может выбрать). "
+    await reply(cb, (summary + "\n\n📢 Группы и каналы для рекламы. ✅ — разрешено (покупатель видит и может выбрать). "
                      "Нажмите на любую — разрешить/запретить и цена. Кнопки внизу меняют сразу все:"),
                 kb(rows + bulk + [[("◀️ Назад", "gr:menu")]]))
 

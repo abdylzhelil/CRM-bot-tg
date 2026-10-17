@@ -71,6 +71,36 @@ async def eligible_groups(s: AsyncSession, city: str = "", photo: bool = False) 
     return sorted(rows, key=lambda g: 0 if city and g.city.lower() == city.lower() else 1)
 
 
+async def availability(s: AsyncSession) -> list[str]:
+    """Почему покупатель видит мало групп: короткая сводка для админа («📢 Группы для рекламы»)."""
+    joined = (await s.scalars(select(Group).where(Group.status == "joined"))).all()
+    visible = await eligible_groups(s)
+    allowed = [g for g in joined if g.ads_allowed]
+    off = [g for g in joined if not g.ads_allowed]
+    auto_off = [g for g in off if g.ad_checked_at and (g.ad_check or "").startswith(("⛔", "🔴"))]
+    rules = [g for g in off if g.ad_rules and not g.ad_agreed and rules_verdict(g.ad_rules)]
+    closed = [g for g in allowed if g.ad_closed_at]
+    no_pub = [g for g in allowed if g not in visible and not g.ad_closed_at]
+    queue = await s.scalar(select(func.count()).select_from(Group).where(Group.status == "approved")) or 0
+    lines = [f"👀 Покупатель видит сейчас: <b>{len(visible)}</b> (с картинкой — {sum(not g.no_media for g in visible)})",
+             f"👥 Разведчик состоит в группах: {len(joined)}, из них реклама разрешена: {len(allowed)}"]
+    if closed:
+        lines.append(f"🔒 Закрыты для сообщений сейчас: {len(closed)} (бот перепроверяет каждые 2 ч)")
+    if no_pub:
+        lines.append(f"👤 Нет аккаунта, которому можно публиковать: {len(no_pub)} (👤 Аккаунты → разрешить публикацию)")
+    if rules:
+        lines.append(f"📜 Реклама запрещена правилами группы: {len(rules)} (если договорились — «🤝 Договорился с админом»)")
+    if auto_off:
+        lines.append(f"⛔ Проверка показала, что публиковать нельзя: {len(auto_off)}")
+    rest = len(off) - len(rules) - len(auto_off)
+    if rest > 0:
+        lines.append(f"⏸ Выключены (вами или ботом после неудачной публикации): {rest} — «✅ Разрешить везде», "
+                     "потом «🔎 Проверить все разрешённые»")
+    if queue:
+        lines.append(f"⏳ Ещё {queue} групп ждут вступления разведчика (до 10 в день на аккаунт) — потом их можно разрешить")
+    return lines
+
+
 # правила группы: реклама запрещена / только через админа / платно — разведчику туда без договорённости нельзя
 _RULES_BAN = re.compile(
     r"(реклам\w*[^.\n]{0,40}(запрещ|нельзя|не\s*допуска|бан|удаля)|без\s*реклам|no\s*ads|"
