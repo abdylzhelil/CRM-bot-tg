@@ -63,17 +63,25 @@ async def show_menu(target, user: User) -> None:
     async with Session() as s:
         if not await adposts.enabled(s):
             text = "Реклама в группах пока не подключена."
+            if user.is_admin:
+                text += " Включить: 🛠 Управление → ⚙️ Настройки → 🔍 Разведчик → «Реклама вкл» = 1."
             if isinstance(target, CallbackQuery):
                 return await target.answer(text, show_alert=True)
             return await target.answer(text)
         groups = len(await adposts.eligible_groups(s))
         mine = await s.scalar(select(func.count()).select_from(AdOrder).where(AdOrder.user_id == user.tg_id, AdOrder.status != "draft"))
     cost = "у каждой группы и канала своя (смотрите в списке)" if groups else "—"
+    admin_tip = ""
+    if user.is_admin:
+        admin_tip = ("\n\n👑 <b>Вы администратор</b>: ваши заказы бесплатные и сразу встают в очередь, без проверки."
+                     + ("" if groups else "\n⚠️ Нет групп для рекламы — разрешите их: 🛠 Управление → 🔍 Группы → "
+                                          "📢 Группы для рекламы."))
     await reply(target, (
         "📣 <b>Реклама в группах и каналах</b>\n\n"
         "Вы присылаете текст, выбираете группы или каналы — мы публикуем ваше объявление там.\n\n"
         f"💰 Стоимость: {cost}\n👥 Доступно мест: {groups}\n\n"
         f"Не принимаем: {FORBIDDEN}. Каждый заказ проверяет администратор; под постом будет пометка «Реклама»."
+        + admin_tip
     ), kb(([[("➕ Новый заказ", "ap:new")], [("📋 Куда можно разместить (список и цены)", "ap:list")]] if groups else [])
           + [[(f"🧾 Мои заказы ({mine})", "ap:mine")], [("◀️ Назад", "cg:menu")]]))
 
@@ -116,7 +124,8 @@ async def ap_new(cb: CallbackQuery, state: FSMContext) -> None:
 async def ap_text(s, m: Message, d, text, photo: str = ""):
     """Текст (или картинка с подписью) получен → черновик → выбор групп."""
     try:
-        order = await adposts.new_draft(s, m.from_user.id, text, photo)
+        me = await s.get(User, m.from_user.id)
+        order = await adposts.new_draft(s, m.from_user.id, text, photo, admin=bool(me and me.is_admin))
     except adposts.AdError as e:
         await m.answer(str(e))
         return False if ("Текст рекламы" in str(e) or "подпись" in str(e)) else None
@@ -238,7 +247,7 @@ async def summary(s, order: AdOrder, admin: bool = False) -> str:
     if admin and order.ai_check:
         pic += f"🤖 ИИ о тексте: {esc(order.ai_check)}\n"
     return (f"📣 <b>Заказ №{order.id}</b> — {adposts.STATUS[order.status]}\n{who}💰 {price}\n{pic}\n"
-            f"{esc(order.text[:700])}\n\nГруппы:\n" + "\n".join(lines) + tail)
+            f"{esc(order.text[:700])}\n\nГруппы:\n" + ("\n".join(lines) or "— (не выбраны)") + tail)
 
 
 def queue_note(p, g: Group) -> str:
@@ -272,14 +281,18 @@ async def ap_review(cb: CallbackQuery, user: User) -> None:
         text = await summary(s, order)
         when = await adposts.estimate(s, adposts.selected(order))
         auto = await settings.get(s, "adpost_auto_refund") == "1"
+    if user.is_admin:
+        total = 0  # своя реклама владельца — бесплатно и без проверки
     cost = f"\n\nИтого: {total} ₽" if total else "\n\nИтого: бесплатно"
     if when:
         cost += f"\n⏱ Публикация займёт {when}: посты выходят по очереди, чтобы Telegram не счёл это спамом."
     if total:
         cost += ("\n💸 Если в какой-то группе пост не выйдет или его удалят модераторы группы — деньги за эту группу "
                  + ("вернутся автоматически." if auto else "вернём."))
-    await reply(cb, text + cost + "\n\nОтправить заказ на проверку администратору?",
-                kb([[("📨 Отправить на проверку", f"ap:send:{order.id}")], [("✏️ Изменить группы", f"ap:pick:{order.id}")],
+    question, button = (("\n\nВы администратор: заказ сразу встанет в очередь.", "🚀 Опубликовать") if user.is_admin
+                        else ("\n\nОтправить заказ на проверку администратору?", "📨 Отправить на проверку"))
+    await reply(cb, text + cost + question,
+                kb([[(button, f"ap:send:{order.id}")], [("✏️ Изменить группы", f"ap:pick:{order.id}")],
                     [("❌ Отмена", f"ap:cancel:{order.id}")]]))
 
 
@@ -312,9 +325,15 @@ async def ap_send(cb: CallbackQuery, user: User) -> None:
         if order is None:
             return
         try:
-            await adposts.submit(s, order)
+            await adposts.submit(s, order, admin=user.is_admin)
+            if user.is_admin:  # своя реклама владельца: без проверки и оплаты — сразу в очередь
+                await adposts.approve(s, order)
         except adposts.AdError as e:
             return await alert(cb, str(e))
+        if user.is_admin:
+            return await reply(cb, f"✅ Ваш заказ №{order.id} сразу поставлен в очередь (вы администратор — без проверки и оплаты). "
+                                   "Посты выйдут по очереди, ход видно в «📋 Мои заказы».",
+                               kb([[("📋 Мои заказы", "ap:mine")], [("◀️ Назад", "cg:menu")]]))
         ai_ok = await adposts.ai_check(s, order)  # ИИ-помощник проверяет текст (если подключён)
         auto = await adposts.maybe_auto_approve(s, order, ai_ok)  # чистый заказ — без участия администратора
         text = await summary(s, order, admin=True)
@@ -355,7 +374,25 @@ async def ap_open(cb: CallbackQuery, user: User) -> None:
         rows.append([("💳 Оплатить", f"ap:pay:{order.id}")])
     if order.status in ("pending", "approved"):
         rows.append([("❌ Отменить заказ", f"ap:cancel:{order.id}")])
+    if order.status in adposts.REPEATABLE:
+        rows.append([("🔁 Заказать снова (тот же текст)", f"ap:again:{order.id}")])
     await reply(cb, text, kb(rows + [[("◀️ Назад", "ap:mine")]]))
+
+
+@router.callback_query(F.data.regexp(r"^ap:again:\d+$"))
+async def ap_again(cb: CallbackQuery, user: User) -> None:
+    """Повтор завершённого/отменённого заказа: тот же текст и картинка, группы можно поменять перед отправкой.
+    Админ может повторить и чужой заказ — новый заказ будет его (бесплатно, без проверки)."""
+    async with Session() as s:
+        old = await s.get(AdOrder, int(cb.data.split(":")[2]))
+        if old is None or not (old.user_id == user.tg_id or user.is_admin):
+            return await cb.answer("Заказ не найден", show_alert=True)
+        try:
+            new = await adposts.repeat(s, old, user.tg_id, admin=user.is_admin)
+        except adposts.AdError as e:
+            return await alert(cb, str(e))
+        await cb.answer(f"Новый заказ №{new.id} — проверьте группы")
+        await show_picker(cb, s, new, user.city)
 
 
 @router.callback_query(F.data.regexp(r"^ap:pay:\d+$"))
@@ -442,6 +479,8 @@ async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
         rows.append([("↩️ Вернуть всю сумму" if pay.refunded_amount else "↩️ Вернуть деньги", f"rf:ask:{pay.id}")])
     if order.status in ("approved", "running", "pending"):
         rows.append([("🚫 Отменить заказ (с причиной)", f"apa:cancel:{order.id}")])
+    if order.status in adposts.REPEATABLE:
+        rows.append([("🔁 Опубликовать этот текст снова (от меня)", f"ap:again:{order.id}")])
     return rows
 
 

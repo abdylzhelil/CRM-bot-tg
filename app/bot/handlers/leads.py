@@ -46,7 +46,10 @@ def card_keyboard(lead: Lead, d: Delivery, user: User, client_id: int | None = N
         return notify.lead_keyboard(lead, d.id, user.is_admin)
     if d.status == "taken":
         return kb([[("👤 Открыть клиента", f"cl:open:{client_id}")]]) if client_id else None
-    return kb([[("✍️ Написать", f"url:{lead_actions.contact_url(lead)}"), ("↩️ Вернуть в новые", f"lead:restore:{d.id}")]])
+    rows = [[("✍️ Написать", f"url:{lead_actions.contact_url(lead)}"), ("↩️ Вернуть в новые", f"lead:restore:{d.id}")]]
+    if user.is_admin and d.status == "rejected":
+        rows.append([("🙅 Исполнитель (научить фильтр)", f"lead:offer:{d.id}")])
+    return kb(rows)
 
 
 async def send_card(msg: Message, s, d: Delivery, lead: Lead, user: User) -> None:
@@ -132,7 +135,10 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
     if action == "restore":
         markup = notify.lead_keyboard(lead, d.id, user.is_admin)  # снова все кнопки, как у новой
     else:  # не тупик: ошибся кнопкой — можно вернуть
-        markup = kb([[(f"✔ {note}", "noop"), ("↩️ Вернуть", f"lead:restore:{d.id}")]])
+        rows = [[(f"✔ {note}", "noop"), ("↩️ Вернуть", f"lead:restore:{d.id}")]]
+        if user.is_admin and action in ("later", "reject"):  # «Отказ» по рекламе услуг — можно ещё научить фильтр
+            rows.append([("🙅 Исполнитель (научить фильтр)", f"lead:offer:{d.id}")])
+        markup = kb(rows)
     await cb.message.edit_reply_markup(reply_markup=markup)
     await cb.answer(note)
 

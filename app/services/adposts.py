@@ -148,7 +148,7 @@ def remove_photo(name: str) -> None:
         media_path(name).unlink(missing_ok=True)
 
 
-async def new_draft(s: AsyncSession, user_id: int, text: str, photo: str = "") -> AdOrder:
+async def new_draft(s: AsyncSession, user_id: int, text: str, photo: str = "", admin: bool = False) -> AdOrder:
     """Черновик заказа: текст (или подпись к картинке) и, если есть, файл картинки."""
     if not await enabled(s):
         raise AdError("Реклама в группах сейчас не подключена.")
@@ -166,12 +166,36 @@ async def new_draft(s: AsyncSession, user_id: int, text: str, photo: str = "") -
         await s.delete(o)
     open_n = await s.scalar(select(func.count()).select_from(AdOrder).where(
         AdOrder.user_id == user_id, AdOrder.status.in_(OPEN_STATUSES)))
-    if (open_n or 0) >= 3:
+    if (open_n or 0) >= 3 and not admin:  # владельцу бота лимит не нужен
         raise AdError("У вас уже 3 незавершённых заказа. Дождитесь их или отмените лишние.")
     order = AdOrder(user_id=user_id, text=text, photo=photo)
     s.add(order)
     await s.commit()
     return order
+
+
+REPEATABLE = ("done", "canceled", "rejected")
+
+
+async def repeat(s: AsyncSession, order: AdOrder, user_id: int, admin: bool = False) -> AdOrder:
+    """«🔁 Заказать снова»: новый черновик с тем же текстом, картинкой (копия файла) и группами — остаётся выбрать и отправить.
+    Недоступные сейчас группы уберёт экран выбора."""
+    import shutil
+
+    if order.status not in REPEATABLE:
+        raise AdError("Этот заказ ещё в работе — повторить можно после завершения или отмены.")
+    photo = ""
+    if order.photo and media_path(order.photo).exists():
+        photo = new_photo_name()
+        shutil.copyfile(media_path(order.photo), media_path(photo))
+    try:
+        new = await new_draft(s, user_id, order.text, photo, admin=admin)
+    except AdError:
+        remove_photo(photo)
+        raise
+    new.group_ids = order.group_ids
+    await s.commit()
+    return new
 
 
 async def _claim(s: AsyncSession, order: AdOrder, before: tuple[str, ...], after: str) -> bool:
@@ -199,8 +223,9 @@ async def toggle_group(s: AsyncSession, order: AdOrder, group_id: int) -> None:
     await s.commit()
 
 
-async def submit(s: AsyncSession, order: AdOrder) -> AdOrder:
-    """Отправить заказ на проверку админу. Цена фиксируется сейчас."""
+async def submit(s: AsyncSession, order: AdOrder, admin: bool = False) -> AdOrder:
+    """Отправить заказ на проверку админу. Цена фиксируется сейчас.
+    admin — заказ владельца бота: бесплатно (сам себе не платит); одобряет вызывающий сразу."""
     if order.status != "draft":
         raise AdError("Заказ уже отправлен.")
     ids = selected(order)
@@ -209,7 +234,7 @@ async def submit(s: AsyncSession, order: AdOrder) -> AdOrder:
     allowed = {g.id for g in await eligible_groups(s, photo=bool(order.photo))}
     if not set(ids) <= allowed:
         raise AdError("Некоторые группы больше недоступны для рекламы — выберите заново.")
-    order.price = await price_of_groups(s, ids)
+    order.price = 0 if admin else await price_of_groups(s, ids)
     order.status = "pending"
     await s.commit()
     return order

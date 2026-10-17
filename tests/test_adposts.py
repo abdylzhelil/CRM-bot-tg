@@ -1249,3 +1249,52 @@ async def test_invite_own_scouts(maker, tgbot):
     conditions._invites.clear()
     assert await conditions.invite_scouts(None, 1, client, object(), 3) == 1  # больше наших нет — пригласили одного
     assert client.await_count == 2  # импорт контакта + приглашение
+
+
+async def test_repeat_canceled_order_and_admin_self_ad(maker, tgbot, monkeypatch, tmp_path):
+    """«🔁 Заказать снова» у отменённого заказа; заказ владельца — бесплатно и сразу в очередь."""
+    from app import config
+
+    monkeypatch.setattr(config, "MEDIA_DIR", str(tmp_path))
+    sent = AsyncMock()
+    monkeypatch.setattr(ah, "reply", sent)
+    await setup_group(maker, price=300)
+    async with maker() as s:
+        admin = await s.get(User, ADMIN_ID)
+        g = await s.scalar(select(Group))
+        photo = adposts.new_photo_name()
+        adposts.media_path(photo).write_bytes(b"img")
+        old = await adposts.new_draft(s, ADMIN_ID, "Продаю мёд с пасеки, 1 кг — 800 ₽, пишите @med", photo, admin=True)
+        old.group_ids = str(g.id)
+        await adposts.cancel(s, old)
+        old_id = old.id
+    # в карточке отменённого заказа есть «Заказать снова»
+    await ah.ap_open(cbq(f"ap:o:{old_id}", ADMIN_ID), admin)
+    assert f"ap:again:{old_id}" in [b.callback_data for row in sent.call_args.args[2].inline_keyboard for b in row]
+    await ah.ap_again(cbq(f"ap:again:{old_id}", ADMIN_ID), admin)
+    async with maker() as s:
+        new = await s.scalar(select(AdOrder).where(AdOrder.status == "draft"))
+        assert new.text.startswith("Продаю мёд") and new.group_ids == str(g.id)
+        assert new.photo and new.photo != photo and adposts.media_path(new.photo).exists()
+        new_id = new.id
+    # владелец отправляет — бесплатно, без проверки, посты в очереди
+    await ah.ap_send(cbq(f"ap:send:{new_id}", ADMIN_ID), admin)
+    async with maker() as s:
+        new = await s.get(AdOrder, new_id)
+        assert new.status == "running" and new.price == 0
+        assert await s.scalar(select(func.count()).select_from(AdPost).where(AdPost.order_id == new_id)) == 1
+
+
+async def test_repeat_not_allowed_for_running_or_strangers(maker, tgbot):
+    await setup_group(maker)
+    await make_user(maker, 71)
+    async with maker() as s:
+        g = await s.scalar(select(Group))
+        o = await adposts.new_draft(s, 71, "Ремонт телефонов быстро и недорого, звоните @fix")
+        o.group_ids = str(g.id)
+        await adposts.submit(s, o)
+        with pytest.raises(adposts.AdError):
+            await adposts.repeat(s, o, 71)
+    c = cbq(f"ap:again:{o.id}", 72)
+    await ah.ap_again(c, SimpleNamespace(tg_id=72, is_admin=False, city=""))
+    assert "не найден" in c.answer.call_args.args[0]

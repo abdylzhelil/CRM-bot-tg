@@ -91,3 +91,22 @@ async def test_admin_actions_blocked_for_users(maker):
     await inputs.on_input(m, state, user=User(tg_id=5, is_admin=False))
     async with maker() as s:
         assert await s.scalar(select(Keyword).where(Keyword.word == "взлом")) is None
+
+
+async def test_offer_button_stays_after_reject(maker):
+    """После «❌ Отказ» админ всё ещё может нажать «🙅 Исполнитель» и научить фильтр."""
+    from app.models import LabeledText
+
+    text = "Продаю ноутбуки дешевле чем на авито, пишите в личку, доставка по городу"
+    d, admin = await admin_delivery(maker, author_id=8, username="nik", name="Ник", text=text)
+    c = cb(f"lead:reject:{d.id}")
+    await leads.lead_action(c, admin)
+    markup = c.message.edit_reply_markup.call_args.kwargs["reply_markup"]
+    assert f"lead:offer:{d.id}" in [b.callback_data for row in markup.inline_keyboard for b in row]
+    await leads.lead_action(cb(f"lead:offer:{d.id}"), admin)
+    async with maker() as s:
+        assert await s.scalar(select(LabeledText).where(LabeledText.kind == "offer"))
+        d2 = await s.get(Delivery, d.id)
+        lead = await s.get(Lead, d2.lead_id)
+        kb2 = leads.card_keyboard(lead, d2, admin)
+    assert f"lead:offer:{d.id}" in [b.callback_data for row in kb2.inline_keyboard for b in row]
