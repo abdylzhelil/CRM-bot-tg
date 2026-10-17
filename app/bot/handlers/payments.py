@@ -310,11 +310,12 @@ async def refund_ask(cb: CallbackQuery, user: User) -> None:
             if pay.refunded_amount else "")
     await cb.message.answer(
         f"↩️ Платёж: {who} — {pay.amount / 100:.0f} {esc(pay.currency)}{part}, "
-        + (f"{pay.days} дн." if pay.days else "реклама в группах (неопубликованные посты будут отменены)") + hint, reply_markup=kb(rows))
+        + (f"{pay.days} дн." if pay.days else "реклама в группах (неопубликованные посты будут отменены)")
+        + (f"\nID платежа в ЮKassa: <code>{esc(pay.provider_id)}</code> (нажмите, чтобы скопировать — для поддержки)"
+           if pay.provider_id else "") + hint, reply_markup=kb(rows))
     await cb.answer()
 
 
-@router.callback_query(F.data.regexp(r"^rf:(money|tariff):\d+$"))
 async def explain(cb: CallbackQuery, s, where: str, error: str) -> None:
     """ИИ-помощник объясняет непонятную ошибку (часто по-английски) простыми словами — если подключён."""
     from app.services import brain
@@ -324,6 +325,7 @@ async def explain(cb: CallbackQuery, s, where: str, error: str) -> None:
         await cb.message.answer(esc(text))
 
 
+@router.callback_query(F.data.regexp(r"^rf:(money|tariff):\d+$"))
 async def refund_do(cb: CallbackQuery, user: User) -> None:
     loaded = await _load(cb, user)
     if loaded is None:
