@@ -212,11 +212,18 @@ async def main() -> None:
     manager = ScoutManager()
     bot, dp = build(manager)
     await manager.start()
-    tasks = [
-        asyncio.create_task(c)
-        for c in (manager.watchdog(), join_loop(manager), publish_loop(manager), search_loop(manager), rotation_loop(manager), reminder_loop(), delivery_loop(), channel_loop(), public_stats.stats_loop(bot),
-          backup.backup_loop(), expiry_loop(), payments_h.link_loop(), cleanup_loop(), retention_loop(), receipts_loop(), heartbeat.heartbeat_loop())
-    ]
+    from app.services import selfcheck
+
+    loops = {
+        "сторож разведчиков": manager.watchdog(), "вступление в группы": join_loop(manager), "публикация рекламы": publish_loop(manager),
+        "поиск групп": search_loop(manager), "ротация групп": rotation_loop(manager), "напоминания": reminder_loop(),
+        "раздача заявок": delivery_loop(), "открытые каналы": channel_loop(), "канал статистики": public_stats.stats_loop(bot),
+        "копия базы": backup.backup_loop(), "конец тарифов": expiry_loop(), "оплата по ссылкам": payments_h.link_loop(),
+        "чистка аккаунтов": cleanup_loop(), "срок хранения заявок": retention_loop(), "чеки": receipts_loop(),
+        "сторож (heartbeat)": heartbeat.heartbeat_loop(),
+    }
+    selfcheck.TASKS = {name: asyncio.create_task(c) for name, c in loops.items()}  # для «🧪 Самопроверки»
+    tasks = list(selfcheck.TASKS.values())
     await setup_profile(bot)
     await notify._send("🟢 Бот запущен (или перезапущен).")
     feed = await feed_server.start()

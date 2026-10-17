@@ -78,8 +78,24 @@ async def status_text() -> str:
 
 @router.callback_query(F.data == "st:status")
 async def status(cb: CallbackQuery) -> None:
-    await reply(cb, await status_text(), kb([[("🔄 Обновить", "st:status"), ("🩺 Отчёт о проблемах", "st:diag")],
-                                              [("◀️ Все настройки", "st:menu")]]))
+    await reply(cb, await status_text(), kb([[("🧪 Самопроверка", "st:check"), ("🩺 Отчёт о проблемах", "st:diag")],
+                                              [("🔄 Обновить", "st:status"), ("◀️ Все настройки", "st:menu")]]))
+
+
+@router.callback_query(F.data == "st:check")
+async def self_check(cb: CallbackQuery) -> None:
+    """Бот проверяет сам себя: что работает, что нет и что сделать. Ничего не публикует и не тратит."""
+    from app.bot.handlers import groups as groups_h
+    from app.services import selfcheck
+
+    await cb.answer("Проверяю…")
+    async with Session() as s:
+        rows = await selfcheck.run(s, cb.bot, getattr(groups_h, "manager", None))
+    text = selfcheck.render(rows)
+    for i in range(0, len(text), 3800):
+        await cb.message.answer(text[i:i + 3800])
+    await cb.message.answer("Что дальше:", reply_markup=kb([[("🧪 Ещё раз", "st:check"), ("🩺 Отчёт о проблемах", "st:diag")],
+                                                            [("◀️ Состояние бота", "st:status")]]))
 
 
 @router.callback_query(F.data == "st:diag")
