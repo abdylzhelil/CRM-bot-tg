@@ -78,3 +78,44 @@ async def test_add_missing_on_old_base_and_keeps_deleted(session):
     await session.commit()
     assert await add_missing(session) == []
     assert not await session.scalar(select(Category.id).where(Category.name == "Клининг"))
+
+
+@pytest.mark.parametrize("text, niche", [
+    ("Подскажите хорошего стоматолога в центре", "Медицина"),
+    ("Куплю кирпич, 2 поддона, с доставкой", "Стройматериалы"),
+    ("Сниму квартиру посуточно на выходные", "Посуточная аренда"),
+    ("Помогите настроить роутер, не работает вайфай", "Компьютерная помощь"),
+    ("Надо вывезти строительный мусор после ремонта", "Вывоз мусора и демонтаж"),
+    ("Где найти хорошего юриста по наследству?", "Юристы"),
+    ("Есть кто делает натяжные потолки?", "Потолки и полы"),
+])
+async def test_new_intents(session, text, niche):
+    await seed(session)
+    m = match(text, await rules.load_rules(session))
+    assert m and m.category_name.split(" → ")[0] == niche
+
+
+@pytest.mark.parametrize("text", [
+    "Всем привет, хорошего дня",
+    "Подскажите, во сколько завтра собрание?",
+    "Сегодня в Махачкале солнечно, надо гулять",
+])
+async def test_new_intents_no_false_leads(session, text):
+    await seed(session)
+    assert match(text, await rules.load_rules(session)) is None
+
+
+async def test_intents_added_to_old_base_once(session):
+    from app.seed import INTENTS
+
+    session.add(Keyword(kind="intent", word="ищу"))
+    await session.commit()
+    added = await add_missing(session)
+    assert "намерение «подскажите»" in added and "намерение «ищу»" not in added
+    words = (await session.scalars(select(Keyword.word).where(Keyword.kind == "intent"))).all()
+    assert len(words) == len(set(words)) == len(INTENTS)
+    # админ удалил «надо» — при следующем запуске не возвращается
+    await session.execute(delete(Keyword).where(Keyword.kind == "intent", Keyword.word == "надо"))
+    await session.commit()
+    await add_missing(session)
+    assert not await session.scalar(select(Keyword.id).where(Keyword.kind == "intent", Keyword.word == "надо"))

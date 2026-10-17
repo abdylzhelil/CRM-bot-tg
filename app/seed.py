@@ -8,7 +8,11 @@ INTENTS = [
     "ищу", "нужен", "нужна", "нужно", "требуется", "кто сделает", "кто может", "посоветуйте",
     "порекомендуйте", "подскажите кто", "сколько стоит", "ищем исполнителя", "заказать",
     "хочу заказать", "кто занимается",
+    # 17.10: частые формулировки заказчиков, которых не хватало («подскажите хорошего стоматолога», «куплю кирпич»…)
+    "подскажите", "помогите", "надо", "необходим", "ищется", "куплю", "сниму", "где найти", "где можно",
+    "где купить", "есть кто", "кто знает", "интересует", "в поиске",
 ]
+INTENTS_KEY = "seed_intents"  # слова-намерения, которые уже добавлялись: удалённое админом не возвращаем
 NEGATIVES = [
     "делаю", "предлагаю", "оказываю услуги", "наша студия", "вакансия", "резюме", "обучение",
     "курс", "заработок",
@@ -313,6 +317,20 @@ async def add_missing(session: AsyncSession) -> list[str]:
         row.value = value
     else:
         session.add(Setting(key=SEEN_KEY, value=value))
+    # новые слова-намерения — тоже только недостающие и только один раз
+    irow = await session.get(Setting, INTENTS_KEY)
+    iseen = set(filter(None, (irow.value if irow else "").split("|")))
+    have_i = {w.casefold() for w in (await session.scalars(select(Keyword.word).where(Keyword.kind == "intent"))).all()}
+    for w in INTENTS:
+        if w.casefold() not in have_i and w not in iseen:
+            session.add(Keyword(kind="intent", word=w))
+            added.append(f"намерение «{w}»")
+        iseen.add(w)
+    ivalue = "|".join(sorted(iseen))
+    if irow:
+        irow.value = ivalue
+    else:
+        session.add(Setting(key=INTENTS_KEY, value=ivalue))
     await session.commit()
     if added:
         from app.services import rules
