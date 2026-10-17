@@ -42,6 +42,11 @@ def kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[btn(t, d) for t, d in row] for row in rows])
 
 
+def pairs(buttons: list[tuple[str, str]], n: int = 2) -> list[list[tuple[str, str]]]:
+    """Кнопки по n в ряд — длинные списки (ниши) не растягиваются на весь экран."""
+    return [buttons[i:i + n] for i in range(0, len(buttons), n)]
+
+
 async def alert(cb: CallbackQuery, text: str) -> None:
     """Всплывающее окно. Telegram показывает до 200 знаков — длинную причину (например, ответ ЮKassa)
     дописываем обычным сообщением, а не падаем с ошибкой."""

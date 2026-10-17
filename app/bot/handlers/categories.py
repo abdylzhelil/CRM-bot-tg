@@ -3,7 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import delete, select
 
-from app.bot.common import ask, esc, kb, reply
+from app.bot.common import ask, esc, kb, reply, pairs
 from app.db import Session
 from app.models import Category, Keyword, User, UserCategory
 from app.services import niches, rules
@@ -17,7 +17,7 @@ async def categories_menu(target: Message | CallbackQuery) -> None:
         roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), ~Category.pending)
                                  .order_by(Category.id))).all()
         waiting = (await s.scalars(select(Category).where(Category.pending).order_by(Category.id))).all()
-    rows = [[(("" if c.enabled else "⏸ ") + f"{c.emoji} {c.name}", f"cat:open:{c.id}")] for c in roots]
+    rows = pairs([(("" if c.enabled else "⏸ ") + f"{c.emoji} {c.name}", f"cat:open:{c.id}") for c in roots])
     rows += [[(f"📌 На проверке: {c.name}", f"nc:open:{c.id}")] for c in waiting]
     rows.append([("➕ Новая категория", "cat:add:0")])
     await reply(target, "🗂 Категории:", kb(rows))

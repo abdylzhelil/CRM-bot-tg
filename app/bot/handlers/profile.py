@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import delete, func, select
 
 from app import config
-from app.bot.common import ask, esc, kb, reply
+from app.bot.common import ask, esc, kb, reply, pairs
 from app.db import Session
 from app.models import PLANS, Category, Delivery, Lead, User, UserCategory, UserNegative
 from app.services import autosetup, geo, payments, referrals, settings
@@ -26,7 +26,7 @@ async def niches_keyboard(user_id: int, onboarding: bool):
             select(Category).where(Category.parent_id.is_(None), Category.enabled).order_by(Category.id)
         )).all()
         mine = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == user_id))).all())
-    rows = [[(("✅ " if c.id in mine else "⬜ ") + f"{c.emoji} {c.name}", f"ob:cat:{c.id}")] for c in roots]
+    rows = pairs([(("✅ " if c.id in mine else "⬜ ") + f"{c.emoji} {c.name}", f"ob:cat:{c.id}") for c in roots])
     rows.append([("➕ Предложить свою нишу", "ob:propose")])
     rows.append([("Далее ➡️" if onboarding else "✔ Готово", "ob:done")])
     return kb(rows), len(mine)

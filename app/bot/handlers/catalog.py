@@ -5,7 +5,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
 from app.bot import notify
-from app.bot.common import alert, ask, esc, kb, reply
+from app.bot.common import alert, ask, esc, kb, reply, pairs
 from app.db import Session
 from app.models import Category, Group, User, UserCategory
 from app.services import ads, catalog, geo, levels, settings
@@ -93,7 +93,7 @@ async def grp_link(s, m: Message, d, text):
     except catalog.SubmitError as e:
         return await m.answer(f"⚠️ {esc(str(e))}")
     roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), Category.enabled).order_by(Category.id))).all()
-    rows = [[(f"{c.emoji} {c.name}", f"cg:cat:{g.id}:{c.id}")] for c in roots]
+    rows = pairs([(f"{c.emoji} {c.name}", f"cg:cat:{g.id}:{c.id}") for c in roots])
     await m.answer(
         f"{KIND[g.kind]} <b>{esc(g.title)}</b> — {g.members} уч.\nК какой нише относится?",
         reply_markup=kb(rows), disable_web_page_preview=True)
@@ -179,7 +179,7 @@ async def resume(cb: CallbackQuery, user: User) -> None:
         if not await catalog.resume(s, g, user):
             return await cb.answer("Эта группа уже обработана", show_alert=True)
         roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), Category.enabled).order_by(Category.id))).all()
-    rows = [[(f"{c.emoji} {c.name}", f"cg:cat:{g.id}:{c.id}")] for c in roots]
+    rows = pairs([(f"{c.emoji} {c.name}", f"cg:cat:{g.id}:{c.id}") for c in roots])
     await reply(cb, f"{KIND[g.kind]} <b>{esc(g.title)}</b>\nК какой нише относится? (дальше — город и отправка на проверку)",
                 kb(rows + [[("◀️ Мои группы", "cg:my")]]))
 
