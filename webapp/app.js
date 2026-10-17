@@ -129,7 +129,7 @@
   }
 
   // ---------- Заявки ----------
-  var TABS = [["new", "Новые"], ["postponed", "Отложено"], ["taken", "В работе"], ["rejected", "Отказ"], ["spam", "Спам"]];
+  var TABS = [["new", "Новые"], ["postponed", "Отложено"], ["taken", "В работе"], ["rejected", "Не моё"], ["spam", "Спам"]];
 
   function renderLeads() {
     var list = el("div", { id: "leadlist" });
@@ -197,7 +197,7 @@
     if (state.leadsStatus === "new" || state.leadsStatus === "postponed") {
       var row = [act("take", "✅ В работу")];
       if (state.leadsStatus === "new") row.push(act("later", "⏰ Отложить"));
-      row.push(act("reject", "❌ Отказ"), act("spam", "🚫 Спам"));
+      row.push(act("reject", "🙈 Не моё"), act("spam", "🚫 Спам"));
       card.appendChild(el("div", { class: "row" }, row));
       if (it.suspicious && state.me.role === "admin") card.appendChild(el("div", { class: "row" }, [act("client", "👍 Это клиент")]));
     }

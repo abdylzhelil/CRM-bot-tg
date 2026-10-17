@@ -5,7 +5,7 @@ from app.models import BlacklistEntry, Category, Client, ClientEvent, Delivery, 
 from app.services import draft, settings, spamtexts, templates
 from app.services.distribute import root_category
 
-STATUS_NOTES = {"later": ("postponed", "Отложено"), "reject": ("rejected", "Отказ")}
+STATUS_NOTES = {"later": ("postponed", "Отложено"), "reject": ("rejected", "Не моё — скрыта")}
 ACTIONS = ("take", "later", "reject", "spam", "client", "restore", "offer")
 RESTORABLE = ("postponed", "rejected", "spam")
 

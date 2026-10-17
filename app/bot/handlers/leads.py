@@ -25,7 +25,7 @@ async def category_name(s, cat_id: int | None) -> str:
 
 
 LISTS = (("new", "🆕 Новые"), ("postponed", "⏰ Отложенные"), ("taken", "✅ В работе"),
-         ("rejected", "❌ Отказ"), ("spam", "🚫 Спам"))
+         ("rejected", "🙈 Не моё"), ("spam", "🚫 Спам"))
 PAGE = 5
 
 
@@ -41,7 +41,7 @@ def lists_keyboard(cnt: dict):
 
 
 def card_keyboard(lead: Lead, d: Delivery, user: User, client_id: int | None = None):
-    """Кнопки под карточкой в зависимости от статуса: из «Отказа» и «Спама» можно вернуть."""
+    """Кнопки под карточкой в зависимости от статуса: из «Не моё» и «Спама» можно вернуть."""
     if d.status in ("new", "postponed"):
         return notify.lead_keyboard(lead, d.id, user.is_admin)
     if d.status == "taken":
@@ -136,7 +136,7 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
         markup = notify.lead_keyboard(lead, d.id, user.is_admin)  # снова все кнопки, как у новой
     else:  # не тупик: ошибся кнопкой — можно вернуть
         rows = [[(f"✔ {note}", "noop"), ("↩️ Вернуть", f"lead:restore:{d.id}")]]
-        if user.is_admin and action in ("later", "reject"):  # «Отказ» по рекламе услуг — можно ещё научить фильтр
+        if user.is_admin and action in ("later", "reject"):  # «Не моё» по рекламе услуг — можно ещё научить фильтр
             rows.append([("🙅 Исполнитель (научить фильтр)", f"lead:offer:{d.id}")])
         markup = kb(rows)
     await cb.message.edit_reply_markup(reply_markup=markup)

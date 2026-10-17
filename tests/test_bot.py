@@ -94,7 +94,7 @@ async def test_admin_actions_blocked_for_users(maker):
 
 
 async def test_offer_button_stays_after_reject(maker):
-    """После «❌ Отказ» админ всё ещё может нажать «🙅 Исполнитель» и научить фильтр."""
+    """После «🙈 Не моё» админ всё ещё может нажать «🙅 Исполнитель» и научить фильтр."""
     from app.models import LabeledText
 
     text = "Продаю ноутбуки дешевле чем на авито, пишите в личку, доставка по городу"

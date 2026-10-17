@@ -76,7 +76,7 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
          InlineKeyboardButton(text="📨 Коллеге", callback_data=f"lead:pass:{d}")],
         [
             InlineKeyboardButton(text="⏰ Отложить", callback_data=f"lead:later:{d}"),
-            InlineKeyboardButton(text="❌ Отказ", callback_data=f"lead:reject:{d}"),
+            InlineKeyboardButton(text="🙈 Не моё", callback_data=f"lead:reject:{d}"),
             InlineKeyboardButton(text="🚫 Спам", callback_data=f"lead:spam:{d}"),
         ],
     ]

@@ -56,7 +56,7 @@ async def report(s: AsyncSession, days: int = 7) -> str:
                    "(отмечайте «🙅 Исполнитель» / «↩️ Это заявка»)")
     untouched = st.get("new", 0)
     if untouched:
-        out.append(f"   без действий (никто не нажал «В работу/Отказ/Спам»): {untouched}")
+        out.append(f"   без действий (никто не нажал «В работу/Не моё/Спам»): {untouched}")
     ex = (await s.execute(select(LabeledText.kind, LabeledText.text).where(LabeledText.created_at >= since)
                           .order_by(LabeledText.id.desc()).limit(12))).all()
     if ex:
