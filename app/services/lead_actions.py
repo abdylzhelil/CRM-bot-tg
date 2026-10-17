@@ -53,6 +53,29 @@ async def vote_spam(s, lead: Lead, user: User) -> bool:
     return True
 
 
+async def vote_offer(s, lead: Lead, user: User, d: Delivery) -> str:
+    """«🙅 Исполнитель»: у нажавшего заявка сразу скрывается. Админ или offer_votes_to_learn разных людей —
+    фильтр запоминает текст (похожие больше не придут никому) и неотправленные копии этой заявки снимаются.
+    Один человек не может «выключить» настоящую заявку у всех — нужен админ или несколько голосов."""
+    from app.models import LabeledText, OfferVote
+    from app.services import offers
+
+    d.status = "rejected"
+    if await s.get(OfferVote, (lead.id, user.tg_id)) is None:
+        s.add(OfferVote(lead_id=lead.id, user_id=user.tg_id))
+        await s.flush()
+    votes = await s.scalar(select(func.count()).select_from(OfferVote).where(OfferVote.lead_id == lead.id)) or 0
+    need = await settings.get_int(s, "offer_votes_to_learn")
+    if not (user.is_admin or votes >= need):
+        return f"Исполнитель — скрыта. Голосов: {votes} из {need}, потом фильтр запомнит"
+    if not await s.scalar(select(LabeledText.id).where(LabeledText.kind == "offer", LabeledText.text == lead.text[:2000])):
+        await offers.learn(s, lead.text, "offer")
+    pending = (await s.scalars(select(Delivery).where(Delivery.lead_id == lead.id, ~Delivery.sent))).all()
+    for other in pending:
+        other.status, other.sent = "rejected", True
+    return "Исполнитель — похожие больше не придут"
+
+
 async def take(s, user: User, d: Delivery, lead: Lead) -> Client:
     """«В работу»: клиент попадает в CRM пользователя."""
     client = await s.scalar(select(Client).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
@@ -81,15 +104,8 @@ async def apply_status(s, user: User, d: Delivery, lead: Lead, action: str) -> s
         return "Это спам — автор больше не придёт"
     if action == "restore":
         return await restore(s, user, d, lead)
-    if action == "offer" and user.is_admin:  # реклама услуг, а не заказчик: учим фильтр и убираем у остальных
-        from app.services import offers
-
-        await offers.learn(s, lead.text, "offer")
-        d.status = "rejected"
-        pending = (await s.scalars(select(Delivery).where(Delivery.lead_id == lead.id, ~Delivery.sent))).all()
-        for other in pending:
-            other.status, other.sent = "rejected", True
-        return "Исполнитель — похожие больше не придут"
+    if action == "offer":
+        return await vote_offer(s, lead, user, d)
     if action == "client" and user.is_admin:
         await blacklist(s, lead, "client", "отмечено администратором")
         lead.suspicious = False
@@ -115,6 +131,11 @@ async def restore(s, user: User, d: Delivery, lead: Lead) -> str:
             if user.is_admin or votes < await settings.get_int(s, "spam_votes_to_ban"):
                 await s.delete(entry)
                 await spamtexts.forget_lead(s, lead.id)
+    from app.models import OfferVote
+
+    vote = await s.get(OfferVote, (lead.id, user.tg_id))  # свой голос «Исполнитель» снимаем
+    if vote is not None:
+        await s.delete(vote)
     if user.is_admin:  # админ передумал «🙅 Исполнитель» — убираем этот пример из обучения фильтра
         from app.models import LabeledText
 

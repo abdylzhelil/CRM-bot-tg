@@ -30,6 +30,7 @@ DEFAULTS: dict[str, str] = {
     "free_daily_limit": "5",
     "free_delay_min": "30",
     "spam_votes_to_ban": "3",
+    "offer_votes_to_learn": "2",
     "scout_paused": "0",
     "submit_daily_limit": "3",
     "catalog_min_members": "50",
@@ -91,6 +92,7 @@ LABELS: dict[str, str] = {
     "free_daily_limit": "Бесплатный тариф: заявок в день",
     "free_delay_min": "Бесплатный тариф: задержка, мин",
     "spam_votes_to_ban": "Голосов «спам» для общего чёрного списка",
+    "offer_votes_to_learn": "Голосов «Исполнитель», чтобы фильтр выучил текст",
     "submit_daily_limit": "Групп от одного пользователя в сутки",
     "catalog_min_members": "Каталог: мин. участников в добавленной группе",
     "bonus_leads": "Заявок из группы пользователя за +1 день 💎",
@@ -154,7 +156,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
                         "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer"]),
-    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
+    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
 ]
@@ -179,7 +181,7 @@ SHORT: dict[str, str] = {
     "adpost_group_daily": "Постов в группу в сутки",
     "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
-    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "lead_keep_days": "Хранить заявки, дн",
+    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "offer_votes_to_learn": "Голосов «Исполнитель» для обучения", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
     "ai_enabled": "Claude (1/0)", "ai_model": "Модель ИИ", "ai_free_daily": "ИИ в сутки: бесплатные",
     "ai_paid_daily": "ИИ в сутки: платные", "ai_classify": "ИИ-фильтр заявок (1/0)", "ai_decide": "ИИ-помощник (1/0)", "ai_classify_daily": "ИИ в сутки (помощник)",
@@ -213,6 +215,7 @@ HINTS: dict[str, str] = {
     "free_daily_limit": "Сколько заявок в день видит бесплатный пользователь.",
     "free_delay_min": "Бесплатные получают заявку позже платных на это время.",
     "spam_votes_to_ban": "Сколько пользователей должны пожаловаться, чтобы автор попал в общий чёрный список.",
+    "offer_votes_to_learn": "Сколько разных пользователей должны нажать «🙅 Исполнитель» под заявкой, чтобы фильтр запомнил текст и похожие больше не приходили никому. Голос администратора учит сразу.",
     "submit_daily_limit": "Защита от заваливания каталога группами.",
     "catalog_min_members": "Добавленные в каталог группы меньше этого размера отклоняются.",
     "bonus_leads": "Сколько заявок из группы автора даёт ему +1 день 💎.",
@@ -299,7 +302,8 @@ class SettingError(ValueError):
 FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
-    "max_recipients": (1, 50),          # 0 — заявки перестали бы доходить до людей
+    "max_recipients": (1, 50),
+    "offer_votes_to_learn": (1, 20),          # 0 — заявки перестали бы доходить до людей
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп

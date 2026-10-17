@@ -81,11 +81,11 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
         ],
     ]
     rows.append([InlineKeyboardButton(text="✨ Черновик ответа", callback_data=f"lead:ai:{d}")])
-    if admin:  # админ учит фильтр: «это реклама услуг», похожие больше не придут
-        extra = [InlineKeyboardButton(text="🙅 Исполнитель", callback_data=f"lead:offer:{d}")]
-        if lead.suspicious:
-            extra.insert(0, InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}"))
-        rows.append(extra)
+    # все учат фильтр: «это реклама услуг» (у админа — сразу, у остальных — после нескольких голосов)
+    extra = [InlineKeyboardButton(text="🙅 Исполнитель", callback_data=f"lead:offer:{d}")]
+    if admin and lead.suspicious:
+        extra.insert(0, InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}"))
+    rows.append(extra)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

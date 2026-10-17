@@ -47,7 +47,7 @@ def card_keyboard(lead: Lead, d: Delivery, user: User, client_id: int | None = N
     if d.status == "taken":
         return kb([[("👤 Открыть клиента", f"cl:open:{client_id}")]]) if client_id else None
     rows = [[("✍️ Написать", f"url:{lead_actions.contact_url(lead)}"), ("↩️ Вернуть в новые", f"lead:restore:{d.id}")]]
-    if user.is_admin and d.status == "rejected":
+    if d.status == "rejected":
         rows.append([("🙅 Исполнитель (научить фильтр)", f"lead:offer:{d.id}")])
     return kb(rows)
 
@@ -136,7 +136,7 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
         markup = notify.lead_keyboard(lead, d.id, user.is_admin)  # снова все кнопки, как у новой
     else:  # не тупик: ошибся кнопкой — можно вернуть
         rows = [[(f"✔ {note}", "noop"), ("↩️ Вернуть", f"lead:restore:{d.id}")]]
-        if user.is_admin and action in ("later", "reject"):  # «Не моё» по рекламе услуг — можно ещё научить фильтр
+        if action in ("later", "reject"):  # «Не моё» по рекламе услуг — можно ещё научить фильтр
             rows.append([("🙅 Исполнитель (научить фильтр)", f"lead:offer:{d.id}")])
         markup = kb(rows)
     await cb.message.edit_reply_markup(reply_markup=markup)

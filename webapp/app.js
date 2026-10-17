@@ -199,6 +199,7 @@
       if (state.leadsStatus === "new") row.push(act("later", "⏰ Отложить"));
       row.push(act("reject", "🙈 Не моё"), act("spam", "🚫 Спам"));
       card.appendChild(el("div", { class: "row" }, row));
+      card.appendChild(el("div", { class: "row" }, [act("offer", "🙅 Исполнитель (предлагает услуги)")]));
       if (it.suspicious && state.me.role === "admin") card.appendChild(el("div", { class: "row" }, [act("client", "👍 Это клиент")]));
     }
     if (state.leadsStatus === "rejected" || state.leadsStatus === "spam") {

@@ -406,6 +406,15 @@ class SpamVote(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class OfferVote(Base):
+    """Голоса «🙅 Исполнитель» (заявка — реклама услуг, а не заказчик). Админ или N голосов — фильтр учится."""
+
+    __tablename__ = "offer_votes"
+    lead_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class AdOrder(Base):
     """Заказ рекламы: пользователь шлёт текст и выбирает группы, разведчики публикуют.
 

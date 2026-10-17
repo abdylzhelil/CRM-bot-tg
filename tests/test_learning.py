@@ -52,3 +52,37 @@ async def test_report_button(maker, tgbot):
     c.answer, c.message.answer, c.message.answer_document = AsyncMock(), AsyncMock(), AsyncMock()
     await st.diagnostics_report(c)
     assert c.message.answer_document.await_count == 1
+
+
+async def test_offer_votes_from_users_teach_filter(maker, tgbot):
+    """Обычный пользователь: «🙅 Исполнитель» скрывает заявку у него; фильтр учится после 2 голосов разных людей."""
+    from sqlalchemy import select
+
+    from app.models import Delivery, LabeledText, User
+
+    text = "Делаю сайты на тильде под ключ, примеры работ в профиле, пишите в лс"
+    async with maker() as s:
+        lead = Lead(text_hash="o1", text=text, group_title="G", author_id=99)
+        s.add(lead)
+        await s.flush()
+        ds = []
+        for uid in (301, 302, 303):
+            s.add(User(tg_id=uid, name=f"u{uid}", onboarded=True))
+            d = Delivery(lead_id=lead.id, user_id=uid, sent=uid != 303)
+            s.add(d)
+            ds.append(d)
+        await s.commit()
+        users = [await s.get(User, uid) for uid in (301, 302)]
+        note = await lead_actions.apply_status(s, users[0], ds[0], lead, "offer")
+        await s.commit()
+        assert "1 из 2" in note and ds[0].status == "rejected"
+        assert not await s.scalar(select(LabeledText))
+        # передумал — голос снимается
+        await lead_actions.restore(s, users[0], ds[0], lead)
+        await s.commit()
+        await lead_actions.apply_status(s, users[0], ds[0], lead, "offer")
+        note = await lead_actions.apply_status(s, users[1], ds[1], lead, "offer")
+        await s.commit()
+        assert "похожие больше не придут" in note
+        assert (await s.scalar(select(LabeledText))).kind == "offer"
+        assert (await s.get(Delivery, ds[2].id)).status == "rejected"  # неотправленная копия снята
