@@ -41,3 +41,14 @@ async def test_selfcheck_button(maker, tgbot):
     c.bot.get_me = AsyncMock(return_value=SimpleNamespace(username="b"))
     await st.self_check(c)
     assert "Самопроверка" in c.message.answer.call_args_list[0].args[0]
+
+
+async def test_selfcheck_scout_reserve_and_autorenew(maker):
+    async with maker() as s:
+        s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, status="ok"))
+        await s.commit()
+    async with maker() as s:
+        text = selfcheck.render(await selfcheck.run(s, None, SimpleNamespace(clients={1: object()})))
+    assert "⚠️ <b>Запасной разведчик</b>: рабочих аккаунтов: 1" in text
+    assert "<b>Автопродление</b>: выключено" in text
+    assert "✅ <b>Закрытые группы (капча)</b>: нет" in text
