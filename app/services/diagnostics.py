@@ -31,10 +31,12 @@ async def report(s: AsyncSession, days: int = 7) -> str:
     out = [f"🩺 ОТЧЁТ О ПРОБЛЕМАХ за {days} дн. (сформирован {now():%d.%m.%Y %H:%M} UTC)", ""]
 
     # 1. сбои
-    errs = (await s.execute(select(ErrorLog.key, func.count(), func.max(ErrorLog.text)).where(ErrorLog.created_at >= since)
+    errs = (await s.execute(select(ErrorLog.key, func.count(), func.max(ErrorLog.text), func.max(ErrorLog.created_at))
+                            .where(ErrorLog.created_at >= since)
                             .group_by(ErrorLog.key).order_by(func.count().desc()).limit(15))).all()
     out.append(f"1) СБОИ (тревоги 🚨): {sum(r[1] for r in errs)}")
-    out += [f"   • {k}: {n} раз — {_anon(t, 200)}" for k, n, t in errs] or ["   нет — хорошо"]
+    # дата последнего раза: видно, повторяется ли сбой после обновления или он старый, уже исправленный
+    out += [f"   • {k}: {n} раз, последний {last:%d.%m %H:%M} — {_anon(t, 200)}" for k, n, t, last in errs] or ["   нет — хорошо"]
 
     # 2. заявки и фильтр
     leads = await _count(s, Lead, Lead.created_at >= since)

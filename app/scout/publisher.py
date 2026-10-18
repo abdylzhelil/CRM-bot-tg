@@ -179,8 +179,13 @@ async def publish_one(manager) -> bool:
             post.status, post.error = "failed", human[:250]
             switched_off = True
         except Exception as e:
-            log.exception("реклама: не удалось опубликовать в %s", g.title)
-            post.status, post.error = "failed", f"{type(e).__name__}: {getattr(e, 'message', '') or e}"[:250]
+            code = str(getattr(e, "message", "") or e)
+            if "TOPIC_CLOSED" in code:  # группа с темами: общая тема закрыта, писать можно только в темы — не выйдет
+                post.status, post.error = "failed", "группа с темами: общая тема закрыта для сообщений"
+                switched_off = True
+            else:
+                log.exception("реклама: не удалось опубликовать в %s", g.title)
+                post.status, post.error = "failed", f"{type(e).__name__}: {code}"[:250]
         if switched_off:
             g.ads_allowed = False  # не вышло и не выйдет — убираем группу из списка для покупателей
         await s.commit()

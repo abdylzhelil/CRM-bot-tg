@@ -70,3 +70,48 @@ async def test_ai_error_keeps_lead(maker, monkeypatch):
     client.messages.create = AsyncMock(side_effect=RuntimeError("down"))
     async with maker() as s:
         assert (await offers.verdict(s, "Делаю сайты. Кто знает, где найти клиентов?", client))[0] == "request"
+
+
+REPORT_OFFERS = [  # отчёт владельца 18.10: это пропустил фильтр
+    '#помогу #таргетолог 2 млн чистыми за месяц. Меня зовут Алена. Я специалист по рекламе во ВКонтакте. Работаю 4 года',
+    "Разблокировка аккаунта на авито Пишите помогу Есть отзывы Есть опыт Есть гарантия Есть оплата после разблокировки",
+    "Всем привет, ищу кому актуальны будут мои услуги, в профиле есть сайт с моими работами.",
+    "Привет! Если нужно, могу сделать простого Telegram-бота: принимает заявки. Могу показать демо",
+    "Добрый день! Ищу партнерскую сеть для интеграции своего аутсорсингового digital-маркетинг агентства полного цикла",
+]
+STILL_REQUESTS = [
+    "Ищу таргетолога для салона, бюджет 30 тысяч", "Подскажите юриста по разводу, есть опыт у кого?",
+    "Нужен мастер, кто может сделать ремонт ванной? Оплата после работы", "Нужен грузчик на 2 часа завтра, оплата 1500",
+    "Ищу специалиста по авито, кто может разблокировать аккаунт",
+]
+
+
+def test_report_examples():
+    for t in REPORT_OFFERS:
+        assert offers.rule_verdict(t) == "offer", t
+    vacancy = "Нужны продавцы кассиры и пекарь, официальное оформление, график 2/2 зп 3500р чистыми за смену"
+    assert offers.rule_verdict(vacancy) == "other"
+    for t in STILL_REQUESTS:
+        assert offers.rule_verdict(t) == "request", t
+
+
+async def test_double_start_does_not_crash(maker, monkeypatch):
+    """Два нажатия /start подряд: второй запрос не падает с UNIQUE users.tg_id."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.bot import captcha
+    from app.bot.access import UserMiddleware
+
+    async def gate(event, handler, data, user):  # новичок сначала видит проверку «я не бот» — здесь пропускаем её
+        return await handler(event, data)
+    monkeypatch.setattr(captcha, "gate", gate)
+    mw = UserMiddleware()
+    tg = SimpleNamespace(id=555001, full_name="Новый", username="", is_bot=False)
+    seen = []
+
+    async def handler(event, data):
+        seen.append(data["user"].tg_id)
+
+    await asyncio.gather(*(mw(handler, object(), {"event_from_user": tg, "event_chat": None}) for _ in range(3)))
+    assert seen == [555001] * 3

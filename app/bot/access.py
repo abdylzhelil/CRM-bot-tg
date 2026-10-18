@@ -1,6 +1,7 @@
 """Пользователи бота: регистрация при первом сообщении, права администратора."""
 from aiogram import BaseMiddleware
 from aiogram.filters import BaseFilter
+from sqlalchemy.exc import IntegrityError
 
 from app import config
 from app.db import Session
@@ -20,6 +21,23 @@ class UserMiddleware(BaseMiddleware):
             return await handler(event, data)
         if tg_user is None or tg_user.is_bot:
             return None
+        for attempt in range(2):
+            try:
+                user = await self._touch(tg_user)
+                break
+            except IntegrityError:
+                # два нажатия /start подряд: оба запроса создавали нового пользователя — второй просто перечитает его
+                if attempt:
+                    raise
+        data["user"] = user
+        if not user.verified and not user.is_admin:
+            from app.bot import captcha
+
+            return await captcha.gate(event, handler, data, user)
+        return await handler(event, data)
+
+    @staticmethod
+    async def _touch(tg_user) -> User:
         async with Session() as s:
             user = await s.get(User, tg_user.id)
             if user is None:
@@ -35,12 +53,7 @@ class UserMiddleware(BaseMiddleware):
             if tg_user.id in config.OWNER_IDS:
                 user.is_admin = True
             await s.commit()
-        data["user"] = user
-        if not user.verified and not user.is_admin:
-            from app.bot import captcha
-
-            return await captcha.gate(event, handler, data, user)
-        return await handler(event, data)
+            return user
 
 
 class IsAdmin(BaseFilter):
