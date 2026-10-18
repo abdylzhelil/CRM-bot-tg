@@ -11,7 +11,7 @@ from telethon.tl.types import Channel
 from app.bot import notify
 from app.db import Session
 from app.models import FeedChat, Group, SearchQuery
-from app.services import settings
+from app.services import junk, settings
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         min_members = await settings.get_int(s, "min_members")
         min_msgs = await settings.get_int(s, "min_msgs_per_day")
         auto = await settings.get(s, "mode") == "auto"
-    found = known = small = errors = 0
+    found = known = small = errors = junked = 0
     lost = False
     done = 0
     for q in queries:
@@ -168,7 +168,8 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
             except Exception:
                 log.exception("данные группы %s", chat.title)
                 continue
-            ok = members >= min_members and (msgs_day < 0 or msgs_day >= min_msgs)
+            junk_title = junk.is_junk_title(chat.title or "")
+            ok = not junk_title and members >= min_members and (msgs_day < 0 or msgs_day >= min_msgs)
             async with Session() as s:
                 g = Group(
                     tg_id=tg_id, username=chat.username or "", title=chat.title or "",
@@ -179,6 +180,8 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
                 await s.commit()
             if ok:
                 found += 1
+            elif junk_title:
+                junked += 1
             else:
                 small += 1
             await asyncio.sleep(random.uniform(2, 6))
@@ -186,7 +189,8 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
     if lost:  # недоделанные запросы вернём в очередь: следующий проход начнёт с них
         await rewind(start + done - 1, total)
     summary = (f"запросов {done - lost} (с {start + 1}-го из {total}), новых {found}, уже знали {known}, "
-               f"мелких или тихих {small}" + (f", ошибок {errors}" if errors else "")
+               f"мелких или тихих {small}" + (f", реклама/флуд {junked}" if junked else "")
+               + (f", ошибок {errors}" if errors else "")
                + (" — связь с Telegram оборвалась, продолжу через 10 мин" if lost else ""))
     await save_last(summary)
     if found:

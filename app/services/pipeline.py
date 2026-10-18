@@ -31,6 +31,9 @@ async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> 
     entry = await session.get(BlacklistEntry, author.user_id)
     if entry and entry.status == "spam":
         return None
+    group = await session.scalar(select(Group).where(Group.tg_id == msg.group_tg_id))
+    if group is not None and group.no_leads and not force:
+        return None  # группа «без заявок» (реклама/флуд) — 🔍 Группы → 🙈 Без заявок
 
     m = match(msg.text, await load_rules(session), context=msg.group_title)
     if not m:
@@ -105,7 +108,6 @@ async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> 
             await session.commit()
             return None
 
-    group = await session.scalar(select(Group).where(Group.tg_id == msg.group_tg_id))
     if group:
         group.leads_count += 1
         group.last_lead_at = now()

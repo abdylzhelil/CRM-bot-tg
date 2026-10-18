@@ -86,6 +86,7 @@ class Group(Base):
     ad_ai_channels: Mapped[str] = mapped_column(String(160), default="")  # каналы, на которые, по мнению ИИ, надо подписаться
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
+    no_leads: Mapped[bool] = mapped_column(Boolean, default=False)  # заявки отсюда не брать (реклама/флуд), services/junk.py
 
 
 class FeedChat(Base):

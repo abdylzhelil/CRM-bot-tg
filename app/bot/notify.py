@@ -90,6 +90,8 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
     if admin and lead.suspicious:
         extra.insert(0, InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}"))
     rows.append(extra)
+    if admin and lead.group_id:  # группа-свалка рекламы/флуда: выключить заявки из неё целиком
+        rows.append([InlineKeyboardButton(text="🗑 Не брать из этой группы", callback_data=f"lead:nogrp:{d}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

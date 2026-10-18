@@ -26,6 +26,7 @@ SAMPLES = [
     ("Подскажите хорошего дизайнера для логотипа", "request"),
     ("🚀 Нужен сайт под ваш бизнес? Сделаю за 3 дня, от 14000 ₽. Чем занимаюсь: сайты, боты. Примеры работ скину в лс", "offer"),
     ("Делаем лендинги под ключ, портфолио в профиле, обращайтесь", "offer"),
+    ("Хотела позвать вас во флуд по аниме, нас пока немного, буду рада, если присоединитесь", "other"),
 ]
 
 
@@ -95,7 +96,10 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
                               .order_by(Group.members.desc()))).all()
     if closed:
         names = ", ".join(g.title[:25] for g in closed[:5]) + (f" и ещё {len(closed) - 5}" if len(closed) > 5 else "")
-        add(WARN, "Закрытые группы (капча)", f"{len(closed)}: {names} — зайдите с телефона разведчика и пройдите проверку")
+        ads_on = await settings.get(s, "adpost_enabled") == "1"
+        add(WARN if ads_on else "⚪️", "Закрытые группы (капча)",
+            f"{len(closed)}: {names} — заявки оттуда читаются, писать нельзя. Важно только для рекламы: "
+            "зайдите с телефона разведчика и пройдите проверку")
     else:
         add(OK, "Закрытые группы (капча)", "нет")
 
@@ -106,14 +110,18 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
     add({"ok": OK, "warn": WARN, "bad": BAD}[level], "Вступление в группы", "; ".join(diag))
 
     # фоновые задачи
-    dead = []
+    dead, off = [], []
     for name, task in TASKS.items():
         if task.done():
             exc = task.exception() if not task.cancelled() else None
-            dead.append(f"{name}" + (f" ({type(exc).__name__})" if exc else ""))
+            if exc is None and not task.cancelled():
+                off.append(name)  # закончилась сама: выключена настройкой (например, сторож без HEARTBEAT_URL)
+            else:
+                dead.append(f"{name}" + (f" ({type(exc).__name__})" if exc else ""))
     if TASKS:
-        add(BAD if dead else OK, "Фоновые задачи",
-            ("остановились: " + ", ".join(dead) + " — перезапустите бота и пришлите «🩺 Отчёт»") if dead else f"работают все ({len(TASKS)})")
+        note = (("остановились: " + ", ".join(dead) + " — перезапустите бота и пришлите «🩺 Отчёт»") if dead
+                else f"работают все нужные ({len(TASKS) - len(off)})")
+        add(BAD if dead else OK, "Фоновые задачи", note + (f"; не нужны (выключены): {', '.join(off)}" if off else ""))
 
     # ниши и слова
     cats = await s.scalar(select(func.count()).select_from(Category).where(Category.enabled)) or 0

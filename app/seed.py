@@ -360,6 +360,9 @@ async def add_missing(session: AsyncSession) -> list[str]:
 
 
 async def seed(session: AsyncSession) -> None:
+    from app.services import junk
+
+    await junk.mark_existing(session)
     if await session.scalar(select(func.count()).select_from(Category)):
         await add_missing(session)
         return

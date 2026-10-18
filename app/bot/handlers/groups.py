@@ -27,6 +27,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
             Group.status == "joined", Group.account_id.is_(None), Group.kind == "group"))
         pending = await catalog.pending_count(s)
         paused = await settings.get(s, "scout_paused") == "1"
+        junk_n = await s.scalar(select(func.count()).select_from(Group).where(Group.status == "joined", Group.no_leads))
     from app.bot.handlers import adposts as adposts_h
 
     ad_orders, ad_groups = await adposts_h.counts()
@@ -54,6 +55,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"), ("🏆 Рейтинг вступивших", "gr:list:joined")],
         [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли {cnt.get('left', 0)}", "gr:list:left")],
         [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
+        [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk")],
         [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
@@ -118,6 +120,32 @@ async def back_to_queue(cb: CallbackQuery) -> None:
         await s.commit()
     await cb.answer("Вернули в очередь на вступление")
     await show_list(cb, was)
+
+
+@router.callback_query(F.data == "gr:junk")
+async def junk_list(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        groups = (await s.scalars(select(Group).where(Group.status == "joined", Group.no_leads)
+                                  .order_by(Group.members.desc()).limit(30))).all()
+    rows = [[(f"✅ {g.title[:40]}", f"gr:junkoff:{g.id}")] for g in groups]
+    rows.append([("◀️ Назад", "gr:menu")])
+    await reply(cb, (
+        "🙈 <b>Группы без заявок</b> — рекламные свалки, взаимопиар, флуды и ролевые: оттуда шёл только мусор.\n"
+        "Разведчик в них остаётся (для рекламы), но заявки оттуда не создаются. Новые такие группы поиск пропускает.\n\n"
+        + ("Нажмите на группу, чтобы снова брать из неё заявки." if groups else "Пока таких групп нет.")
+        + "\nОтметить группу: под мусорной заявкой кнопка «🗑 Не брать из этой группы»."), kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^gr:junkoff:\d+$"))
+async def junk_off(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if g is None:
+            return await cb.answer("Группа не найдена", show_alert=True)
+        g.no_leads = False
+        await s.commit()
+    await cb.answer("Снова берём заявки из этой группы")
+    await junk_list(cb)
 
 
 @router.callback_query(F.data == "gr:menu")

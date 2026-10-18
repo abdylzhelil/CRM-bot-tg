@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.bot import notify
 from app.bot.common import COPY_MAX, ask, esc, kb
 from app.db import Session
-from app.models import Category, Client, Delivery, Lead, User, now
+from app.models import Category, Client, Delivery, Group, Lead, User, now
 from app.services import ai, draft, lead_actions, referrals, settings
 from app.services.distribute import day_start, root_category
 
@@ -122,6 +122,26 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
             return await send_template(cb, s, lead, user)
         if action == "ai":
             return await send_ai_draft(cb, s, lead, user, d.id)
+        if action in ("nogrp", "yesgrp"):
+            if not user.is_admin or not lead.group_id:
+                return await cb.answer("Недоступно", show_alert=True)
+            g = await s.get(Group, lead.group_id)
+            if g is None:
+                return await cb.answer("Группа не найдена", show_alert=True)
+            g.no_leads = action == "nogrp"
+            try:
+                await lead_actions.apply_status(s, user, d, lead, "reject" if g.no_leads else "restore")
+            except lead_actions.ActionError:
+                pass  # статус уже такой — не мешает
+            await s.commit()
+            if g.no_leads:
+                markup = kb([[("✔ Заявки из группы выключены", "noop"), ("↩️ Вернуть", f"lead:yesgrp:{d.id}")]])
+                note = "Из этой группы заявки больше не берём (🔍 Группы → 🙈 Без заявок)"
+            else:
+                markup = notify.lead_keyboard(lead, d.id, user.is_admin)
+                note = "Снова берём заявки из этой группы"
+            await cb.message.edit_reply_markup(reply_markup=markup)
+            return await cb.answer(note, show_alert=g.no_leads)
         if action == "take":
             client = await lead_actions.take(s, user, d, lead)
             await s.commit()
