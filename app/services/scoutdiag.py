@@ -32,7 +32,9 @@ async def join_diagnosis(s, manager=None) -> tuple[str, list[str]]:
         total = await s.scalar(select(func.count()).select_from(Group).where(
             Group.account_id == acc.id, Group.status == "joined")) or 0
         joined = acc.joined_today if acc.joined_date == today else 0
-        line = f"«{acc.name}»: сегодня вступил {joined} из {acc.daily_join_limit}, всего групп {total} из {acc.max_groups}"
+        today = (f"сегодня вступил {joined} (предел теперь {acc.daily_join_limit} — новый действует с завтра)"
+                 if joined > acc.daily_join_limit else f"сегодня вступил {joined} из {acc.daily_join_limit}")
+        line = f"«{acc.name}»: {today}, всего групп {total} из {acc.max_groups}"
         if connected is not None and acc.id not in connected:
             bad(line + " — НЕ ПОДКЛЮЧЁН, войдите заново: 👤 Аккаунты")
         elif acc.status in ("limited", "dead"):
