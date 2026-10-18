@@ -246,6 +246,11 @@ async def summary(s, order: AdOrder, admin: bool = False) -> str:
     pic = "🖼 С картинкой\n" if order.photo else ""
     if admin and order.ai_check:
         pic += f"🤖 ИИ о тексте: {esc(order.ai_check)}\n"
+    if admin and order.status in ("pending", "approved", "running", "done"):
+        if order.erid:
+            pic += f"🏷 erid: {esc(order.erid)}" + (f" · {esc(order.advertiser)}" if order.advertiser else "") + "\n"
+        elif await adposts.needs_marking(s, order):
+            pic += "🏷 Маркировки нет — посты ждут, добавьте «🏷 Маркировка»\n"
     return (f"📣 <b>Заказ №{order.id}</b> — {adposts.STATUS[order.status]}\n{who}💰 {price}\n{pic}\n"
             f"{esc(order.text[:700])}\n\nГруппы:\n" + ("\n".join(lines) or "— (не выбраны)") + tail)
 
@@ -481,6 +486,9 @@ async def order_buttons(s, order: AdOrder) -> list[list[tuple[str, str]]]:
         label = ("↩️ Вернуть всё, включая вышедшие посты" if sent
                  else "↩️ Вернуть всю сумму" if pay.refunded_amount else "↩️ Вернуть деньги")
         rows.append([(label, f"rf:ask:{pay.id}")])
+    if order.status in ("pending", "approved", "running"):
+        mark = "✅" if order.erid else ("⛔ нужна" if await adposts.needs_marking(s, order) else "➕")
+        rows.append([(f"🏷 Маркировка (erid) {mark}", f"apa:erid:{order.id}")])
     if order.status in ("approved", "running", "pending"):
         rows.append([("🚫 Отменить заказ (с причиной)", f"apa:cancel:{order.id}")])
     if order.status in adposts.REPEATABLE:
@@ -616,6 +624,39 @@ async def adm_ask(cb: CallbackQuery, state: FSMContext) -> None:
     what = "отклоняете" if op == "no" else "отменяете"
     await ask(cb, state, "apa_reason", f"Вы {what} заказ №{oid}. Напишите причину (её получит заказчик) или «-», чтобы без причины:",
               order_id=int(oid), op=op)
+
+
+@admin_router.callback_query(F.data.regexp(r"^apa:erid:\d+$"))
+async def erid_ask(cb: CallbackQuery, state: FSMContext) -> None:
+    oid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        order = await s.get(AdOrder, oid)
+    if order is None:
+        return await cb.answer("Заказ не найден", show_alert=True)
+    now_txt = (f"Сейчас: erid {esc(order.erid)}" + (f", {esc(order.advertiser)}" if order.advertiser else "")) if order.erid else "Сейчас маркировки нет."
+    await ask(cb, state, "apa_erid", (
+        f"🏷 <b>Маркировка заказа №{oid}</b>\n{now_txt}\n\n"
+        "Получите токен в ОРД (кабинет оператора рекламных данных) и пришлите:\n"
+        "1-я строка — токен erid, 2-я строка — рекламодатель (название и ИНН или ссылка), например:\n"
+        "<code>2VtzqvXyZ12\nИП Иванов И. И., ИНН 050000000000</code>\n\n"
+        "Под постом будет: «Реклама. ИП Иванов И. И., ИНН … erid: 2VtzqvXyZ12». «-» — убрать маркировку."), order_id=oid)
+
+
+async def apa_erid(s, m: Message, d, text):
+    order = await s.get(AdOrder, d["order_id"])
+    if order is None:
+        return await m.answer("Заказ не найден")
+    if order.status not in ("pending", "approved", "running"):
+        return await m.answer("Заказ уже завершён — маркировку менять поздно.")
+    try:
+        order.erid, order.advertiser = adposts.parse_marking(text)
+    except adposts.AdError as e:
+        await m.answer(str(e))
+        return False
+    await s.commit()
+    preview = (await adposts.compose(s, order))[len(order.text):].strip()
+    await m.answer(("✔ Маркировка сохранена. Подпись под постом:\n" + esc(preview)) if order.erid else "✔ Маркировка убрана.",
+                   reply_markup=kb([[("Открыть заказ", f"apa:o:{order.id}")]]))
 
 
 async def apa_reason(s, m: Message, d, text):

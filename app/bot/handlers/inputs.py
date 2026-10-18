@@ -318,6 +318,7 @@ HANDLERS = {
     "pass_to": pass_to,
     "ap_text": adposts_h.ap_text,
     "apa_reason": adposts_h.apa_reason,
+    "apa_erid": adposts_h.apa_erid,
     "apa_price": adposts_h.apa_price,
     "apg_price": adposts_h.apg_price,
     "apg_hours": adposts_h.apg_hours,

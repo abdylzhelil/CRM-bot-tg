@@ -436,6 +436,9 @@ class AdOrder(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reminded: Mapped[bool] = mapped_column(Boolean, default=False)  # напомнили об оплате
     reason: Mapped[str] = mapped_column(String(300), default="")  # причина отказа/отмены (её видит заказчик)
+    # маркировка рекламы (ФЗ «О рекламе»): токен из ОРД и данные рекламодателя — дописываются под пост
+    erid: Mapped[str] = mapped_column(String(64), default="")
+    advertiser: Mapped[str] = mapped_column(String(120), default="")
 
 
 class AdPost(Base):

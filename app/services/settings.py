@@ -24,6 +24,7 @@ DEFAULTS: dict[str, str] = {
     "adpost_group_daily": "3",
     "adpost_gap_min": "10",
     "adpost_footer": "Реклама",
+    "adpost_require_erid": "0",
     "quiet_hours": "",
     "report_hour": "21",
     "max_recipients": "5",
@@ -87,6 +88,7 @@ LABELS: dict[str, str] = {
     "adpost_group_daily": "Реклама в группах: постов в сутки в одной группе",
     "adpost_gap_min": "Реклама в группах: пауза между постами аккаунта, мин",
     "adpost_footer": "Реклама в группах: подпись под постом (- без подписи)",
+    "adpost_require_erid": "Реклама в группах: не публиковать без маркировки erid (1/0)",
     "report_hour": "Час вечернего отчёта",
     "max_recipients": "Сколько пользователей получают одну заявку",
     "free_daily_limit": "Бесплатный тариф: заявок в день",
@@ -155,7 +157,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
-                        "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer"]),
+                        "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
@@ -179,7 +181,7 @@ SHORT: dict[str, str] = {
     "join_retry_max": "Попыток вступить",
     "adpost_enabled": "Реклама вкл (1/0)", "adpost_auto_approve": "Автоодобрение (1/0)", "adpost_auto_refund": "Автовозврат (1/0)", "adpost_fulfill": "Условия групп (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
     "adpost_group_daily": "Постов в группу в сутки",
-    "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись",
+    "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись", "adpost_require_erid": "Только с erid (1/0)",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "offer_votes_to_learn": "Голосов «Исполнитель» для обучения", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
@@ -209,6 +211,7 @@ HINTS: dict[str, str] = {
     "adpost_daily_limit": "Сколько рекламных постов в сутки публикует один аккаунт-разведчик. Меньше — безопаснее для аккаунта.",
     "adpost_group_daily": "Сколько рекламных постов в сутки может выйти в одной группе или канале, чтобы их не засыпать рекламой.",
     "adpost_gap_min": "Минимальная пауза между рекламными постами одного аккаунта. Слишком частые посты — риск блокировки.",
+    "adpost_require_erid": "1 — посты заказа не публикуются, пока вы не добавите маркировку (токен erid из ОРД) в карточке заказа «🏷 Маркировка». 0 — публикуются и без неё (маркировка по закону — на вас).",
     "adpost_footer": "Текст под каждым рекламным постом (например, «Реклама. ИП …, erid …» по требованиям закона). «-» — без подписи.",
     "report_hour": "Во сколько вам приходит вечерний отчёт.",
     "max_recipients": "Больше людей на одну заявку — меньше шанс, что клиент ответит каждому.",
@@ -299,7 +302,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),

@@ -439,8 +439,33 @@ async def footer(s: AsyncSession) -> str:
 
 
 async def compose(s: AsyncSession, order: AdOrder) -> str:
-    f = await footer(s)
-    return order.text + (f"\n\n{f}" if f else "")
+    """Текст поста + подпись: «Реклама» из ⚙️, рекламодатель и erid заказа (маркировка по ФЗ «О рекламе»)."""
+    parts = [x for x in ((await footer(s)), order.advertiser.strip(), f"erid: {order.erid}" if order.erid else "") if x]
+    f = ". ".join(p.rstrip(".") for p in parts)
+    tail = f"\n\n{f}" if f else ""
+    body = order.text
+    if order.photo and len(body) + len(tail) > 1024:  # подпись к картинке в Telegram — не длиннее 1024 знаков
+        body = body[:1023 - len(tail)].rstrip() + "…"
+    return body + tail
+
+
+ERID_RE = re.compile(r"^[A-Za-z0-9]{6,64}$")
+
+
+def parse_marking(text: str) -> tuple[str, str]:
+    """«erid» в первой строке, рекламодатель (название, ИНН или ссылка) — во второй. «-» — убрать маркировку."""
+    text = text.strip()
+    if text == "-":
+        return "", ""
+    first, _, rest = text.partition("\n")
+    erid = first.strip().removeprefix("erid:").removeprefix("erid").strip(" :")
+    if not ERID_RE.match(erid):
+        raise AdError("Токен erid — латинские буквы и цифры (6–64 знака), например 2VtzqvXyZ12. Пришлите ещё раз.")
+    return erid, " ".join(rest.split())[:120]
+
+
+async def needs_marking(s: AsyncSession, order: AdOrder) -> bool:
+    return await settings.get(s, "adpost_require_erid") == "1" and not order.erid
 
 
 async def sent_today(s: AsyncSession, account_id: int) -> int:
@@ -502,10 +527,11 @@ async def due_checks(s: AsyncSession, limit: int = 3) -> list[AdPost]:
 
 
 async def due_posts(s: AsyncSession) -> list[AdPost]:
-    return list((await s.scalars(
-        select(AdPost).join(AdOrder, AdOrder.id == AdPost.order_id)
-        .where(AdPost.status == "queued", AdPost.scheduled_at <= now(), AdOrder.status == "running")
-        .order_by(AdPost.id))).all())
+    q = (select(AdPost).join(AdOrder, AdOrder.id == AdPost.order_id)
+         .where(AdPost.status == "queued", AdPost.scheduled_at <= now(), AdOrder.status == "running"))
+    if await settings.get(s, "adpost_require_erid") == "1":
+        q = q.where(AdOrder.erid != "")  # без маркировки посты ждут в очереди
+    return list((await s.scalars(q.order_by(AdPost.id))).all())
 
 
 NOT_PUBLISHED = ("queued", "failed", "deleted", "canceled")

@@ -1394,3 +1394,26 @@ async def test_availability_explains_few_groups(maker, tgbot):
         text = "\n".join(await adposts.availability(s))
     assert "видит сейчас: <b>1</b>" in text and "Закрыты для сообщений сейчас: 1" in text
     assert "Выключены (вами" in text and "Ещё 1 групп ждут вступления" in text
+
+
+async def test_erid_marking_gate_and_footer(maker, tgbot, monkeypatch):
+    """Маркировка: без erid при включённой настройке посты ждут; erid и рекламодатель — в подписи под постом."""
+    await setup_group(maker)
+    await make_user(maker, 70)
+    async with maker() as s:
+        await settings.put(s, "adpost_require_erid", "1")
+        g = await s.scalar(select(Group))
+        order = await adposts.new_draft(s, 70, TEXT)
+        await adposts.toggle_group(s, order, g.id)
+        await adposts.submit(s, order)
+        await adposts.approve(s, order)
+        assert order.status == "running" and await adposts.needs_marking(s, order)
+        assert await adposts.due_posts(s) == []  # ждут маркировку
+        with pytest.raises(adposts.AdError):
+            adposts.parse_marking("не токен!")
+        order.erid, order.advertiser = adposts.parse_marking("erid: 2VtzqvXyZ12\nИП Иванов И. И., ИНН 050000000000")
+        await s.commit()
+        assert len(await adposts.due_posts(s)) == 1
+        text = await adposts.compose(s, order)
+        assert text.endswith("Реклама. ИП Иванов И. И., ИНН 050000000000. erid: 2VtzqvXyZ12")
+        assert adposts.parse_marking("-") == ("", "")
