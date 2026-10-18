@@ -1,4 +1,4 @@
-aiogram>=3.4,<4
+aiogram>=3.14,<4  # 3.14+: кнопка «скопировать» (CopyTextButton)
 anthropic>=1.13,<2
 telethon>=1.36,<2
 sqlalchemy[asyncio]>=2.0,<3

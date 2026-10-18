@@ -1,7 +1,7 @@
 import html
 
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
+from aiogram.types import CallbackQuery, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 esc = html.escape
 
@@ -31,8 +31,11 @@ class AccountFlow(StatesGroup):
 
 
 def kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
-    """(текст, callback_data), (текст, 'url:https://...') либо (текст, 'webapp:https://...') — мини-приложение."""
+    """(текст, callback_data), (текст, 'url:https://...'), (текст, 'webapp:https://...') — мини-приложение,
+    (текст, 'copy:какой-то текст') — одно нажатие копирует текст (до 256 знаков, см. COPY_MAX)."""
     def btn(t: str, d: str) -> InlineKeyboardButton:
+        if d.startswith("copy:"):
+            return InlineKeyboardButton(text=t, copy_text=CopyTextButton(text=d[5:]))
         if d.startswith("url:"):
             return InlineKeyboardButton(text=t, url=d[4:])
         if d.startswith("webapp:"):
@@ -40,6 +43,9 @@ def kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
         return InlineKeyboardButton(text=t, callback_data=d)
 
     return InlineKeyboardMarkup(inline_keyboard=[[btn(t, d) for t, d in row] for row in rows])
+
+
+COPY_MAX = 256  # предел Telegram для кнопки «скопировать»
 
 
 def pairs(buttons: list[tuple[str, str]], n: int = 2) -> list[list[tuple[str, str]]]:

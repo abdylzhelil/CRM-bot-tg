@@ -4,7 +4,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
 
 from app.bot import notify
-from app.bot.common import ask, esc, kb
+from app.bot.common import COPY_MAX, ask, esc, kb
 from app.db import Session
 from app.models import Category, Client, Delivery, Lead, User, now
 from app.services import ai, draft, lead_actions, referrals, settings
@@ -148,14 +148,42 @@ async def noop(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+def reply_rows(lead: Lead, text: str) -> list[list[tuple[str, str]]]:
+    """Кнопки под готовым ответом. Бот сам клиенту не пишет (Telegram не даёт ботам писать первыми,
+    разведчик только читает) — поэтому: одно нажатие копирует текст, второе открывает сообщение клиента в группе."""
+    rows = []
+    first = []
+    if len(text) <= COPY_MAX:
+        first.append(("📋 Скопировать ответ", f"copy:{text}"))
+    if lead.link:
+        first.append(("💬 Ответить в группе", f"url:{lead.link}"))
+    if first:
+        rows.append(first)
+    contact = f"https://t.me/{lead.username}" if lead.username else f"tg://user?id={lead.author_id}"
+    rows.append([("✍️ Написать в личку", f"url:{contact}")])
+    return rows
+
+
+def reply_hint(lead: Lead, text: str) -> str:
+    """Короткая подсказка, как отправить ответ, — под текст ответа."""
+    copy = "«📋 Скопировать ответ»" if len(text) <= COPY_MAX else "нажмите на текст ответа (скопируется)"
+    if lead.link:
+        where = ("«💬 Ответить в группе» → свайп по сообщению клиента влево → вставьте текст"
+                 + ("" if lead.username else ". В личку этому человеку, скорее всего, не написать — он скрыл профиль"))
+        if "/c/" in lead.link:
+            where += ". Группа закрытая: сообщение откроется, только если вы в ней состоите"
+        return f"\n\n<i>Как ответить: {copy} → {where}.</i>"
+    return f"\n\n<i>Как ответить: {copy} → «✍️ Написать в личку».</i>"
+
+
 async def send_template(cb: CallbackQuery, s, lead: Lead, user: User) -> None:
     """Ответ клиенту: шаблон и цены пользователя; у администратора — ещё и из категории."""
     text = await lead_actions.template_text(s, user, lead)
-    contact = f"https://t.me/{lead.username}" if lead.username else f"tg://user?id={lead.author_id}"
     await cb.message.answer(
-        f"📋 Ответ клиенту (нажмите на текст — скопируется):\n\n<code>{esc(text)}</code>\n\n"
+        f"📋 Ответ клиенту:\n\n<code>{esc(text)}</code>{reply_hint(lead, text)}\n\n"
         "<i>Свой шаблон и цены: 👤 Профиль → 📋 Мой шаблон / 💰 Мои цены.</i>",
-        reply_markup=kb([[("✍️ Написать клиенту", f"url:{contact}")]]),
+        reply_markup=kb(reply_rows(lead, text)),
+        disable_web_page_preview=True,
     )
     await cb.answer()
 
@@ -194,7 +222,6 @@ async def pass_to(s, m: Message, d, text):
 
 async def send_ai_draft(cb: CallbackQuery, s, lead: Lead, user: User, delivery_id: int, client=None) -> None:
     """✨ Черновик ответа: простой по правилам (бесплатно) или от Claude, если владелец включил (ai_enabled=1 и ключ в .env)."""
-    contact = f"https://t.me/{lead.username}" if lead.username else f"tg://user?id={lead.author_id}"
     use_claude = ai.enabled() and await settings.get(s, "ai_enabled") == "1"
     if use_claude:
         await cb.answer("✨ Пишу черновик…")
@@ -209,5 +236,6 @@ async def send_ai_draft(cb: CallbackQuery, s, lead: Lead, user: User, delivery_i
         text = draft.build(lead.text, lead.name, root, user.reply_template, user.prices)
         await cb.answer()
     await cb.message.answer(
-        f"✨ <b>Черновик ответа</b> (нажмите на текст — скопируется, поправьте под себя):\n\n<code>{esc(text)}</code>",
-        reply_markup=kb([[("🔄 Другой вариант", f"lead:ai:{delivery_id}"), ("✍️ Написать клиенту", f"url:{contact}")]]))
+        f"✨ <b>Черновик ответа</b> (поправьте под себя):\n\n<code>{esc(text)}</code>{reply_hint(lead, text)}",
+        reply_markup=kb(reply_rows(lead, text) + [[("🔄 Другой вариант", f"lead:ai:{delivery_id}")]]),
+        disable_web_page_preview=True)

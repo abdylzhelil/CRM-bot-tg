@@ -72,6 +72,10 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
     d = delivery_id
     rows = [
         [reply, InlineKeyboardButton(text="📋 Шаблон", callback_data=f"lead:tpl:{d}")],
+    ]
+    if lead.link:  # бот сам не пишет клиенту — отвечаем на его сообщение в группе
+        rows.append([InlineKeyboardButton(text="💬 Ответить в группе", url=lead.link)])
+    rows += [
         [InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{d}"),
          InlineKeyboardButton(text="📨 Коллеге", callback_data=f"lead:pass:{d}")],
         [
