@@ -82,3 +82,82 @@ async def test_admin_button_turns_group_off_and_back(maker, tgbot):
         await leads_h.lead_action(c, admin)
         async with maker() as s:
             assert (await s.get(Group, gid)).no_leads is want
+
+
+ADS = ["Делаем сайты под ключ, портфолио в профиле, обращайтесь в лс",
+       "Позволь пригласить тебя во флуд, присоединяйтесь, нас пока мало, заходите",
+       "Баннеры по низкой цене, вы сможете заказать у нас прямо сейчас #баннер #ава #постер"]
+
+
+def test_content_reason():
+    assert junk.content_reason(ADS * 4).startswith("почти одна реклама")
+    assert junk.content_reason(["Hello everyone, welcome to our nice friendly chat"] * 12).startswith("сообщения не на русском")
+    normal = ["Ищу мастера по ремонту стиральной машины, кто может завтра", "Продам детскую коляску почти новую недорого",
+              "Подскажите хорошего стоматолога в нашем районе пожалуйста"] * 4
+    assert junk.content_reason(normal) == ""
+    assert junk.content_reason(ADS) == ""  # мало сообщений — не судим
+
+
+class Msg:
+    def __init__(self, text):
+        from datetime import datetime
+
+        self.message, self.date = text, datetime(2026, 10, 18)
+
+
+class QualityClient:
+    def __init__(self, texts):
+        self.texts, self.joined = texts, False
+
+    async def get_entity(self, _):
+        return object()
+
+    async def iter_messages(self, *_a, **_k):
+        for t in self.texts:
+            yield Msg(t)
+
+    async def __call__(self, req):
+        self.joined = True
+
+    def is_connected(self):
+        return True
+
+
+async def test_scout_does_not_join_junk_and_admin_can_return(maker, monkeypatch):
+    from app.bot.handlers import groups as groups_h
+    from app.models import ScoutAccount
+    from app.scout import client as scout_client, joiner
+
+    monkeypatch.setattr(scout_client, "ensure_connected", AsyncMock(return_value=True))
+    async with maker() as s:
+        s.add(Group(tg_id=-901, username="g901", title="Чат района", status="approved", members=500))
+        s.add(ScoutAccount(id=5, name="sc5", api_id=1, api_hash="x", daily_join_limit=10))
+        await s.commit()
+    client = QualityClient(ADS * 4)
+    assert await joiner.join_one(client, 5) is True
+    assert not client.joined
+    async with maker() as s:
+        g = await s.scalar(select(Group).where(Group.tg_id == -901))
+        acc = await s.get(ScoutAccount, 5)
+    assert g.status == "skipped" and "реклама" in g.skip_reason and acc.joined_today == 0
+    # админ вернул вручную — вступает без проверки
+    c = MagicMock()
+    c.data, c.answer, c.message.edit_text = f"gr:back:{g.id}", AsyncMock(), AsyncMock()
+    c.message.answer = AsyncMock()
+    await groups_h.back_to_queue(c)
+    monkeypatch.setattr("app.scout.folders.mute", AsyncMock())
+    monkeypatch.setattr("app.scout.folders.sync_folders", AsyncMock())
+    assert await joiner.join_one(client, 5) is True
+    assert client.joined
+
+
+async def test_queue_cleanup_by_title(session):  # noqa: F811
+    from app.models import Setting as S
+
+    await session.delete(await session.get(S, junk.QUEUE_KEY))
+    session.add_all([Group(tg_id=31, title="Взаимопиар чат", status="approved"),
+                     Group(tg_id=32, title="Ремонт Казань", status="approved")])
+    await session.commit()
+    await junk.mark_existing(session)
+    st = {g.tg_id: g.status for g in (await session.scalars(select(Group).where(Group.tg_id.in_((31, 32))))).all()}
+    assert st == {31: "skipped", 32: "approved"}

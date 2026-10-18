@@ -15,6 +15,7 @@ DEFAULTS: dict[str, str] = {
     "rotation_days": "30",
     "join_retry_days": "3",
     "join_retry_max": "4",
+    "join_check": "1",
     "adpost_enabled": "0",
     "adpost_auto_approve": "0",
     "adpost_auto_refund": "1",
@@ -78,6 +79,7 @@ LABELS: dict[str, str] = {
     "dedupe_days": "Окно антидублей, дней",
     "rotation_days": "Выходить из групп без заявок за N дней",
     "join_retry_days": "Повторять заявку на вступление через N дней",
+    "join_check": "Проверять группу перед вступлением (название и сообщения)",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
     "adpost_enabled": "Реклама в группах через разведчиков (1/0)",
     "adpost_auto_approve": "Реклама в группах: одобрять заказы без запрещённых слов сами (1/0)",
@@ -156,7 +158,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
-                        "rotation_days", "join_retry_days", "join_retry_max",
+                        "rotation_days", "join_retry_days", "join_retry_max", "join_check",
                         "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
@@ -178,6 +180,7 @@ SHORT: dict[str, str] = {
     "default_join_limit": "Вступлений/сутки", "search_interval_h": "Поиск раз в, ч",
     "rotation_days": "Выход из тихих групп, дн",
     "join_retry_days": "Повтор заявки, дн",
+    "join_check": "Проверка перед вступлением",
     "join_retry_max": "Попыток вступить",
     "adpost_enabled": "Реклама вкл (1/0)", "adpost_auto_approve": "Автоодобрение (1/0)", "adpost_auto_refund": "Автовозврат (1/0)", "adpost_fulfill": "Условия групп (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
     "adpost_group_daily": "Постов в группу в сутки",
@@ -202,6 +205,8 @@ HINTS: dict[str, str] = {
     "dedupe_days": "Одинаковые сообщения за это окно считаются повтором.",
     "rotation_days": "Группу без заявок столько дней разведчик покидает и ищет новую.",
     "join_retry_days": "Если админ группы не одобрил заявку на вступление, разведчик отправит её снова через столько дней.",
+    "join_check": "1 — перед вступлением разведчик читает название и последние сообщения группы и не вступает в рекламные "
+                  "свалки, флуды, игровые и нерусскоязычные чаты (они в «🚫 Пропущены» с причиной, можно вернуть). 0 — вступает во всё из очереди.",
     "join_retry_max": "Сколько всего раз разведчик пробует вступить в группу, где нужно одобрение админа. После этого группа пропускается.",
     "adpost_enabled": "Включает заказ рекламы пользователями и публикацию постов разведчиками в разрешённых группах. 0 — ничего не публикуется.",
     "adpost_auto_approve": "1 — заказ без запрещённых слов сразу идёт на оплату, без вашей проверки (подозрительные всё равно придут вам). 0 — вы одобряете каждый заказ.",
@@ -302,7 +307,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),

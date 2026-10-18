@@ -21,16 +21,21 @@ def detect_lang(title: str) -> str:
     return "ru" if cyr >= max(1, len(title) // 3) else "other"
 
 
-async def _activity(client: TelegramClient, entity: Channel) -> float:
-    """Сообщений в сутки по последним 100 сообщениям; -1 если прочитать нельзя."""
+async def _sample(client: TelegramClient, entity: Channel) -> tuple[float, list[str]]:
+    """(сообщений в сутки по последним 100, их тексты); (-1, []) если прочитать нельзя."""
     try:
         msgs = [m async for m in client.iter_messages(entity, limit=100)]
     except Exception:
-        return -1
+        return -1, []
+    texts = [m.message for m in msgs if getattr(m, "message", None)]
     if len(msgs) < 2:
-        return 0
+        return 0, texts
     span = (msgs[0].date - msgs[-1].date).total_seconds() / 86400
-    return len(msgs) / max(span, 1 / 24)
+    return len(msgs) / max(span, 1 / 24), texts
+
+
+async def _activity(client: TelegramClient, entity: Channel) -> float:
+    return (await _sample(client, entity))[0]
 
 
 _stop_requested = False
@@ -125,6 +130,7 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         min_members = await settings.get_int(s, "min_members")
         min_msgs = await settings.get_int(s, "min_msgs_per_day")
         auto = await settings.get(s, "mode") == "auto"
+        check = await settings.get(s, "join_check") == "1"
     found = known = small = errors = junked = 0
     lost = False
     done = 0
@@ -161,20 +167,21 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
             try:
                 full = await client(functions.channels.GetFullChannelRequest(chat))
                 members = full.full_chat.participants_count or 0
-                msgs_day = await _activity(client, chat)
+                msgs_day, texts = await _sample(client, chat)
             except FloodWaitError as e:
                 await asyncio.sleep(e.seconds + 5)
                 continue
             except Exception:
                 log.exception("данные группы %s", chat.title)
                 continue
-            junk_title = junk.is_junk_title(chat.title or "")
+            reason = (junk.title_reason(chat.title or "") or junk.content_reason(texts)) if check else ""
+            junk_title = bool(reason)
             ok = not junk_title and members >= min_members and (msgs_day < 0 or msgs_day >= min_msgs)
             async with Session() as s:
                 g = Group(
                     tg_id=tg_id, username=chat.username or "", title=chat.title or "",
                     members=members, msgs_per_day=msgs_day, lang=detect_lang(chat.title or ""),
-                    status=("approved" if auto else "candidate") if ok else "skipped",
+                    status=("approved" if auto else "candidate") if ok else "skipped", skip_reason=reason,
                 )
                 s.add(g)
                 await s.commit()

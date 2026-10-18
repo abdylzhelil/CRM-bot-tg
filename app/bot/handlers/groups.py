@@ -99,7 +99,8 @@ async def show_list(cb: CallbackQuery, status: str) -> None:
     if status == "candidate":
         return await review(cb)
     if status in BACKABLE:  # пропущенные и покинутые можно вернуть в очередь по одной
-        rows = [[(f"↩️ {g.title[:40]} · {g.members} уч.", f"gr:back:{g.id}")] for g in groups if g.kind == "group"]
+        rows = [[(f"↩️ {g.title[:40]} · {g.members} уч." + (f" · {g.skip_reason[:30]}" if g.skip_reason else ""),
+                  f"gr:back:{g.id}")] for g in groups if g.kind == "group"]
         rows.append([("◀️ Назад", "gr:menu")])
         return await reply(cb, f"{BACKABLE[status]} (нажмите на группу, чтобы вернуть её в очередь на вступление; "
                            "показаны самые большие):", kb(rows))
@@ -117,6 +118,8 @@ async def back_to_queue(cb: CallbackQuery) -> None:
             return await cb.answer("Группа уже не в этом списке", show_alert=True)
         was = g.status
         g.status, g.join_attempts, g.join_retry_at = "approved", 0, None
+        if g.skip_reason:  # админ сам вернул — проверку перед вступлением для неё не делаем
+            g.skip_reason = "вернул админ"
         await s.commit()
     await cb.answer("Вернули в очередь на вступление")
     await show_list(cb, was)

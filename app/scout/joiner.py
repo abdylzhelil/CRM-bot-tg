@@ -42,6 +42,21 @@ async def _retry_later(s, g: Group) -> None:
         g.join_retry_at = now() + timedelta(days=await settings.get_int(s, "join_retry_days"))
 
 
+async def _quality(client: TelegramClient, entity, g: Group) -> str:
+    """Почему не стоит вступать ("" — вступаем). Сообщения открытой группы читаются без вступления."""
+    from app.scout.search import _sample
+    from app.services import junk
+
+    reason = junk.title_reason(g.title)
+    if reason:
+        return reason
+    try:
+        _, texts = await _sample(client, entity)
+    except Exception:
+        return ""
+    return junk.content_reason(texts)
+
+
 async def join_one(client: TelegramClient, acc_id: int) -> bool:
     """Вступить в одну одобренную группу. True — если попытка была (нужна пауза)."""
     from app.scout.client import ensure_connected
@@ -76,6 +91,14 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             return False
         try:
             entity = await client.get_entity(g.username or g.tg_id)
+            if (g.status == "approved" and g.skip_reason != "вернул админ"
+                    and await settings.get(s, "join_check") == "1"):
+                reason = await _quality(client, entity, g)
+                if reason:  # реклама/флуд/не по-русски — вступление не тратим
+                    g.status, g.skip_reason = "skipped", reason
+                    await s.commit()
+                    log.info("не вступаю в %s: %s", g.title, reason)
+                    return True
             await client(functions.channels.JoinChannelRequest(entity))
             g.status, g.account_id, g.joined_at = "joined", acc_id, now()
             acc.joined_today += 1
