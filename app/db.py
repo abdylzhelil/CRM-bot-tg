@@ -13,7 +13,12 @@ if config.DATABASE_URL.startswith("sqlite"):
 def make_engine(url: str) -> AsyncEngine:
     """Движок БД. Для SQLite включаем режим WAL: бот, фоновые задачи и кабинет пишут в одну базу одновременно,
     без WAL читатели и писатель мешают друг другу (ошибка «database is locked»); busy_timeout — ждать освобождения, а не падать."""
-    engine = create_async_engine(url)
+    if url.startswith("postgresql"):
+        # база на другом сервере (Россия), бот в Алматы: связь может рваться — проверять соединение перед запросом
+        # и не держать старые соединения дольше 30 минут
+        engine = create_async_engine(url, pool_pre_ping=True, pool_recycle=1800, pool_size=5, max_overflow=5)
+    else:
+        engine = create_async_engine(url)
     if url.startswith("sqlite") and ":memory:" not in url:
         @event.listens_for(engine.sync_engine, "connect")
         def _sqlite_pragmas(dbapi_connection, _record) -> None:

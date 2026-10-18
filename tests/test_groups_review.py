@@ -115,6 +115,8 @@ async def test_scout_groups_go_to_folders(maker):
 
     ids = [-1000000000000 - n for n in range(1, 151)]  # 150 групп → 2 папки
     async with maker() as s:
+        s.add(ScoutAccount(id=3, name="sc3", api_id=1, api_hash="x"))
+        await s.flush()
         for i in ids:
             s.add(Group(tg_id=i, title="g", status="joined", account_id=3))
         await s.commit()

@@ -619,7 +619,7 @@ async def test_lead_restore_from_spam_and_spam_tab(client, maker):
 
     await make_user(maker, 35)
     async with maker() as s:
-        lead = Lead(group_id=0, group_title="Г", author_id=777, text="Нужен сайт", text_hash="h")
+        lead = Lead(group_id=None, group_title="Г", author_id=777, text="Нужен сайт", text_hash="h")
         s.add(lead)
         await s.commit()
         d = Delivery(lead_id=lead.id, user_id=35, deliver_after=lead.created_at, sent=True)
@@ -634,3 +634,18 @@ async def test_lead_restore_from_spam_and_spam_tab(client, maker):
         assert await s.scalar(select(SpamVote).where(SpamVote.author_id == 777)) is None  # голос снят
         assert await s.get(BlacklistEntry, 777) is None
     assert (await client.post(f"/api/leads/{d.id}/restore", headers=tma(35))).status == 403  # новую «возвращать» нечего
+
+
+async def test_cabinet_mute(client, maker):
+    """🔕 в кабинете: выключить на время, вкладка «Накопилось», включить."""
+    await make_user(maker, 64)
+    me = await (await client.get("/api/me", headers=tma(64))).json()
+    assert me["mute"]["on"] is False and any(o["code"] == "3h" for o in me["mute"]["options"])
+    r = await client.post("/api/mute", json={"code": "3h"}, headers=tma(64))
+    assert r.status == 200 and (await r.json())["until"].startswith("до ")
+    assert (await (await client.get("/api/me", headers=tma(64))).json())["mute"]["on"] is True
+    assert (await client.get("/api/leads?status=muted", headers=tma(64))).status == 200
+    assert (await client.post("/api/mute", json={"code": "bad"}, headers=tma(64))).status == 400
+    r = await client.post("/api/mute", json={"on": True}, headers=tma(64))
+    assert (await r.json())["on"] is False
+    assert (await client.post("/api/mute", json={"on": True})).status == 401

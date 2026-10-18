@@ -55,9 +55,17 @@ async def maker(monkeypatch):
     from app.seed import seed
     from app.services import rules
 
-    engine = create_async_engine("sqlite+aiosqlite://", poolclass=pool.StaticPool)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # TEST_DATABASE_URL=postgresql+asyncpg://… — те же тесты на PostgreSQL (проверка перед переносом базы)
+    pg_url = os.getenv("TEST_DATABASE_URL")
+    if pg_url:
+        engine = create_async_engine(pg_url, poolclass=pool.NullPool)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+    else:
+        engine = create_async_engine("sqlite+aiosqlite://", poolclass=pool.StaticPool)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     for name, mod in list(sys.modules.items()):
         if name.startswith("app.") and hasattr(mod, "Session"):

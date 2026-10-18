@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import event, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -86,6 +86,7 @@ class Group(Base):
     ad_ai_channels: Mapped[str] = mapped_column(String(160), default="")  # каналы, на которые, по мнению ИИ, надо подписаться
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
+    ad_auto_tried: Mapped[bool] = mapped_column(Boolean, default=False)  # бот уже сам открывал её для рекламы (adpost_auto_allow) — второй раз не открывает
     no_leads: Mapped[bool] = mapped_column(Boolean, default=False)  # заявки отсюда не брать (реклама/флуд), services/junk.py
     skip_reason: Mapped[str] = mapped_column(String(120), default="")  # почему разведчик не вступил (видно в «🚫 Пропущены»)
     wanted_by: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # пользователь, для которого нашли («🔎 Найти группы для меня»)
@@ -479,3 +480,20 @@ class AdPost(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда последний раз видели пост на месте
     fulfilled: Mapped[bool] = mapped_column(Boolean, default=False)  # уже выполняли условия группы и пробовали снова (один раз)
     settled: Mapped[bool] = mapped_column(Boolean, default=False)  # пост не вышел и вопрос денег за него закрыт (вернули / решили не возвращать)
+
+
+# ---------- защита для PostgreSQL ----------
+# SQLite не проверяет длину String(n), PostgreSQL — проверяет и падает («value too long»). Чтобы длинное имя группы
+# или текст ошибки не роняли бота после переноса базы, обрезаем строку до размера колонки перед записью.
+def _fit_strings(_mapper, _connection, target) -> None:
+    for column in target.__table__.columns:
+        limit = getattr(column.type, "length", None)
+        if not limit or not isinstance(column.type, String) or isinstance(column.type, Text):
+            continue
+        value = getattr(target, column.key, None)
+        if isinstance(value, str) and len(value) > limit:
+            setattr(target, column.key, value[:limit])
+
+
+event.listen(Base, "before_insert", _fit_strings, propagate=True)
+event.listen(Base, "before_update", _fit_strings, propagate=True)

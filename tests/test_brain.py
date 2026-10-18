@@ -77,6 +77,7 @@ async def test_group_rules_by_ai_overrides_words(maker, tgbot, monkeypatch):
         "summary": "Объявления — только после согласования с @boss"}))
     async with maker() as s:
         s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        await s.flush()  # PostgreSQL проверяет ссылку группы на разведчика
         s.add(Group(id=5, tg_id=-5, username="g", title="Г", status="joined", kind="group", account_id=1, ads_allowed=True))
         await s.commit()
     client = AsyncMock()

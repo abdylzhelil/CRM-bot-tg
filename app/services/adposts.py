@@ -142,6 +142,24 @@ async def due_rechecks(s: AsyncSession, limit: int = 5) -> list[int]:
     return list(rows)
 
 
+AUTO_ALLOW_PER_RUN = 3
+
+
+async def auto_allow(s: AsyncSession, limit: int = AUTO_ALLOW_PER_RUN) -> list[int]:
+    """adpost_auto_allow: открыть для рекламы группы, где разведчик уже состоит (каждую — один раз; дальше проверка
+    check_group выключит те, где писать нельзя или правила запрещают). Коммит — на вызывающем."""
+    if await settings.get(s, "adpost_auto_allow") != "1" or await settings.get(s, "adpost_enabled") != "1":
+        return []
+    rows = (await s.scalars(select(Group).where(
+        Group.status == "joined", Group.kind == "group", ~Group.ads_allowed, ~Group.ad_auto_tried,
+        Group.account_id.is_not(None)).order_by(Group.members.desc()).limit(limit))).all()
+    for g in rows:
+        g.ads_allowed, g.ad_auto_tried = True, True
+        g.ad_account_id = g.ad_account_id or g.account_id
+        g.ad_checked_at = None  # проверка — следующим шагом
+    return [g.id for g in rows]
+
+
 def group_price(g: Group, default: int) -> int:
     return g.ad_price if g.ad_price > 0 else default
 

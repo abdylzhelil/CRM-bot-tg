@@ -4,7 +4,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: sqlite+aiosqlite:///data/crm.db
+      # база: по умолчанию SQLite в data/; после переноса в PostgreSQL — строка CRM_DATABASE_URL в .env (docs/DB_MOVE.md)
+      DATABASE_URL: ${CRM_DATABASE_URL:-sqlite+aiosqlite:///data/crm.db}
     volumes:
       - ./data:/srv/data
     logging:  # журнал контейнера не растёт бесконечно: до 3 файлов по 10 МБ
@@ -24,5 +25,3 @@ networks:
     external: true
     name: tgbots
 
-  # Для PostgreSQL: добавьте сервис db (postgres:16), поменяйте DATABASE_URL на
-  # postgresql+asyncpg://crm:crm@db:5432/crm и добавьте depends_on: [db].

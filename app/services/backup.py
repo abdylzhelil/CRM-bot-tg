@@ -1,4 +1,8 @@
-"""Ежедневная копия базы SQLite (оплаты и пользователи — важные данные). Для PostgreSQL бэкап делает сервер."""
+"""Ежедневная копия базы (оплаты и пользователи — важные данные) в data/backups, 7 штук, и раз в неделю — файлом владельцу.
+
+SQLite копируется своим backup API. PostgreSQL (после переноса базы) — выгрузкой всех таблиц в такой же файл SQLite
+(app/dbcopy.py): копия остаётся одним файлом, её так же можно открыть и из неё же восстановить базу.
+"""
 import asyncio
 import logging
 import sqlite3
@@ -18,6 +22,36 @@ def sqlite_path() -> Path | None:
     return Path(url.split("///", 1)[1])
 
 
+def backup_folder() -> Path:
+    src = sqlite_path()
+    return (src.parent if src else Path("data")) / "backups"
+
+
+def _rotate(folder: Path, stem: str, keep: int = KEEP) -> None:
+    for old in sorted(folder.glob(f"{stem}-*.db"))[:-keep]:
+        old.unlink()
+
+
+async def backup_once() -> Path | None:
+    """Сделать копию текущей базы (любой). None — базы в файле нет (тесты в памяти и т. п.)."""
+    src = sqlite_path()
+    if src is not None:
+        return await asyncio.to_thread(make_backup, src) if src.exists() else None
+    if not config.DATABASE_URL.startswith("postgresql"):
+        return None
+    from app import dbcopy
+
+    folder = backup_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / f"crm-{date.today().isoformat()}.db"
+    tmp = dest.with_suffix(".part")
+    tmp.unlink(missing_ok=True)
+    await dbcopy.copy_all(config.DATABASE_URL, f"sqlite+aiosqlite:///{tmp}")
+    tmp.replace(dest)  # файл появляется целиком, недоделанная копия не попадёт в рассылку
+    _rotate(folder, "crm")
+    return dest
+
+
 def make_backup(src: Path, folder: Path | None = None, keep: int = KEEP) -> Path:
     """Согласованная копия через sqlite3 backup API (безопасно при работающем боте); старые удаляются."""
     folder = folder or src.parent / "backups"
@@ -29,8 +63,7 @@ def make_backup(src: Path, folder: Path | None = None, keep: int = KEEP) -> Path
     finally:
         target.close()
         source.close()
-    for old in sorted(folder.glob(f"{src.stem}-*.db"))[:-keep]:
-        old.unlink()
+    _rotate(folder, src.stem, keep)
     return dest
 
 
@@ -38,9 +71,8 @@ async def send_latest(bot, admin_ids, folder: Path | None = None) -> int:
     """Прислать свежую копию базы администраторам файлом (раз в неделю) — чтобы не скачивать с сервера руками."""
     from aiogram.types import FSInputFile
 
-    src = sqlite_path()
-    folder = folder or (src.parent / "backups" if src else None)
-    files = sorted(folder.glob("*.db")) if folder and folder.exists() else []
+    folder = folder or backup_folder()
+    files = sorted(folder.glob("*.db"), key=lambda p: p.stat().st_mtime) if folder.exists() else []
     if not files:
         return 0
     sent = 0
@@ -76,13 +108,11 @@ async def _weekly_send() -> None:
 
 
 async def backup_loop() -> None:
-    src = sqlite_path()
-    if src is None:
+    if sqlite_path() is None and not config.DATABASE_URL.startswith("postgresql"):
         return
     while True:
         try:
-            if src.exists():
-                await asyncio.to_thread(make_backup, src)
+            if await backup_once() is not None:
                 await _weekly_send()
         except Exception:
             log.exception("backup_loop")

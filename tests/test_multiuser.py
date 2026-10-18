@@ -197,7 +197,7 @@ async def test_flush_concurrent_sends_once_and_retries_on_flood(maker, tgbot, mo
 
     await make_user(maker, 40, plan="full")
     async with maker() as s:
-        lead = Lead(group_id=0, group_title="Г", author_id=555, text="Нужен сайт", text_hash="h", category_id=None)
+        lead = Lead(group_id=None, group_title="Г", author_id=555, text="Нужен сайт", text_hash="h", category_id=None)
         s.add(lead)
         await s.commit()
         s.add(Delivery(lead_id=lead.id, user_id=40, deliver_after=now()))
@@ -228,7 +228,7 @@ async def test_flush_concurrent_sends_once_and_retries_on_flood(maker, tgbot, mo
 async def test_paused_user_gets_nothing_from_queue(maker, tgbot):
     await make_user(maker, 41, paused=True)
     async with maker() as s:
-        lead = Lead(group_id=0, group_title="Г", author_id=556, text="Нужен сайт", text_hash="h", category_id=None)
+        lead = Lead(group_id=None, group_title="Г", author_id=556, text="Нужен сайт", text_hash="h", category_id=None)
         s.add(lead)
         await s.commit()
         s.add(Delivery(lead_id=lead.id, user_id=41, deliver_after=now()))
@@ -241,7 +241,7 @@ async def test_pass_to_rejects_wildcards(maker, tgbot):
     await make_user(maker, 42, username="kolya")
     await make_user(maker, 43, username="petya")
     async with maker() as s:
-        lead = Lead(group_id=0, group_title="Г", author_id=557, text="Нужен сайт", text_hash="h", category_id=None)
+        lead = Lead(group_id=None, group_title="Г", author_id=557, text="Нужен сайт", text_hash="h", category_id=None)
         s.add(lead)
         await s.commit()
         d = Delivery(lead_id=lead.id, user_id=42, deliver_after=now(), sent=True)
@@ -259,7 +259,7 @@ async def test_pass_to_rejects_wildcards(maker, tgbot):
 async def test_bot_lists_by_status_and_restore_button(maker, tgbot):
     await make_user(maker, 44)
     async with maker() as s:
-        lead = Lead(group_id=0, group_title="Г", author_id=558, text="Нужен сайт", text_hash="h", category_id=None)
+        lead = Lead(group_id=None, group_title="Г", author_id=558, text="Нужен сайт", text_hash="h", category_id=None)
         s.add(lead)
         await s.commit()
         d = Delivery(lead_id=lead.id, user_id=44, deliver_after=now(), sent=True, status="rejected")

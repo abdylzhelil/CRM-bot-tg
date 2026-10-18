@@ -21,6 +21,7 @@ TEXT = "Ремонт квартир под ключ в Махачкале, зв�
 async def setup_group(maker, allowed=True, on=True, price=0, gid=-100):
     async with maker() as s:
         s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        await s.flush()  # PostgreSQL проверяет ссылку группы на разведчика
         s.add(Group(tg_id=gid, username="barakholka", title="Барахолка", members=5000, status="joined", kind="group",
                     account_id=1, ads_allowed=allowed, city="Махачкала"))
         await settings.put(s, "adpost_enabled", "1" if on else "0")
@@ -407,6 +408,7 @@ async def test_prices_per_group_and_channel_with_own_publisher(maker, tgbot):
     await make_user(maker, 70)
     async with maker() as s:
         s.add(ScoutAccount(id=2, name="chan_admin", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        await s.flush()  # PostgreSQL проверяет ссылку группы на разведчика
         s.add(Group(tg_id=-200, username="newschan", title="Новости", members=9000, status="joined", kind="channel",
                     ads_allowed=True, ad_price=1500, ad_account_id=2))
         # канал без назначенного аккаунта и группа без разрешения не доступны
@@ -482,6 +484,7 @@ async def test_group_card_toggle_and_channel_needs_publisher(maker, tgbot, monke
     monkeypatch.setattr(ah, "reply", sent)
     async with maker() as s:
         s.add(ScoutAccount(id=3, name="a3", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        await s.flush()  # PostgreSQL проверяет ссылку группы на разведчика
         s.add(Group(tg_id=-300, username="ch", title="Канал", members=10, status="joined", kind="channel"))
         await s.commit()
         gid = (await s.scalar(select(Group))).id
@@ -528,6 +531,7 @@ async def test_per_group_daily_limit(maker, tgbot, monkeypatch):
 async def many_groups(maker):
     async with maker() as s:
         s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, can_post=True, status="ok"))
+        await s.flush()  # PostgreSQL проверяет ссылку группы на разведчика
         for i, members in enumerate((100, 1000, 5000, 10000)):
             s.add(Group(tg_id=-1000 - i, username=f"g{i}", title=f"Группа {i}", members=members, status="joined",
                         kind="group", account_id=1))
@@ -665,6 +669,8 @@ async def test_group_daily_limit_counts_local_day(maker, monkeypatch):
     monkeypatch.setattr(adposts, "day_start", lambda: start)
     async with maker() as s:
         g = await s.scalar(select(Group))
+        s.add(AdOrder(id=1, user_id=ADMIN_ID, text="т", status="running"))
+        await s.flush()
         s.add(AdPost(order_id=1, group_id=g.id, status="sent", sent_at=start - timedelta(minutes=5)))  # вчера
         s.add(AdPost(order_id=1, group_id=g.id, status="sent", sent_at=start + timedelta(minutes=5)))  # сегодня
         await s.commit()
@@ -1282,6 +1288,7 @@ async def test_invite_own_scouts(maker, tgbot):
     async with maker() as s:
         s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", enabled=True, phone="+7900"))
         s.add(ScoutAccount(id=2, name="sc2", api_id=1, api_hash="x", enabled=True, phone="+7901"))
+        await s.flush()  # PostgreSQL проверяет ссылку группы на разведчика
         await s.commit()
     client = AsyncMock()
     client.return_value = SimpleNamespace(users=[SimpleNamespace(id=2)])
@@ -1417,3 +1424,38 @@ async def test_erid_marking_gate_and_footer(maker, tgbot, monkeypatch):
         text = await adposts.compose(s, order)
         assert text.endswith("Реклама. ИП Иванов И. И., ИНН 050000000000. erid: 2VtzqvXyZ12")
         assert adposts.parse_marking("-") == ("", "")
+
+
+async def test_auto_allow_opens_each_group_once(maker):
+    """«Автооткрытие для рекламы»: только при включённой настройке, каждую группу один раз (выключенную вами — не трогает)."""
+    from app.models import Group
+    from app.services import adposts as ap
+    from app.services import settings as st
+
+    async with maker() as s:
+        s.add_all([Group(tg_id=-9301, title="Барахолка", status="joined", account_id=None, members=500),
+                   Group(tg_id=-9302, title="Услуги", status="joined", members=900)])
+        await s.flush()
+        g1, g2 = (await s.scalars(select(Group).where(Group.tg_id.in_((-9301, -9302))).order_by(Group.tg_id))).all()
+        g1.account_id = g2.account_id = None
+        await s.commit()
+        assert await ap.auto_allow(s) == []  # выключено по умолчанию
+        await st.put(s, "adpost_enabled", "1")
+        await st.put(s, "adpost_auto_allow", "1")
+        assert await ap.auto_allow(s) == []  # без аккаунта-разведчика — нечем публиковать
+    async with maker() as s:
+        from app.models import ScoutAccount
+
+        s.add(ScoutAccount(id=9, name="sc", api_id=1, api_hash="x"))
+        await s.flush()
+        for g in (await s.scalars(select(Group).where(Group.tg_id.in_((-9301, -9302))))).all():
+            g.account_id = 9
+        await s.commit()
+        opened = await ap.auto_allow(s)
+        await s.commit()
+        assert len(opened) == 2
+        g = await s.get(Group, opened[0])
+        assert g.ads_allowed and g.ad_account_id == 9
+        g.ads_allowed = False  # админ выключил
+        await s.commit()
+        assert await ap.auto_allow(s) == []  # повторно не открывает

@@ -122,6 +122,10 @@ async def me(request: web.Request) -> web.Response:
         clients = await s.scalar(select(func.count()).select_from(Client).where(Client.user_id == user.tg_id)) or 0
         free_limit = await settings.get_int(s, "free_daily_limit")
         free_delay = await settings.get_int(s, "free_delay_min")
+        from app.services import mute
+
+        row = await s.get(User, user.tg_id)
+        muted_n = await mute.accumulated(s, user.tg_id)
     paid = is_paid(user)
     return web.json_response({
         "id": user.tg_id,
@@ -135,6 +139,8 @@ async def me(request: web.Request) -> web.Response:
         },
         "city": user.city,
         "paused": user.paused,
+        "mute": {"on": mute.is_muted(row), "until": mute.until_text(row) if mute.is_muted(row) else "", "accumulated": muted_n,
+                 "options": [{"code": c, "label": label} for c, label in mute.OPTIONS]},
         "stats": {
             "today": today, "new": cnt.get("new", 0), "postponed": cnt.get("postponed", 0),
             "taken": cnt.get("taken", 0), "clients": clients,
@@ -180,6 +186,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/plans", api.plans_get)
     app.router.add_post("/api/pay", api.pay_create)
     app.router.add_post("/api/renew/off", api.renew_off)
+    app.router.add_post("/api/mute", api.mute_set)
     app.router.add_get("/api/stats", api.stats_get)
     app.router.add_get("/api/admin/status", admin_api.status_get)
     app.router.add_put("/api/admin/scout", admin_api.scout_put)

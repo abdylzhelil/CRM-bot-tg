@@ -11,7 +11,7 @@ from app.services.distribute import is_paid
 from app.bot.handlers.leads import category_name
 from app.web.keys import USER_KEY
 
-STATUSES = ("new", "postponed", "taken", "rejected", "spam")
+STATUSES = ("new", "postponed", "taken", "rejected", "spam", "muted")  # muted — «🔕 накопилось без уведомлений»
 PAGE = 20
 
 
@@ -57,7 +57,8 @@ async def leads_list(request: web.Request) -> web.Response:
         return err("bad_request", "Некорректный запрос")
     async with Session() as s:
         q = (select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
-             .where(Delivery.user_id == user.tg_id, Delivery.sent, Delivery.status == status))
+             .where(Delivery.user_id == user.tg_id, Delivery.sent))
+        q = q.where(Delivery.muted, Delivery.status == "new") if status == "muted" else q.where(Delivery.status == status)
         if before:
             q = q.where(Delivery.id < before)
         rows = (await s.execute(q.order_by(Delivery.id.desc()).limit(PAGE + 1))).all()
@@ -411,3 +412,25 @@ async def stats_get(request: web.Request) -> web.Response:
     st = await user_stats(user.tg_id)
     st["stages"] = [{"id": k, "title": STAGE_NAMES[k], "count": v} for k, v in st["stages"].items() if k in STAGE_NAMES]
     return web.json_response(st)
+
+
+async def mute_set(request: web.Request) -> web.Response:
+    """🔕 Выключить уведомления о заявках на время ({"code": "3h"}) или включить ({"on": true}). Та же логика, что в боте."""
+    from app.services import mute
+
+    user: User = request[USER_KEY]
+    data = await read_json(request)
+    if data is None:
+        return err("bad_request", "Некорректный запрос")
+    async with Session() as s:
+        if data.get("on"):
+            n = await mute.unmute(s, user)
+            await s.commit()
+            return web.json_response({"ok": True, "on": False, "accumulated": n})
+        code = data.get("code")
+        if code not in dict(mute.OPTIONS):
+            return err("bad_code", "Неизвестный срок")
+        await mute.set_mute(s, user, code)
+        await s.commit()
+        row = await s.get(User, user.tg_id)
+        return web.json_response({"ok": True, "on": True, "until": mute.until_text(row)})

@@ -349,10 +349,14 @@ async def recheck_groups(manager) -> list[str]:
     """Фоном: проверить ни разу не проверенные группы и перепроверить закрытые (раз в 2 ч).
     Закрыта дольше 48 ч — значит, писать там нельзя совсем: выключаем рекламу. Возвращает названия выключенных."""
     async with Session() as s:
-        ids = await adposts.due_rechecks(s)
-    off = []
+        opened = await adposts.auto_allow(s)  # «Автооткрытие для рекламы» (adpost_auto_allow)
+        await s.commit()
+        ids = list(dict.fromkeys(opened + await adposts.due_rechecks(s)))
+    off, fresh = [], []
     for gid in ids:
         level, _ = await check_group(manager, gid)
+        if gid in opened and level != "bad":
+            fresh.append(gid)
         await asyncio.sleep(2)  # не дёргаем Telegram слишком часто
         async with Session() as s:
             g = await s.get(Group, gid)
@@ -362,6 +366,16 @@ async def recheck_groups(manager) -> list[str]:
                 await s.commit()
             elif g is not None and level == "bad":
                 off.append((g.id, g.title))
+    if fresh:
+        async with Session() as s:
+            titles = [(g.id, g.title) for g in (await s.scalars(select(Group).where(Group.id.in_(fresh)))).all() if g.ads_allowed]
+        if titles:
+            await notify._send("✅ Открыл для рекламы (проверил права и правила группы): "
+                               + ", ".join(html.escape(t) for _, t in titles)
+                               + ". Выключить или поставить цену — в карточке группы.",
+                               notify.InlineKeyboardMarkup(inline_keyboard=[
+                                   [notify.InlineKeyboardButton(text=f"📢 {t[:30]}", callback_data=f"apg:o:{gid}")]
+                                   for gid, t in titles[:8]]))
     if off:  # одним сообщением за проверку
         await notify._send("⛔ Реклама выключена (покупатели их больше не видят): писать туда нельзя — закрыта больше 2 суток, "
                            "нет доступа или правила группы запрещают рекламу. Причина — в карточке группы.\n"

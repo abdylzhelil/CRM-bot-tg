@@ -17,6 +17,7 @@ DEFAULTS: dict[str, str] = {
     "join_retry_max": "4",
     "join_check": "1",
     "user_search_free": "3",
+    "adpost_auto_allow": "0",
     "user_search_full": "10",
     "user_search_days": "3",
     "adpost_enabled": "0",
@@ -84,6 +85,7 @@ LABELS: dict[str, str] = {
     "join_retry_days": "Повторять заявку на вступление через N дней",
     "join_check": "Проверять группу перед вступлением (название и сообщения)",
     "user_search_free": "«Найти группы для меня»: запросов у бесплатного тарифа",
+    "adpost_auto_allow": "Сам открывать новые группы для рекламы (после проверки)",
     "user_search_full": "«Найти группы для меня»: запросов у 💎",
     "user_search_days": "Повторять поиск по запросу пользователя раз в N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
@@ -165,7 +167,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max", "join_check",
-                        "user_search_free", "user_search_full", "user_search_days",
+                        "user_search_free", "user_search_full", "user_search_days", "adpost_auto_allow",
                         "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
@@ -189,6 +191,7 @@ SHORT: dict[str, str] = {
     "join_retry_days": "Повтор заявки, дн",
     "join_check": "Проверка перед вступлением",
     "user_search_free": "Поиск для меня: бесплатно",
+    "adpost_auto_allow": "Автооткрытие для рекламы",
     "user_search_full": "Поиск для меня: 💎",
     "user_search_days": "Повтор поиска, дн",
     "join_retry_max": "Попыток вступить",
@@ -217,6 +220,10 @@ HINTS: dict[str, str] = {
     "join_retry_days": "Если админ группы не одобрил заявку на вступление, разведчик отправит её снова через столько дней.",
     "join_check": "1 — перед вступлением разведчик читает название и последние сообщения группы и не вступает в рекламные "
                   "свалки, флуды, игровые и нерусскоязычные чаты (они в «🚫 Пропущены» с причиной, можно вернуть). 0 — вступает во всё из очереди.",
+    "adpost_auto_allow": "1 — группы, куда вступил разведчик, бот сам открывает для рекламы: проверяет права и правила группы и, "
+                         "если реклама там не запрещена, показывает её покупателям (по 3 группы раз в ~5 минут). Группу, которую вы "
+                         "выключили сами, повторно не открывает. Больше групп — больше постов с аккаунта разведчика: включайте, когда "
+                         "есть второй разведчик. 0 — открываете вручную в «📢 Группы для рекламы».",
     "user_search_free": "Сколько своих поисковых запросов («🔎 Найти группы для меня» в 🌐 Каталоге) может держать человек на бесплатном тарифе. 0 — функция только для 💎.",
     "user_search_full": "Сколько своих поисковых запросов может держать человек с 💎. Каждый запрос — отдельный поиск разведчика, не ставьте слишком много.",
     "user_search_days": "Разведчик повторяет поиск по каждому запросу пользователя раз в столько дней — Telegram со временем показывает новые группы.",
@@ -320,7 +327,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),

@@ -171,9 +171,9 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
     # копия базы
     from app.services import backup
 
-    src = backup.sqlite_path()
-    if src is not None:
-        copies = sorted((src.parent / "backups").glob("*.db"), key=lambda p: p.stat().st_mtime) if (src.parent / "backups").exists() else []
+    folder = backup.backup_folder()
+    if backup.sqlite_path() is not None or config.DATABASE_URL.startswith("postgresql"):
+        copies = sorted(folder.glob("*.db"), key=lambda p: p.stat().st_mtime) if folder.exists() else []
         if not copies:
             add(WARN, "Копия базы", "копий ещё нет (первая появится в течение суток)")
         else:

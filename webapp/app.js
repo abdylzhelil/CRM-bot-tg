@@ -110,6 +110,13 @@
       el("div", {}, [roleBadge(me)]),
       el("p", { class: "muted", text: planLine(me) }),
       me.paused ? el("div", { class: "error", text: "⏸ Заявки на паузе. Возобновить: вкладка «Профиль»." }) : null,
+      me.mute && me.mute.on ? el("div", { class: "card" }, [
+        el("p", { text: "🔕 Уведомления о заявках выключены " + me.mute.until + "." + (me.mute.accumulated ? " Накопилось: " + me.mute.accumulated + "." : "") }),
+        el("div", { class: "grid" }, [
+          el("button", { class: "btn", text: "🔔 Включить", onclick: function () { muteSet({ on: true }); } }),
+          me.mute.accumulated ? el("button", { class: "btn ghost", text: "📥 Показать", onclick: function () { state.leadsStatus = "muted"; go("leads"); } }) : null
+        ])
+      ]) : null,
       el("h2", { text: "Заявки" }),
       el("div", { class: "grid" }, [
         stat(me.stats.today, "за сутки"),
@@ -122,14 +129,37 @@
         el("button", { class: "btn ghost", text: "🌐 Каталог", onclick: renderCatalog }),
         el("button", { class: "btn ghost", text: "💎 Тариф", onclick: renderPlans }),
         el("button", { class: "btn ghost", text: "📊 Статистика", onclick: renderStats }),
-        el("button", { class: "btn ghost", text: "🤝 Друзья (+дни)", onclick: renderFriends })
+        el("button", { class: "btn ghost", text: "🤝 Друзья (+дни)", onclick: renderFriends }),
+        el("button", { class: "btn ghost", text: "🔕 Не беспокоить", onclick: renderMute })
       ]),
       el("button", { class: "btn ghost", text: "Вернуться в чат", onclick: closeApp })
     );
   }
 
+  // ---------- 🔕 Не беспокоить: выключить уведомления о заявках на время (заявки копятся, не пропадают) ----------
+  function muteSet(body) {
+    api("POST", "/api/mute", body).then(function (r) {
+      toast(r.on ? "🔕 Выключено " + r.until : "🔔 Уведомления включены" + (r.accumulated ? ", накопилось: " + r.accumulated : ""));
+      return api("GET", "/api/me");
+    }).then(function (me) { state.me = me; setBack(null); go("home"); }).catch(function (e) { toast(e.message, true); });
+  }
+  function renderMute() {
+    var m = state.me.mute;
+    setBack(function () { setBack(null); go("home"); });
+    show(
+      el("h1", { text: "🔕 Не беспокоить" }),
+      el("p", { class: "muted", text: m.on ? "Сейчас уведомления выключены " + m.until + ". Можно включить или поменять срок." :
+        "Заявки продолжат приходить, но без сообщений в чате — они копятся во вкладке «Накопилось». Когда срок кончится, уведомления включатся сами." }),
+      m.on ? el("button", { class: "btn", text: "🔔 Включить сейчас", onclick: function () { muteSet({ on: true }); } }) : null,
+      el("h2", { text: m.on ? "Изменить срок" : "Выключить на" }),
+      el("div", { class: "grid" }, m.options.map(function (o) {
+        return el("button", { class: "btn ghost", text: o.label, onclick: function () { muteSet({ code: o.code }); } });
+      }))
+    );
+  }
+
   // ---------- Заявки ----------
-  var TABS = [["new", "Новые"], ["postponed", "Отложено"], ["taken", "В работе"], ["rejected", "Не моё"], ["spam", "Спам"]];
+  var TABS = [["new", "Новые"], ["postponed", "Отложено"], ["taken", "В работе"], ["rejected", "Не моё"], ["spam", "Спам"], ["muted", "🔕 Накопилось"]];
 
   function renderLeads() {
     var list = el("div", { id: "leadlist" });
