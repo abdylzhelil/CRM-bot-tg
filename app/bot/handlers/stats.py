@@ -77,7 +77,12 @@ async def users_line() -> str:
         unverified = await s.scalar(select(func.count()).select_from(User).where(~User.verified)) or 0
         pay = (await s.execute(select(func.count(), func.coalesce(func.sum(Payment.amount - Payment.refunded_amount), 0)).where(
             Payment.created_at > now() - timedelta(days=30)))).one()
-    money = f"\n💰 Оплаты за 30 дней: {pay[0]} шт. на {pay[1] / 100:.0f} ₽" if pay[0] else ""
+        back = (await s.execute(select(func.count(), func.coalesce(func.sum(Payment.refunded_amount), 0)).where(
+            Payment.created_at > now() - timedelta(days=30), Payment.refunded_amount > 0))).one()
+    money = f"\n💰 Оплаты за 30 дней: {pay[0]} шт. на {pay[1] / 100:.0f} ₽ (уже за вычетом возвратов)" if pay[0] else ""
+    if back[0]:
+        money += (f"\n↩️ Возвраты по этим оплатам: {back[0]} шт. на {back[1] / 100:.0f} ₽ "
+                  "(комиссия ЮKassa за них не возвращается)")
     empty = total - ready
     extra = f"\n🧹 Не завершили регистрацию: {empty}" + (f" (не прошли проверку: {unverified})" if unverified else "") if empty else ""
     async with Session() as s:

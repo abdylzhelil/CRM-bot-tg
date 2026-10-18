@@ -353,3 +353,15 @@ async def test_cabinet_empty_quiet_hours_saves(maker):
         await profile_edit.update_profile(s, u, {"quiet_hours": "", "city": ""})
     async with maker() as s:
         assert (await s.get(User, 96)).quiet_hours == ""
+
+
+async def test_stats_show_refunds(maker):
+    from app.bot.handlers import stats
+    from app.models import Payment
+
+    async with maker() as s:
+        s.add(Payment(user_id=1, amount=100000, days=0, charge_id="yk:a", currency="RUB", refunded_amount=30000))
+        s.add(Payment(user_id=1, amount=49000, days=30, charge_id="yk:b", currency="RUB"))
+        await s.commit()
+    line = await stats.users_line()
+    assert "Оплаты за 30 дней: 2 шт. на 1190 ₽" in line and "Возвраты по этим оплатам: 1 шт. на 300 ₽" in line
