@@ -7,7 +7,7 @@ from app.bot import notify
 from app.bot.common import COPY_MAX, ask, esc, kb
 from app.db import Session
 from app.models import Category, Client, Delivery, Group, Lead, User, now
-from app.services import ai, draft, lead_actions, referrals, settings
+from app.services import ai, draft, lead_actions, mute, referrals, settings
 from app.services.distribute import day_start, root_category
 
 router = Router()
@@ -73,28 +73,38 @@ async def leads_menu(m: Message, user: User) -> None:
             .where(mine, Delivery.sent, Delivery.status.in_(["new", "postponed"]))
             .order_by(Delivery.id.desc()).limit(PAGE)
         )).all()
+        row = await s.get(User, user.tg_id)
+        muted_n = await mute.accumulated(s, user.tg_id)
+        markup = lists_keyboard(cnt)
+        if muted_n:
+            markup.inline_keyboard.append(kb([[(f"📥 Накопилось без уведомлений · {muted_n}", "ll:muted:0")]]).inline_keyboard[0])
+        markup.inline_keyboard.append(kb([[(f"🔕 Уведомления выключены {mute.until_text(row)} — включить" if mute.is_muted(row)
+                                            else "🔕 Выключить уведомления на время", "mt:menu")]]).inline_keyboard[0])
         await m.answer(
             "📥 Заявки по спискам — нажмите, чтобы открыть:"
             + (f"\n⏳ Ещё придут: {waiting}" if waiting else "")
+            + (f"\n🔕 Уведомления выключены {mute.until_text(row)} — заявки копятся без сообщений." if mute.is_muted(row) else "")
             + ("\nПоследние новые и отложенные ниже." if rows else "\nНовых заявок пока нет — пришлю, как только появятся."),
-            reply_markup=lists_keyboard(cnt),
+            reply_markup=markup,
         )
         for d, lead in rows:
             await send_card(m, s, d, lead, user)
 
 
-@router.callback_query(F.data.regexp(r"^ll:(new|postponed|taken|rejected|spam):\d{1,18}$"))
+@router.callback_query(F.data.regexp(r"^ll:(new|postponed|taken|rejected|spam|muted):\d{1,18}$"))
 async def leads_list(cb: CallbackQuery, user: User) -> None:
     """Список заявок одного статуса, по 5, от новых к старым; «Ещё» — следующая страница."""
     _, status, raw = cb.data.split(":")
     before = int(raw)
     async with Session() as s:
         q = (select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
-             .where(Delivery.user_id == user.tg_id, Delivery.sent, Delivery.status == status))
+             .where(Delivery.user_id == user.tg_id, Delivery.sent))
+        # «🔕 накопилось»: пришли без уведомления и ещё не разобраны (они же есть в «🆕 Новые»)
+        q = q.where(Delivery.muted, Delivery.status == "new") if status == "muted" else q.where(Delivery.status == status)
         if before:
             q = q.where(Delivery.id < before)
         rows = (await s.execute(q.order_by(Delivery.id.desc()).limit(PAGE + 1))).all()
-        label = dict(LISTS)[status]
+        label = dict(LISTS).get(status, "📥 Накопилось без уведомлений")
         if not rows:
             await cb.answer()
             return await cb.message.answer(f"{label}: пусто.")

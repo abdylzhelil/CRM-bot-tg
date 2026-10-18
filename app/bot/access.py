@@ -1,6 +1,7 @@
 """Пользователи бота: регистрация при первом сообщении, права администратора."""
 from aiogram import BaseMiddleware
 from aiogram.filters import BaseFilter
+from aiogram.types import Message
 from sqlalchemy.exc import IntegrityError
 
 from app import config
@@ -34,6 +35,10 @@ class UserMiddleware(BaseMiddleware):
             from app.bot import captcha
 
             return await captcha.gate(event, handler, data, user)
+        if isinstance(event, Message) and user.mute_until is not None:  # 🔕 напомнить, что уведомления выключены
+            from app.bot.handlers import mute as mute_h
+
+            await mute_h.remind(event, user)
         return await handler(event, data)
 
     @staticmethod

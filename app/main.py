@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app import config
 from app.bot import notify
+from app.bot.handlers import mute as mute_h
 from app.bot.handlers import payments as payments_h
 from app.bot.handlers.stats import build_report
 from app.bot.setup import build, setup_profile
@@ -221,6 +222,7 @@ async def main() -> None:
         "копия базы": backup.backup_loop(), "конец тарифов": expiry_loop(), "оплата по ссылкам": payments_h.link_loop(),
         "чистка аккаунтов": cleanup_loop(), "срок хранения заявок": retention_loop(), "чеки": receipts_loop(),
         "сторож (heartbeat)": heartbeat.heartbeat_loop(),
+        "включение уведомлений (🔕)": mute_h.expire_loop(bot),
     }
     selfcheck.TASKS = {name: asyncio.create_task(c) for name, c in loops.items()}  # для «🧪 Самопроверки»
     tasks = list(selfcheck.TASKS.values())

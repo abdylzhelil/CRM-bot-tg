@@ -316,6 +316,8 @@ class User(Base):
     quiet_hours: Mapped[str] = mapped_column(String(8), default="")
     onboarded: Mapped[bool] = mapped_column(Boolean, default=False)
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    mute_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # 🔕 без уведомлений о заявках до (services/mute.py)
+    mute_noted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда последний раз напомнили, что выключено
     reply_template: Mapped[str] = mapped_column(Text, default="")  # свой шаблон ответа клиенту
     prices: Mapped[str] = mapped_column(Text, default="")
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)  # заблокировал бота или забанен
@@ -365,6 +367,7 @@ class Delivery(Base):
     sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     from_user: Mapped[int] = mapped_column(BigInteger, default=0)  # кто передал заявку коллеге
+    muted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # пришла, пока уведомления были выключены (🔕)
 
 
 class Payment(Base):

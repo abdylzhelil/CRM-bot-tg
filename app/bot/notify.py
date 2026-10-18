@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app import config
 from app.db import Session
 from app.models import Delivery, Group, Lead, User
-from app.services import quiet
+from app.services import mute, quiet
 
 log = logging.getLogger(__name__)
 _bot: Bot | None = None
@@ -84,7 +84,8 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
             InlineKeyboardButton(text="🚫 Спам", callback_data=f"lead:spam:{d}"),
         ],
     ]
-    rows.append([InlineKeyboardButton(text="✨ Черновик ответа", callback_data=f"lead:ai:{d}")])
+    rows.append([InlineKeyboardButton(text="✨ Черновик ответа", callback_data=f"lead:ai:{d}"),
+                 InlineKeyboardButton(text="🔕 Не беспокоить", callback_data="mt:menu")])
     # все учат фильтр: «это реклама услуг» (у админа — сразу, у остальных — после нескольких голосов)
     extra = [InlineKeyboardButton(text="🙅 Исполнитель", callback_data=f"lead:offer:{d}")]
     if admin and lead.suspicious:
@@ -156,6 +157,10 @@ async def flush_due() -> int:
     async with _flush_lock:
         async with Session() as s:
             for d, lead, user in await due(s):
+                if mute.is_muted(user):  # 🔕 уведомления выключены: заявка ложится в список без сообщения
+                    d.sent, d.muted = True, True
+                    await s.commit()
+                    continue
                 category = await category_name(s, lead.category_id)
                 result = await send_delivery(d, lead, user, category)
                 if result == RETRY:

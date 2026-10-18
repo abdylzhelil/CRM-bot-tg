@@ -9,7 +9,7 @@ from app import config
 from app.bot.common import ask, esc, kb, reply, pairs
 from app.db import Session
 from app.models import PLANS, Category, Delivery, Lead, User, UserCategory, UserNegative
-from app.services import autosetup, geo, niches, payments, referrals, settings
+from app.services import autosetup, geo, mute, niches, payments, referrals, settings
 from app.services.distribute import is_paid, preview
 
 router = Router()
@@ -312,6 +312,7 @@ async def profile(target, user: User) -> None:
         f"Режим тишины: {esc(user.quiet_hours) or 'выключен'}\n"
         f"Получено заявок: {total}\n"
         f"{'⏸ Заявки на паузе' if user.paused else ''}"
+        + (f"\n🔕 Уведомления о заявках выключены {mute.until_text(user)}" if mute.is_muted(user) else "")
     )
     await reply(target, text, kb(([[("📱 Кабинет", f"webapp:{config.WEBAPP_URL}/app/")]] if config.WEBAPP_URL else []) + [
         [("🎯 Ниши", "pf:niches"), ("📍 Город", "pf:city")],
@@ -319,6 +320,7 @@ async def profile(target, user: User) -> None:
         [("📋 Мой шаблон ответа", "pf:tpl"), ("💰 Мои цены", "pf:prices")],
         [("▶️ Возобновить" if user.paused else "⏸ Пауза", "pf:pause"), ("💎 Тариф", "pf:plan")],
         [("⚡ Автонастройка", "pf:auto"), ("🤝 Пригласить друзей", "pf:ref")],
+        [("🔔 Уведомления: выкл — включить" if mute.is_muted(user) else "🔕 Выключить уведомления на время", "mt:menu")],
     ]))
 
 
