@@ -16,6 +16,9 @@ DEFAULTS: dict[str, str] = {
     "join_retry_days": "3",
     "join_retry_max": "4",
     "join_check": "1",
+    "user_search_free": "3",
+    "user_search_full": "10",
+    "user_search_days": "3",
     "adpost_enabled": "0",
     "adpost_auto_approve": "0",
     "adpost_auto_refund": "1",
@@ -80,6 +83,9 @@ LABELS: dict[str, str] = {
     "rotation_days": "Выходить из групп без заявок за N дней",
     "join_retry_days": "Повторять заявку на вступление через N дней",
     "join_check": "Проверять группу перед вступлением (название и сообщения)",
+    "user_search_free": "«Найти группы для меня»: запросов у бесплатного тарифа",
+    "user_search_full": "«Найти группы для меня»: запросов у 💎",
+    "user_search_days": "Повторять поиск по запросу пользователя раз в N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
     "adpost_enabled": "Реклама в группах через разведчиков (1/0)",
     "adpost_auto_approve": "Реклама в группах: одобрять заказы без запрещённых слов сами (1/0)",
@@ -159,6 +165,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max", "join_check",
+                        "user_search_free", "user_search_full", "user_search_days",
                         "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
@@ -181,6 +188,9 @@ SHORT: dict[str, str] = {
     "rotation_days": "Выход из тихих групп, дн",
     "join_retry_days": "Повтор заявки, дн",
     "join_check": "Проверка перед вступлением",
+    "user_search_free": "Поиск для меня: бесплатно",
+    "user_search_full": "Поиск для меня: 💎",
+    "user_search_days": "Повтор поиска, дн",
     "join_retry_max": "Попыток вступить",
     "adpost_enabled": "Реклама вкл (1/0)", "adpost_auto_approve": "Автоодобрение (1/0)", "adpost_auto_refund": "Автовозврат (1/0)", "adpost_fulfill": "Условия групп (1/0)", "adpost_price": "Цена за группу, ₽", "adpost_daily_limit": "Постов в сутки",
     "adpost_group_daily": "Постов в группу в сутки",
@@ -207,6 +217,9 @@ HINTS: dict[str, str] = {
     "join_retry_days": "Если админ группы не одобрил заявку на вступление, разведчик отправит её снова через столько дней.",
     "join_check": "1 — перед вступлением разведчик читает название и последние сообщения группы и не вступает в рекламные "
                   "свалки, флуды, игровые и нерусскоязычные чаты (они в «🚫 Пропущены» с причиной, можно вернуть). 0 — вступает во всё из очереди.",
+    "user_search_free": "Сколько своих поисковых запросов («🔎 Найти группы для меня» в 🌐 Каталоге) может держать человек на бесплатном тарифе. 0 — функция только для 💎.",
+    "user_search_full": "Сколько своих поисковых запросов может держать человек с 💎. Каждый запрос — отдельный поиск разведчика, не ставьте слишком много.",
+    "user_search_days": "Разведчик повторяет поиск по каждому запросу пользователя раз в столько дней — Telegram со временем показывает новые группы.",
     "join_retry_max": "Сколько всего раз разведчик пробует вступить в группу, где нужно одобрение админа. После этого группа пропускается.",
     "adpost_enabled": "Включает заказ рекламы пользователями и публикацию постов разведчиками в разрешённых группах. 0 — ничего не публикуется.",
     "adpost_auto_approve": "1 — заказ без запрещённых слов сразу идёт на оплату, без вашей проверки (подозрительные всё равно придут вам). 0 — вы одобряете каждый заказ.",
@@ -315,6 +328,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
+    "user_search_free": (0, 20), "user_search_full": (0, 50), "user_search_days": (1, 60),
     "join_retry_days": (1, 60), "join_retry_max": (1, 20), "adpost_price": (0, 100_000), "adpost_daily_limit": (1, 50), "adpost_group_daily": (1, 50),
     "adpost_gap_min": (1, 1440),  # 0 — заявку не пробовали бы вовсе
     "spam_suspicious": (0, 100), "spam_block": (0, 100),

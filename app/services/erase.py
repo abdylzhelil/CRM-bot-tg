@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Client, ClientEvent, Delivery, Group, OfferVote, PendingLink, Reminder, SpamVote, User, UserCategory, UserNegative,
+    UserSearch,
 )
 
 
@@ -21,10 +22,11 @@ async def erase_user(s: AsyncSession, user_id: int) -> bool:
         await s.execute(delete(ClientEvent).where(ClientEvent.client_id.in_(client_ids)))
         await s.execute(delete(Reminder).where(Reminder.client_id.in_(client_ids)))
         await s.execute(delete(Client).where(Client.id.in_(client_ids)))
-    for table in (Delivery, UserCategory, UserNegative, SpamVote, OfferVote, PendingLink):
+    for table in (Delivery, UserCategory, UserNegative, SpamVote, OfferVote, PendingLink, UserSearch):
         await s.execute(delete(table).where(table.user_id == user_id))
     await s.execute(Group.__table__.update().where(Group.submitted_by == user_id).values(
         submitted_by=0, ad_until=None, ad_pending=False, license_until=None))
+    await s.execute(Group.__table__.update().where(Group.wanted_by == user_id).values(wanted_by=0, wanted_search=0))
     await s.execute(User.__table__.update().where(User.referred_by == user_id).values(referred_by=0))
     # заказы рекламы: открытые отменяем, тексты (в них контакты) стираем; суммы и статусы остаются для учёта
     from app.models import AdOrder, AdPost

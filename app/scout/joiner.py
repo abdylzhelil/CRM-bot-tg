@@ -77,8 +77,9 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             return False
         # IN (NULL, …) в SQL не находит NULL — поэтому явно: ничья группа или уже назначенная этому аккаунту
         mine = or_(Group.account_id.is_(None), Group.account_id == acc_id)
+        # сначала группы, найденные по просьбе пользователя («🔎 Найти группы для меня»), потом самые большие
         g = await s.scalar(select(Group).where(Group.status == "approved", Group.kind == "group", mine)
-                           .order_by(Group.members.desc()))
+                           .order_by(Group.wanted_by == 0, Group.members.desc()))
         if not g:  # новых нет — повторяем заявки, которые админы групп ещё не одобрили (срок повтора подошёл)
             g = await s.scalar(select(Group).where(Group.status == "requested", Group.kind == "group", mine,
                                                    Group.join_retry_at <= now()).order_by(Group.join_retry_at))
@@ -203,7 +204,35 @@ async def search_loop(manager) -> None:
         except Exception:
             log.exception("search_loop")
         # оборвалась связь — не ждём 6 часов, пробуем снова через 10 минут
-        await asyncio.sleep(600 if offline else max(hours, 1) * 3600)
+        await _wait_or_user_search(manager, 600 if offline else max(hours, 1) * 3600)
+
+
+TICK = 120  # как часто между проходами проверять новые запросы пользователей («🔎 Найти группы для меня»)
+
+
+async def _wait_or_user_search(manager, seconds: float) -> None:
+    """Ждём до следующего общего поиска, но новый запрос пользователя выполняем через пару минут, а не через 6 часов."""
+    from app.scout.search import user_pass
+    from app.services import mysearch
+
+    left = seconds
+    while left > 0:
+        await asyncio.sleep(min(TICK, left))
+        left -= TICK
+        try:
+            if await paused():
+                continue
+            async with Session() as s:
+                if not await mysearch.has_new(s):
+                    continue
+            for acc_id, client in list(manager.clients.items()):
+                try:
+                    await user_pass(client)
+                    break
+                except ConnectionError:
+                    log.warning("поиск для пользователя #%s: нет связи", acc_id)
+        except Exception:
+            log.exception("поиск для пользователя")
 
 
 ROTATION_KEY = "rotation_at"  # когда последний раз выходили из пустых групп (переживает перезапуск)

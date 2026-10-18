@@ -10,7 +10,7 @@ from telethon.tl.types import Channel
 
 from app.bot import notify
 from app.db import Session
-from app.models import FeedChat, Group, SearchQuery
+from app.models import FeedChat, Group, SearchQuery, now
 from app.services import junk, settings
 
 log = logging.getLogger(__name__)
@@ -110,8 +110,122 @@ async def next_batch(s) -> tuple[list[str], int, int]:
     return batch, start, len(queries)
 
 
+async def _options(s) -> dict:
+    return {
+        "min_members": await settings.get_int(s, "min_members"),
+        "min_msgs": await settings.get_int(s, "min_msgs_per_day"),
+        "auto": await settings.get(s, "mode") == "auto",
+        "check": await settings.get(s, "join_check") == "1",
+    }
+
+
+async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> dict | None:
+    """Один поисковый запрос: новые группы — в базу. Счётчики или None, если связь с Telegram потеряна.
+
+    owner — запрос пользователя («🔎 Найти группы для меня»): новые подходящие группы сразу в очередь на вступление
+    (проверку перед вступлением они всё равно проходят) и помечаются его, чтобы заявки оттуда он получал первым.
+    """
+    from app.scout.client import ensure_connected
+
+    c = {"found": 0, "known": 0, "small": 0, "junked": 0, "errors": 0}
+    try:
+        try:
+            res = await client(functions.contacts.SearchRequest(q=q, limit=30))
+        except ConnectionError:  # связь оборвалась посреди прохода — переподключиться и повторить запрос
+            if not await ensure_connected(client):
+                return None
+            res = await client(functions.contacts.SearchRequest(q=q, limit=30))
+    except FloodWaitError as e:
+        log.warning("FloodWait %ss на поиске", e.seconds)
+        await asyncio.sleep(e.seconds + 5)
+        return c
+    except Exception:
+        log.exception("поиск «%s»", q)
+        c["errors"] += 1
+        return c
+    for chat in res.chats:
+        if _stop_requested:
+            break
+        if not (isinstance(chat, Channel) and chat.megagroup):
+            continue  # нужны группы/чаты, не каналы
+        tg_id = utils.get_peer_id(chat)
+        async with Session() as s:
+            if await s.scalar(select(Group.id).where(Group.tg_id == tg_id)) or await is_covered(s, tg_id):
+                c["known"] += 1
+                continue
+        try:
+            full = await client(functions.channels.GetFullChannelRequest(chat))
+            members = full.full_chat.participants_count or 0
+            msgs_day, texts = await _sample(client, chat)
+        except FloodWaitError as e:
+            await asyncio.sleep(e.seconds + 5)
+            continue
+        except Exception:
+            log.exception("данные группы %s", chat.title)
+            continue
+        reason = (junk.title_reason(chat.title or "") or junk.content_reason(texts)) if opt["check"] else ""
+        ok = not reason and members >= opt["min_members"] and (msgs_day < 0 or msgs_day >= opt["min_msgs"])
+        async with Session() as s:
+            g = Group(
+                tg_id=tg_id, username=chat.username or "", title=chat.title or "",
+                members=members, msgs_per_day=msgs_day, lang=detect_lang(chat.title or ""),
+                status=("approved" if opt["auto"] or owner is not None else "candidate") if ok else "skipped",
+                skip_reason=reason,
+                wanted_by=owner.user_id if owner is not None and ok else 0,
+                wanted_search=owner.id if owner is not None and ok else 0,
+            )
+            s.add(g)
+            await s.commit()
+        if ok:
+            c["found"] += 1
+        elif reason:
+            c["junked"] += 1
+        else:
+            c["small"] += 1
+        await asyncio.sleep(random.uniform(2, 6))
+    return c
+
+
+async def user_pass(client: TelegramClient) -> int:
+    """Запросы пользователей («🔎 Найти группы для меня»): новые — сразу, остальные — раз в user_search_days.
+    Каждому — сообщение с итогом. Возвращает число новых групп. ConnectionError — связь потеряна."""
+    global _stop_requested
+    _stop_requested = False  # прошлое «⏹ Остановить поиск» не должно навсегда выключать поиск для пользователей
+    from app.models import UserSearch
+    from app.scout.client import ensure_connected
+    from app.services import mysearch
+
+    async with Session() as s:
+        batch = await mysearch.due(s)
+        opt = await _options(s)
+    if not batch:
+        return 0
+    if not await ensure_connected(client):
+        raise ConnectionError("разведчик без связи")
+    total = 0
+    for q in batch:
+        if _stop_requested:
+            break
+        c = await _run_query(client, q.text, opt, owner=q)
+        if c is None:
+            raise ConnectionError("связь оборвалась во время поиска")
+        first = q.last_run_at is None
+        async with Session() as s:
+            row = await s.get(UserSearch, q.id)
+            if row is None:  # человек удалил запрос, пока шёл поиск
+                continue
+            row.last_run_at = now()
+            row.found += c["found"]
+            await s.commit()
+        total += c["found"]
+        if first or c["found"]:
+            await notify.user_search_result(q.user_id, q.text, c)
+        await asyncio.sleep(random.uniform(10, 30))
+    return total
+
+
 async def discover(client: TelegramClient, report: bool = False) -> int:
-    """Один проход по следующей порции запросов. Возвращает число новых кандидатов.
+    """Один проход: сначала запросы пользователей, потом следующая порция общих запросов. Возвращает число новых кандидатов.
 
     Карточки по одной не шлём — в конце одно сообщение «найдено N», отбор — списком в 🔍 Группы.
     report — поиск запущен кнопкой: сообщить итог, даже если новых нет.
@@ -125,12 +239,11 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         if report:
             await notify._send("🔍 Поиск не запустился: разведчик сейчас без связи с Telegram. Повторю сам через 10 минут.")
         raise ConnectionError("разведчик без связи")
+    await user_pass(client)
     async with Session() as s:
         queries, start, total = await next_batch(s)
-        min_members = await settings.get_int(s, "min_members")
-        min_msgs = await settings.get_int(s, "min_msgs_per_day")
-        auto = await settings.get(s, "mode") == "auto"
-        check = await settings.get(s, "join_check") == "1"
+        opt = await _options(s)
+    auto = opt["auto"]
     found = known = small = errors = junked = 0
     lost = False
     done = 0
@@ -138,60 +251,15 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         done += 1
         if _stop_requested:
             break
-        try:
-            try:
-                res = await client(functions.contacts.SearchRequest(q=q, limit=30))
-            except ConnectionError:  # связь оборвалась посреди прохода — переподключиться и повторить запрос
-                if not await ensure_connected(client):
-                    lost = True
-                    break
-                res = await client(functions.contacts.SearchRequest(q=q, limit=30))
-        except FloodWaitError as e:
-            log.warning("FloodWait %ss на поиске", e.seconds)
-            await asyncio.sleep(e.seconds + 5)
-            continue
-        except Exception:
-            log.exception("поиск «%s»", q)
-            errors += 1
-            continue
-        for chat in res.chats:
-            if _stop_requested:
-                break
-            if not (isinstance(chat, Channel) and chat.megagroup):
-                continue  # нужны группы/чаты, не каналы
-            tg_id = utils.get_peer_id(chat)
-            async with Session() as s:
-                if await s.scalar(select(Group.id).where(Group.tg_id == tg_id)) or await is_covered(s, tg_id):
-                    known += 1
-                    continue
-            try:
-                full = await client(functions.channels.GetFullChannelRequest(chat))
-                members = full.full_chat.participants_count or 0
-                msgs_day, texts = await _sample(client, chat)
-            except FloodWaitError as e:
-                await asyncio.sleep(e.seconds + 5)
-                continue
-            except Exception:
-                log.exception("данные группы %s", chat.title)
-                continue
-            reason = (junk.title_reason(chat.title or "") or junk.content_reason(texts)) if check else ""
-            junk_title = bool(reason)
-            ok = not junk_title and members >= min_members and (msgs_day < 0 or msgs_day >= min_msgs)
-            async with Session() as s:
-                g = Group(
-                    tg_id=tg_id, username=chat.username or "", title=chat.title or "",
-                    members=members, msgs_per_day=msgs_day, lang=detect_lang(chat.title or ""),
-                    status=("approved" if auto else "candidate") if ok else "skipped", skip_reason=reason,
-                )
-                s.add(g)
-                await s.commit()
-            if ok:
-                found += 1
-            elif junk_title:
-                junked += 1
-            else:
-                small += 1
-            await asyncio.sleep(random.uniform(2, 6))
+        c = await _run_query(client, q, opt)
+        if c is None:
+            lost = True
+            break
+        found += c["found"]
+        known += c["known"]
+        small += c["small"]
+        junked += c["junked"]
+        errors += c["errors"]
         await asyncio.sleep(random.uniform(10, 30))
     if lost:  # недоделанные запросы вернём в очередь: следующий проход начнёт с них
         await rewind(start + done - 1, total)

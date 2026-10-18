@@ -88,6 +88,8 @@ class Group(Base):
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
     no_leads: Mapped[bool] = mapped_column(Boolean, default=False)  # заявки отсюда не брать (реклама/флуд), services/junk.py
     skip_reason: Mapped[str] = mapped_column(String(120), default="")  # почему разведчик не вступил (видно в «🚫 Пропущены»)
+    wanted_by: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # пользователь, для которого нашли («🔎 Найти группы для меня»)
+    wanted_search: Mapped[int] = mapped_column(Integer, default=0, index=True)  # его запрос (user_searches.id)
 
 
 class FeedChat(Base):
@@ -100,6 +102,17 @@ class FeedChat(Base):
     own: Mapped[bool] = mapped_column(Boolean, default=False)  # группа владельца CRM, а не клиента
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class UserSearch(Base):
+    """«🔎 Найти группы для меня»: слова, по которым разведчик ищет группы для конкретного пользователя."""
+    __tablename__ = "user_searches"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    text: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # None — ещё не искали
+    found: Mapped[int] = mapped_column(Integer, default=0)  # сколько новых групп нашли всего
 
 
 class SearchQuery(Base):

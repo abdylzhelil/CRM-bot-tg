@@ -302,6 +302,12 @@ async def bc_text(s, m, d, text):
     return await broadcast.bc_text(s, m, d, (m.html_text or text).strip())
 
 
+async def my_search(s, m, d, text):
+    from app.bot.handlers import mysearch as mysearch_h
+
+    return await mysearch_h.on_input(s, m, d, text)
+
+
 HANDLERS = {
     "bc_text": bc_text,
     "niche_propose": niche_propose,
@@ -341,4 +347,5 @@ for _f in ("note", "budget", "phone", "name"):
     HANDLERS[f"client_{_f}"] = lambda s, m, d, t, _f=_f: client_field(s, m, d, t, _f)
 for _f in ("add", "ren", "tpl", "prices", "city"):
     HANDLERS[f"cat_{_f}"] = lambda s, m, d, t, _f=_f: cat_field(s, m, d, t, _f)
+HANDLERS["my_search"] = my_search
 HANDLERS["acc_limit"] = lambda s, m, d, t: acc_field(s, m, d, t, "limit")

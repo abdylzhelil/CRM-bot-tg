@@ -40,6 +40,7 @@ async def catalog_menu(target: Message | CallbackQuery, user: User) -> None:
     ), kb([
         [("📚 Каталог по моим нишам", "cg:browse:mine"), ("🌍 Весь каталог", "cg:browse:all")],
         [("➕ Добавить группу или канал", "cg:add")],
+        [("🔎 Найти группы для меня", "ms:list")],
         [("📂 Мои группы и бонусы", "cg:my"), ("🏆 Рейтинг", "cg:top:mine")],
     ] + ad_rows))
 

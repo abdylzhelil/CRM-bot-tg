@@ -186,6 +186,31 @@ async def groups_found(count: int, auto: bool) -> None:
         InlineKeyboardButton(text="❓ Отобрать группы", callback_data="rv:page")]]))
 
 
+async def user_search_result(user_id: int, query: str, c: dict) -> None:
+    """Итог поиска «🔎 Найти группы для меня» — самому пользователю."""
+    if not _bot:
+        return
+    q = html.escape(query)
+    if c["found"]:
+        text = (f"🔎 Поиск групп «{q}»: нашли новых — {c['found']}.\n"
+                "Разведчик проверит их и вступит в ближайшие дни. Заявки оттуда по вашим нишам вы будете получать в первую очередь.")
+    else:
+        text = (f"🔎 Поиск групп «{q}»: новых групп не нашли.\n"
+                "Попробуйте другие слова: услуга + город («ремонт Подольск», «торты Казань») или «барахолка Ваш город».")
+    extra = []
+    if c.get("known"):
+        extra.append(f"уже знали {c['known']} (их и так читаем)")
+    if c.get("junked") or c.get("small"):
+        extra.append(f"не подошли {c.get('junked', 0) + c.get('small', 0)} (реклама, флуд, мелкие или тихие)")
+    if extra:
+        text += "\n" + "; ".join(extra).capitalize() + "."
+    try:
+        await _bot.send_message(user_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔎 Мои поиски групп", callback_data="ms:list")]]))
+    except Exception:
+        log.info("итог поиска групп не доставлен %s", user_id)
+
+
 async def send_group_card(g: Group) -> None:
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[

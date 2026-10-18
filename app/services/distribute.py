@@ -85,17 +85,26 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
     lead_lemmas = lemmas(lead.text)
     group = await s.get(Group, lead.group_id) if lead.group_id else None
     finder_id = group.submitted_by if group is not None and group.catalog else 0
-    finder, admins, paid, free = None, [], [], []
+    wanted_id = group.wanted_by if group is not None else 0  # нашли группу по его запросу «🔎 Найти группы для меня»
+    finder, wanted, admins, paid, free = None, None, [], [], []
     for u in users:
         if not await eligible(s, u, lead, voted, lead_lemmas):
             continue
         if u.tg_id == finder_id and not u.is_admin:
             finder = u
+        elif u.tg_id == wanted_id and not u.is_admin:
+            wanted = u
         else:
             (admins if u.is_admin else paid if is_paid(u) else free).append(u)
 
     limit = await settings.get_int(s, "free_daily_limit")
     load = {u.tg_id: await delivered_today(s, u.tg_id) for u in paid + free}
+    first = []  # кто нашёл группу по своему запросу — первым в очереди, но в пределах своего тарифа
+    if wanted is not None:
+        if is_paid(wanted):
+            first = [(wanted, "now")]
+        elif await delivered_today(s, wanted.tg_id) < limit:
+            first = [(wanted, "late")]
     free = [u for u in free if load[u.tg_id] < limit]
     pool = len(paid) + len(free)
     k = min(await settings.get_int(s, "max_recipients"), -(-pool // await niche_flow(s, root)))
@@ -106,7 +115,7 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
     # очередь внутри заявки: автор группы первым, дальше — у кого уровень выше, при равенстве — у кого меньше заявок
     picked.sort(key=lambda p: (-p[0].level, load[p[0].tg_id]))
     chosen = [(u, "now", 0) for u in admins]
-    queue = ([(finder, "now")] if finder is not None else []) + picked
+    queue = ([(finder, "now")] if finder is not None else []) + first + picked
     chosen += [(u, when, rank) for rank, (u, when) in enumerate(queue)]
     return chosen
 

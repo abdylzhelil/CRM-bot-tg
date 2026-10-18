@@ -16,7 +16,7 @@ from app.bot import captcha, intro, notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU, kb
 from app.bot.handlers import (
-    accounts, adposts, blacklist, broadcast, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, leads, profile, settings, stats,
+    accounts, adposts, blacklist, broadcast, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, leads, mysearch, profile, settings, stats,
     submissions, users_admin,
 )
 from app.db import Session
@@ -309,13 +309,13 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     admin.callback_query.filter(IsAdmin())
     admin.include_routers(
         accounts.router, adposts.admin_router, groups.router, categories.router, keywords.router, blacklist.router,
-        settings.router, users_admin.router, submissions.router, broadcast.router, licenses.router, admin_nav,
+        settings.router, users_admin.router, submissions.router, broadcast.router, licenses.router, mysearch.admin_router, admin_nav,
     )
     # личка: всем пользователям
     private = Router(name="private")
     private.message.filter(F.chat.type == "private")
     private.include_routers(
-        captcha.router, base, inputs.router, profile.router, catalog.router, adposts.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
+        captcha.router, base, inputs.router, profile.router, catalog.router, mysearch.router, adposts.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
     )
     dp.include_routers(ingroup.router, payments.checkout, private)
 

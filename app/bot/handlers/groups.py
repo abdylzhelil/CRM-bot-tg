@@ -203,8 +203,12 @@ async def rotate_now(cb: CallbackQuery) -> None:
 async def queries(cb: CallbackQuery) -> None:
     async with Session() as s:
         qs = (await s.scalars(select(SearchQuery).order_by(SearchQuery.id))).all()
+        from app.models import UserSearch
+
+        users_n = await s.scalar(select(func.count()).select_from(UserSearch)) or 0
     rows = [[(("✅ " if q.enabled else "⏸ ") + q.text, f"gq:tog:{q.id}"), ("🗑", f"gq:del:{q.id}")] for q in qs]
     rows.append([("➕ Добавить", "gq:add"), ("◀️ Назад", "gr:menu")])
+    rows.append([(f"🙋 Запросы пользователей {users_n}", "ms:all")])
     await reply(cb, "🔎 Поисковые запросы (нажмите, чтобы вкл/выкл):", kb(rows))
 
 
