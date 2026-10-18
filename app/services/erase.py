@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Client, ClientEvent, Delivery, Group, OfferVote, PendingLink, Reminder, SpamVote, User, UserCategory, UserNegative,
-    UserSearch,
+    UserSearch, Feedback,
 )
 
 
@@ -22,7 +22,7 @@ async def erase_user(s: AsyncSession, user_id: int) -> bool:
         await s.execute(delete(ClientEvent).where(ClientEvent.client_id.in_(client_ids)))
         await s.execute(delete(Reminder).where(Reminder.client_id.in_(client_ids)))
         await s.execute(delete(Client).where(Client.id.in_(client_ids)))
-    for table in (Delivery, UserCategory, UserNegative, SpamVote, OfferVote, PendingLink, UserSearch):
+    for table in (Delivery, UserCategory, UserNegative, SpamVote, OfferVote, PendingLink, UserSearch, Feedback):
         await s.execute(delete(table).where(table.user_id == user_id))
     await s.execute(Group.__table__.update().where(Group.submitted_by == user_id).values(
         submitted_by=0, ad_until=None, ad_pending=False, license_until=None))

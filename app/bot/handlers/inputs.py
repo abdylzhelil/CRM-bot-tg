@@ -16,7 +16,7 @@ router = Router()
 
 
 # действия, которые доступны только администратору
-ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_", "apa_", "apg_")
+ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_", "apa_", "apg_", "fb_")
 
 
 @router.message(Ask.value, F.text, ~F.text.startswith("/"))  # команда (/ads, /terms…) — это не ответ на вопрос
@@ -348,4 +348,20 @@ for _f in ("note", "budget", "phone", "name"):
 for _f in ("add", "ren", "tpl", "prices", "city"):
     HANDLERS[f"cat_{_f}"] = lambda s, m, d, t, _f=_f: cat_field(s, m, d, t, _f)
 HANDLERS["my_search"] = my_search
+
+
+async def _feedback(s, m, d, text):
+    from app.bot.handlers import feedback as fb_h
+
+    return await fb_h.on_input(s, m, d, text)
+
+
+async def _fb_reply(s, m, d, text):
+    from app.bot.handlers import feedback as fb_h
+
+    return await fb_h.on_reply(s, m, d, text)
+
+
+HANDLERS["feedback"] = _feedback
+HANDLERS["fb_reply"] = _fb_reply
 HANDLERS["acc_limit"] = lambda s, m, d, t: acc_field(s, m, d, t, "limit")

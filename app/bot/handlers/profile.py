@@ -321,6 +321,7 @@ async def profile(target, user: User) -> None:
         [("▶️ Возобновить" if user.paused else "⏸ Пауза", "pf:pause"), ("💎 Тариф", "pf:plan")],
         [("⚡ Автонастройка", "pf:auto"), ("🤝 Пригласить друзей", "pf:ref")],
         [("🔔 Уведомления: выкл — включить" if mute.is_muted(user) else "🔕 Выключить уведомления на время", "mt:menu")],
+        [("💬 Написать владельцу бота", "fb:write")],
     ]))
 
 

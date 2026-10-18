@@ -116,6 +116,18 @@ class UserSearch(Base):
     found: Mapped[int] = mapped_column(Integer, default=0)  # сколько новых групп нашли всего
 
 
+class Feedback(Base):
+    """Сообщения пользователей владельцу (ответы на рассылку, вопросы, жалобы) — 🛠 Управление → 💬 Сообщения."""
+    __tablename__ = "feedback"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    answer: Mapped[str] = mapped_column(Text, default="")  # что ответил владелец
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class SearchQuery(Base):
     __tablename__ = "search_queries"
     id: Mapped[int] = mapped_column(primary_key=True)
