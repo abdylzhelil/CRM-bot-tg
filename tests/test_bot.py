@@ -110,3 +110,34 @@ async def test_offer_button_stays_after_reject(maker):
         lead = await s.get(Lead, d2.lead_id)
         kb2 = leads.card_keyboard(lead, d2, admin)
     assert f"lead:offer:{d.id}" in [b.callback_data for row in kb2.inline_keyboard for b in row]
+
+
+async def test_template_has_copy_and_group_buttons(maker):
+    """Бот сам клиенту не пишет: под ответом — «скопировать» и «ответить в группе» (заявка без @ника)."""
+    d, admin = await admin_delivery(maker, author_id=8777, username=None, name="Есения", text="нужен дизайнер карточек",
+                                    link="https://t.me/mp_chat/55")
+    c = cb(f"lead:tpl:{d.id}")
+    await leads.lead_action(c, admin)
+    sent = c.message.answer.call_args.args[0]
+    markup = c.message.answer.call_args.kwargs["reply_markup"]
+    buttons = [b for row in markup.inline_keyboard for b in row]
+    copy = next(b for b in buttons if b.copy_text)
+    assert "Есения" in copy.copy_text.text
+    assert any(b.url == "https://t.me/mp_chat/55" and "в группе" in b.text for b in buttons)
+    assert "скрыл профиль" in sent and "Ответить в группе" in sent
+
+
+def test_reply_rows_long_text_and_no_link():
+    lead = Lead(author_id=1, username="m", text="x", link="")
+    rows = leads.reply_rows(lead, "а" * 300)  # длиннее предела Telegram — без кнопки копирования
+    flat = [b for row in rows for b in row]
+    assert not any(d.startswith("copy:") for _, d in flat)
+    assert flat == [("✍️ Написать в личку", "url:https://t.me/m")]
+    assert "нажмите на текст" in leads.reply_hint(lead, "а" * 300)
+
+
+def test_lead_card_has_group_button():
+    lead = Lead(author_id=1, username=None, text="x", link="https://t.me/c/123/9")
+    urls = [b.url for row in notify.lead_keyboard(lead, 5).inline_keyboard for b in row if b.url]
+    assert "https://t.me/c/123/9" in urls
+    assert "состоите" in leads.reply_hint(lead, "привет")
