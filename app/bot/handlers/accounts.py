@@ -35,13 +35,13 @@ async def open_acc(cb: CallbackQuery) -> None:
         a = await s.get(ScoutAccount, int(cb.data.split(":")[2]))
     text = (
         f"<b>{esc(a.name)}</b> {ICON.get(a.status, '')} {a.status}\nТелефон: {esc(a.phone)}\n"
-        f"Прокси: {esc(a.proxy) or '—'}\nВступлений сегодня: {a.joined_today}/{a.daily_join_limit}\n"
+        f"Вступлений сегодня: {a.joined_today}/{a.daily_join_limit}\n"
         f"Лимит групп: {a.max_groups}\nВключён: {'да' if a.enabled else 'нет'}\n"
         f"Публикует рекламу: {'да' if a.can_post else 'нет'}"
     )
     await reply(cb, text, kb([
         [("⏯ Вкл/выкл", f"acc:tog:{a.id}"), ("🔁 Перезапустить", f"acc:restart:{a.id}")],
-        [("📈 Лимит в сутки", f"acc:limit:{a.id}"), ("🌐 Прокси", f"acc:proxy:{a.id}")],
+        [("📈 Лимит в сутки", f"acc:limit:{a.id}")],
         [(("🔇 Не публиковать рекламу" if a.can_post else "📣 Разрешить публиковать рекламу"), f"acc:post:{a.id}")],
         [("📁 Разложить группы по папкам", f"acc:folders:{a.id}")],
         [("◀️ Назад", "acc:list")],
@@ -86,12 +86,10 @@ async def folders(cb: CallbackQuery) -> None:
     await cb.message.answer(f"📁 Готово: {count} групп в папках «🔍 Разведка» у аккаунта разведчика.")
 
 
-@router.callback_query(F.data.regexp(r"^acc:(limit|proxy):\d+$"))
+@router.callback_query(F.data.regexp(r"^acc:limit:\d+$"))
 async def edit(cb: CallbackQuery, state: FSMContext) -> None:
-    _, field, aid = cb.data.split(":")
-    prompt = "Лимит вступлений в сутки (10–20 безопасно):" if field == "limit" else \
-        "Прокси socks5://user:pass@host:port (или «-» без прокси):"
-    await ask(cb, state, f"acc_{field}", prompt, id=int(aid))
+    aid = cb.data.split(":")[2]
+    await ask(cb, state, "acc_limit", "Лимит вступлений в сутки (10–20 безопасно):", id=int(aid))
 
 
 # ---- пошаговое добавление ----
@@ -133,19 +131,12 @@ async def f_api_hash(m: Message, state: FSMContext) -> None:
 @router.message(AccountFlow.phone)
 async def f_phone(m: Message, state: FSMContext) -> None:
     await state.update_data(phone=m.text.strip())
-    await state.set_state(AccountFlow.proxy)
-    await m.answer("Прокси socks5://user:pass@host:port или «-» без прокси:")
-
-
-@router.message(AccountFlow.proxy)
-async def f_proxy(m: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    proxy = "" if m.text.strip() == "-" else m.text.strip()
     async with Session() as s:
         limit = await settings.get_int(s, "default_join_limit")
         acc = ScoutAccount(
             name=data["name"], api_id=data["api_id"], api_hash=data["api_hash"],
-            phone=data["phone"], proxy=proxy, daily_join_limit=limit,
+            phone=data["phone"], daily_join_limit=limit,
         )
         s.add(acc)
         try:

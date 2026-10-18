@@ -25,7 +25,6 @@ class AccountFlow(StatesGroup):
     api_id = State()
     api_hash = State()
     phone = State()
-    proxy = State()
     code = State()
     password = State()
 

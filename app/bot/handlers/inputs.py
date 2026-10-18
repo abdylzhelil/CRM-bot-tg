@@ -10,7 +10,6 @@ from app.bot.handlers import blacklist as blacklist_h
 from app.bot.handlers import clients as clients_h
 from app.db import Session
 from app.models import BlacklistEntry, Category, Keyword, ScoutAccount, SearchQuery, UserCategory
-from app.scout.client import parse_proxy
 from app.services import crm, quiet, rules, settings
 
 router = Router()
@@ -175,19 +174,11 @@ async def bl_add(s, m, d, text):
 
 async def acc_field(s, m, d, text, field):
     a = await s.get(ScoutAccount, d["id"])
-    if field == "limit":
-        if not text.isdigit():
-            return await m.answer("Нужно число") and False
-        a.daily_join_limit = int(text)
-    else:
-        proxy = "" if text == "-" else text
-        try:
-            parse_proxy(proxy)
-        except ValueError as e:
-            return await m.answer(str(e)) and False
-        a.proxy = proxy
+    if not text.isdigit():
+        return await m.answer("Нужно число") and False
+    a.daily_join_limit = int(text)
     await s.commit()
-    await m.answer("✔ Сохранено. Нажмите «🔁 Перезапустить» у аккаунта, чтобы применить прокси.")
+    await m.answer("✔ Сохранено.")
 
 
 async def neg_add(s, m, d, text):
@@ -350,5 +341,4 @@ for _f in ("note", "budget", "phone", "name"):
     HANDLERS[f"client_{_f}"] = lambda s, m, d, t, _f=_f: client_field(s, m, d, t, _f)
 for _f in ("add", "ren", "tpl", "prices", "city"):
     HANDLERS[f"cat_{_f}"] = lambda s, m, d, t, _f=_f: cat_field(s, m, d, t, _f)
-for _f in ("limit", "proxy"):
-    HANDLERS[f"acc_{_f}"] = lambda s, m, d, t, _f=_f: acc_field(s, m, d, t, _f)
+HANDLERS["acc_limit"] = lambda s, m, d, t: acc_field(s, m, d, t, "limit")
