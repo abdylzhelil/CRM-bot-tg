@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import event, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import inspect as sa_inspect, event, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -497,14 +497,16 @@ class AdPost(Base):
 # ---------- защита для PostgreSQL ----------
 # SQLite не проверяет длину String(n), PostgreSQL — проверяет и падает («value too long»). Чтобы длинное имя группы
 # или текст ошибки не роняли бота после переноса базы, обрезаем строку до размера колонки перед записью.
-def _fit_strings(_mapper, _connection, target) -> None:
+def _fit_strings(mapper, _connection, target) -> None:
+    loaded = sa_inspect(target).dict  # только уже загруженные значения: обращение к незагруженному полю внутри записи — ошибка
     for column in target.__table__.columns:
         limit = getattr(column.type, "length", None)
         if not limit or not isinstance(column.type, String) or isinstance(column.type, Text):
             continue
-        value = getattr(target, column.key, None)
+        prop = mapper.get_property_by_column(column)
+        value = loaded.get(prop.key)
         if isinstance(value, str) and len(value) > limit:
-            setattr(target, column.key, value[:limit])
+            setattr(target, prop.key, value[:limit])
 
 
 event.listen(Base, "before_insert", _fit_strings, propagate=True)

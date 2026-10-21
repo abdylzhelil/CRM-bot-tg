@@ -32,35 +32,51 @@ async def send_to(user_id: int, text: str, markup=None) -> None:
         log.info("не удалось написать %s", user_id)
 
 
+async def reminders_once() -> int:
+    """Разослать наступившие напоминания «дожать». Каждое — отдельно: одно сбойное не мешает остальным."""
+    async with Session() as s:
+        ids = (await s.scalars(select(Reminder.id).where(~Reminder.sent, Reminder.due_at <= now()))).all()
+    sent = 0
+    for rid in ids:
+        async with Session() as s:
+            r = await s.get(Reminder, rid)
+            if r is None or r.sent:
+                continue
+            r.sent = True  # отмечаем сразу: даже если отправка не удастся, бот не будет повторять раз в минуту
+            c = await s.get(Client, r.client_id)
+            await s.commit()
+        if c is None:
+            continue
+        who = c.name or c.username or c.tg_id
+        await send_to(
+            c.user_id or min(config.OWNER_IDS),
+            f"⏰ {r.text or 'Напоминание'}: {who}\nМожно отправить: «{REPEAT_TOUCH}»",
+            notify.InlineKeyboardMarkup(inline_keyboard=[[
+                notify.InlineKeyboardButton(text="👤 Открыть", callback_data=f"cl:open:{c.id}")]]),
+        )
+        sent += 1
+    return sent
+
+
 async def reminder_loop() -> None:
     """Напоминания «дожать» (владельцу клиента) и вечерний отчёт администраторам."""
     last_report = None
     while True:
         try:
-            async with Session() as s:
-                due = (await s.scalars(select(Reminder).where(~Reminder.sent, Reminder.due_at <= now()))).all()
-                for r in due:
-                    c = await s.get(Client, r.client_id)
-                    r.sent = True
-                    if c is None:
-                        continue
-                    who = c.name or c.username or c.tg_id
-                    await send_to(
-                        c.user_id or min(config.OWNER_IDS),
-                        f"⏰ {r.text}: {who}\nМожно отправить: «{REPEAT_TOUCH}»",
-                        notify.InlineKeyboardMarkup(inline_keyboard=[[
-                            notify.InlineKeyboardButton(text="👤 Открыть", callback_data=f"cl:open:{c.id}")]]),
-                    )
-                await s.commit()
+            await reminders_once()
+        except Exception as e:
+            log.exception("reminder_loop: напоминания")
+            await notify.alert_once("reminder_loop", f"Напоминания клиентам: ошибка {type(e).__name__}: {str(e)[:150]}")
+        try:
             t = quiet.local_now()
             async with Session() as s:
                 report_hour = await settings.get_int(s, "report_hour")
             if t.hour == report_hour and last_report != t.date():
-                last_report = t.date()
+                last_report = t.date()  # даже при ошибке не повторяем отчёт каждую минуту
                 await notify._send("🌙 Вечерний отчёт\n" + await build_report())
-        except Exception:
-            log.exception("reminder_loop")
-            await notify.alert_once("reminder_loop", "В фоновой задаче reminder_loop ошибка (см. логи сервера).")
+        except Exception as e:
+            log.exception("reminder_loop: вечерний отчёт")
+            await notify.alert_once("reminder_report", f"Вечерний отчёт: ошибка {type(e).__name__}: {str(e)[:150]}")
         await asyncio.sleep(60)
 
 
