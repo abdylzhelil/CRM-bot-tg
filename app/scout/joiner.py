@@ -63,7 +63,7 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
 
     if not await ensure_connected(client):
         return False  # без связи не пытаемся: иначе группа зря ушла бы в «повторить через N дней»
-    joined_entity = None
+    joined_entity, flood_wait = None, 0.0
     async with Session() as s:
         acc = await s.get(ScoutAccount, acc_id)
         today = date.today().isoformat()
@@ -90,10 +90,13 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             g.status = "covered"  # там уже есть наш бот — второй не заходит
             await s.commit()
             return False
+        check = await settings.get(s, "join_check") == "1"
+        # отпустить подключение к базе на время запросов к Telegram (они бывают долгими: «подождите N секунд»);
+        # раньше несколько таких ожиданий занимали все подключения — «QueuePool limit reached» (21.10)
+        await s.commit()
         try:
             entity = await client.get_entity(g.username or g.tg_id)
-            if (g.status == "approved" and g.skip_reason != "вернул админ"
-                    and await settings.get(s, "join_check") == "1"):
+            if g.status == "approved" and g.skip_reason != "вернул админ" and check:
                 reason = await _quality(client, entity, g)
                 if reason:  # реклама/флуд/не по-русски — вступление не тратим
                     g.status, g.skip_reason = "skipped", reason
@@ -108,9 +111,7 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             g.status, g.account_id, g.joined_at = "joined", acc_id, now()
         except FloodWaitError as e:
             log.warning("FloodWait %ss при вступлении — жду", e.seconds)
-            await s.commit()
-            await asyncio.sleep(e.seconds + random.uniform(5, 30))
-            return True
+            flood_wait = e.seconds + random.uniform(5, 30)  # ждём уже без подключения к базе (ниже)
         except ChannelsTooMuchError:
             acc.joined_today = acc.daily_join_limit
             await notify.alert(f"Аккаунт «{acc.name}» достиг лимита групп Telegram. Запустите ротацию.")
@@ -127,6 +128,9 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             log.exception("вступление в %s", g.title)
             await _retry_later(s, g)
         await s.commit()
+    if flood_wait:
+        await asyncio.sleep(flood_wait)
+        return True
     if joined_entity is not None:
         from app.scout.folders import mute, sync_folders
 

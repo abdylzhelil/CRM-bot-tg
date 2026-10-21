@@ -16,16 +16,23 @@ def make_engine(url: str) -> AsyncEngine:
     if url.startswith("postgresql"):
         # база на другом сервере (Россия), бот в Алматы: связь может рваться — проверять соединение перед запросом
         # и не держать старые соединения дольше 30 минут
-        engine = create_async_engine(url, pool_pre_ping=True, pool_recycle=1800, pool_size=5, max_overflow=5)
+        engine = create_async_engine(url, pool_pre_ping=True, pool_recycle=1800, pool_size=5, max_overflow=15)
+    elif url.startswith("sqlite") and ":memory:" not in url:
+        # подключения к файлу SQLite дешёвые; запас на случай, если какая-то задача долго ждёт Telegram (21.10: «QueuePool limit»)
+        engine = create_async_engine(url, pool_size=10, max_overflow=20, pool_timeout=60)
     else:
         engine = create_async_engine(url)
     if url.startswith("sqlite") and ":memory:" not in url:
         @event.listens_for(engine.sync_engine, "connect")
         def _sqlite_pragmas(dbapi_connection, _record) -> None:
             cur = dbapi_connection.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA synchronous=NORMAL")  # с WAL безопасно и быстрее; при сбое питания теряется максимум последняя запись
+            # сначала «ждать до 15 с, если база занята» — иначе следующая команда при занятой базе (копия базы,
+            # запись из другой задачи) падала сразу с «database is locked», ещё до ожидания (тревога reminder_loop 21.10)
             cur.execute("PRAGMA busy_timeout=15000")
+            cur.execute("PRAGMA journal_mode")
+            if (cur.fetchone() or [""])[0].lower() != "wal":  # режим WAL хранится в самом файле базы — включаем один раз
+                cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")  # с WAL безопасно и быстрее; при сбое питания теряется максимум последняя запись
             cur.close()
     return engine
 

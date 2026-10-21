@@ -127,6 +127,7 @@ async def publish_one(manager) -> bool:
         order = await s.get(AdOrder, post.order_id)
         text = await adposts.compose(s, order)
         problem, switched_off, conditions_done = None, False, []
+        await s.commit()  # отпустить подключение к базе, пока ждём Telegram (публикация может ждать «медленный режим»)
         try:
             entity = await resolve(client, g)
             # parse_mode=None: текст рекламодателя публикуем как есть (Markdown Telethon испортил бы *, _, [ ])
@@ -309,6 +310,7 @@ async def check_group(manager, gid: int) -> tuple[str, str]:
         g = await s.get(Group, gid)
         if g is None:
             return "bad", "группа не найдена"
+        await s.commit()  # отпустить подключение к базе на время проверки в Telegram
         level, text, no_media, closed = await probe(manager, g)
         if level != "bad" and g.kind != "channel":  # правила и боты группы (в своём канале — не нужно)
             try:
