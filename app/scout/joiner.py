@@ -51,6 +51,15 @@ async def _quality(client: TelegramClient, entity, g: Group, s=None) -> tuple[st
     reason = junk.title_reason(g.title)
     if reason:
         return reason, {}
+    if s is not None and await settings.get(s, "captcha_skip") == "1":
+        from app.scout.captchas import kick_reason
+
+        try:
+            reason = kick_reason(await client(functions.channels.GetFullChannelRequest(entity)))
+        except Exception:
+            reason = ""
+        if reason:  # бот-капча выкинет разведчика через минуту — вступление не тратим
+            return reason, {}
     try:
         _, texts = await _sample(client, entity)
     except Exception:

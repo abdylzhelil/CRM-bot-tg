@@ -1,4 +1,6 @@
 """Настройки в БД (key-value), редактируются из бота."""
+import re
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Setting
@@ -23,6 +25,8 @@ DEFAULTS: dict[str, str] = {
     "ai_check_leads": "1",
     "group_audit_leave": "1",
     "captcha_leave_days": "3",
+    "captcha_skip": "1",
+    "mod_bot_username": "",
     "user_search_full": "10",
     "user_search_days": "3",
     "adpost_enabled": "0",
@@ -97,6 +101,8 @@ LABELS: dict[str, str] = {
     "group_audit": "Перепроверять вступившие группы (спам, город/регион/страна)",
     "group_audit_leave": "Выходить из спамных групп после проверки",
     "captcha_leave_days": "Выйти из группы, если капчу не прошли за N дней (0 — не выходить)",
+    "captcha_skip": "Не вступать в группы с ботами-капчами, которые выкидывают новичков",
+    "mod_bot_username": "Ваш бот модерации (@имя) — для текста админу группы с капчей",
     "user_search_full": "«Найти группы для меня»: запросов у 💎",
     "user_search_days": "Повторять поиск по запросу пользователя раз в N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
@@ -178,8 +184,10 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
-                        "rotation_days", "join_retry_days", "join_retry_max", "join_check",
-                        "user_search_free", "user_search_full", "user_search_days", "group_rules_check", "group_audit", "group_audit_leave", "captcha_leave_days"]),
+                        "rotation_days", "join_retry_days", "join_retry_max",
+                        "user_search_free", "user_search_full", "user_search_days"]),
+    ("🧹", "Проверка групп и капча", ["join_check", "group_audit", "group_audit_leave", "group_rules_check",
+                                     "captcha_skip", "captcha_leave_days", "mod_bot_username"]),
     ("📣", "Реклама в группах", ["adpost_enabled", "adpost_auto_allow", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_provider", "ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_check_leads", "ai_decide", "ai_classify_daily"]),
@@ -209,6 +217,8 @@ SHORT: dict[str, str] = {
     "group_audit": "Перепроверка групп",
     "group_audit_leave": "Выход из спамных",
     "captcha_leave_days": "Капча: выйти через, дн",
+    "captcha_skip": "Капча: не вступать",
+    "mod_bot_username": "Бот модерации (@)",
     "user_search_full": "Поиск для меня: 💎",
     "user_search_days": "Повтор поиска, дн",
     "join_retry_max": "Попыток вступить",
@@ -242,6 +252,8 @@ HINTS: dict[str, str] = {
     "group_audit": "1 — разведчик по очереди (3 группы раз в ~10 минут, каждую раз в месяц) перечитывает последние сообщения своих групп; правила и ИИ (если подключён) решают: живая группа или спам/заработок/реклама, и какой охват — город, регион или вся страна. Итог — 🔍 Группы → «🧹 Проверка групп» и «🗺 Города и регионы». 0 — не проверять.",
     "group_audit_leave": "1 — из спамных групп разведчик выходит (они в «👋 Вышли», можно вернуть); группы каталога, с рекламой, найденные по просьбе пользователя и возвращённые вами не покидает — только перестаёт брать оттуда заявки. 0 — не выходить, только не брать заявки.",
     "captcha_leave_days": "В группах, где после вступления бот-модератор просит капчу или «я не бот», разведчику нельзя писать. Такие группы — в 🔍 Группы → «🧩 Капча» со ссылкой на сообщение бота: откройте её с телефона разведчика и пройдите проверку. Не прошли за столько дней — разведчик сам выходит (группы каталога и по просьбе пользователей не трогает). 0 — не выходить.",
+    "captcha_skip": "1 — перед вступлением разведчик смотрит ботов и описание группы; если там бот-капча, который выкидывает не прошедших проверку (Shieldy, Join Captcha и т. п.), не вступает — вступление не тратится, группа в «🚫 Пропущены» с причиной «капча» (можно вернуть ↩️). 0 — вступать везде.",
+    "mod_bot_username": "@имя вашего бота модерации. Подставляется в готовый текст админу группы с капчей («🧩 Капча» → «📋 Текст админу»): админ добавляет бота-антиспам, капча для нашего аккаунта больше не нужна. «-» — очистить.",
     "adpost_auto_allow": "1 — группы, куда вступил разведчик, бот сам открывает для рекламы: проверяет права и правила группы и, "
                          "если реклама там не запрещена, показывает её покупателям (по 3 группы раз в ~5 минут). Группу, которую вы "
                          "выключили сами, повторно не открывает. Больше групп — больше постов с аккаунта разведчика: включайте, когда "
@@ -350,7 +362,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave", "ai_check_leads"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave", "ai_check_leads", "captcha_skip"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),
@@ -388,6 +400,11 @@ def validate(key: str, text: str) -> str:
 
         if text not in MODELS:
             raise SettingError("Допустимо: " + ", ".join(MODELS))
+    elif key == "mod_bot_username":
+        text = "" if text == "-" else text.lstrip("@").removeprefix("https://t.me/")
+        if text and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", text):
+            raise SettingError("Нужно @имя бота, например @my_moder_bot")
+        return text
     elif key == "adpost_footer":
         if len(text) > 200:
             raise SettingError("Не длиннее 200 знаков")

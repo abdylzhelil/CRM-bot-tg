@@ -31,6 +31,30 @@ _WORDS = re.compile(r"капч|captcha|не\s*бот|not\s*a?\s*bot|робот|r
                     r"докаж|проверк\w+\s+(на|что)|человек", re.I)
 
 
+# боты-капчи, которые удаляют не прошедших проверку за минуты: вступать туда — потерять вступление
+_KICK_BOT = re.compile(r"captcha|capcha|kapcha|shieldy|join_?check|verif\w*bot|human\w*bot|antibot|anti_bot", re.I)
+_KICK_ABOUT = re.compile(r"капч|captcha|@\w*(captcha|shieldy)\w*", re.I)
+
+
+def kick_reason(full) -> str:
+    """По ответу GetFullChannel (виден без вступления): есть ли в группе бот-капча. "" — нет."""
+    bots = [getattr(u, "username", "") or "" for u in (getattr(full, "users", None) or []) if getattr(u, "bot", False)]
+    hit = next((b for b in bots if _KICK_BOT.search(b)), "")
+    if hit:
+        return f"капча: бот @{hit}"[:120]
+    about = getattr(getattr(full, "full_chat", None), "about", "") or ""
+    return "капча: в описании группы" if _KICK_ABOUT.search(about) else ""
+
+
+async def admin_text(s: AsyncSession, g: Group) -> str:
+    """Готовый текст админу группы (отправляет владелец сам). До 256 знаков — кнопка «скопировать»."""
+    bot = await settings.get(s, "mod_bot_username")
+    offer = (f"Можем бесплатно поставить бота-антиспама @{bot}: удаляет рекламу и спам." if bot
+             else "Можем бесплатно поставить нашего бота-антиспама: удаляет рекламу и спам.")
+    return (f"Здравствуйте! В «{g.title[:40]}» капча не пропустила наш аккаунт. {offer} "
+            "Добавите — капча нам не нужна. Интересно?")[:256]
+
+
 def restricted(ent) -> bool:
     """Ограничен ли именно этот аккаунт (капча/«новичкам нельзя»). Закрытая для всех группа — не капча."""
     own = getattr(ent, "banned_rights", None)
@@ -84,6 +108,11 @@ async def count(s: AsyncSession) -> int:
 async def listing(s: AsyncSession, limit: int = 20) -> list[Group]:
     return list((await s.scalars(select(Group).where(Group.status == "joined", Group.captcha_since.is_not(None))
                                  .order_by(Group.captcha_since).limit(limit))).all())
+
+
+def has_leads(g: Group) -> bool:
+    """Заявки из группы шли, пока висела капча: читать её полезно — не выходим."""
+    return bool(g.captcha_since and g.last_lead_at and g.last_lead_at >= g.captcha_since)
 
 
 def leave_at(g: Group, days: int):
@@ -141,7 +170,7 @@ async def check_one(manager, gid: int) -> str:
             await s.commit()
             return "captcha"
         expire = leave_at(g, days)
-        if expire and now() >= expire and not groupcheck.protected(g):
+        if expire and now() >= expire and not groupcheck.protected(g) and not has_leads(g):
             await s.commit()
             ok = await leave(client, g, f"капчу не прошли за {days} дн.")
             await s.commit()
@@ -182,7 +211,8 @@ async def tell(gids: list[int]) -> None:
     for g in groups:
         lines.append(f"• {html.escape(g.title)}" + ("" if g.captcha_link else " — сообщение бота не нашёл, откройте группу"))
     if days:
-        lines.append(f"\nНе пройдёте за {days} дн. — разведчик сам выйдет из группы.")
+        lines.append(f"\nНе пройдёте за {days} дн. и заявок оттуда не будет — разведчик сам выйдет из группы. "
+                     "Или предложите админу бесплатного бота-антиспама: «🧩 Все группы с капчей» → «📋 Текст админу».")
     rows = [[notify.InlineKeyboardButton(text=f"🧩 {g.title[:30]}", url=g.captcha_link or group_url(g))]
             for g in groups[:8] if g.captcha_link or group_url(g)]
     rows.append([notify.InlineKeyboardButton(text="🧩 Все группы с капчей", callback_data="gr:cap")])

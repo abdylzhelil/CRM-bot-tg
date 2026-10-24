@@ -113,3 +113,44 @@ async def test_list_buttons(maker, monkeypatch):
     await groups_h.captcha_out(cb)
     async with maker() as s:
         assert (await s.get(Group, gid)).status == "left"
+
+
+def test_kick_reason_from_full_channel():
+    bot = SimpleNamespace(bot=True, username="shieldy_bot")
+    full = SimpleNamespace(users=[bot], full_chat=SimpleNamespace(about="Барахолка"))
+    assert captchas.kick_reason(full) == "капча: бот @shieldy_bot"
+    other = SimpleNamespace(users=[SimpleNamespace(bot=True, username="MissRose_bot")],
+                            full_chat=SimpleNamespace(about="Барахолка города"))
+    assert captchas.kick_reason(other) == ""  # Rose капчу не всегда ставит — не пропускаем
+    assert captchas.kick_reason(SimpleNamespace(users=[], full_chat=SimpleNamespace(about="Вход через капчу"))) != ""
+
+
+async def test_joiner_skips_kick_captcha(maker):
+    from app.scout import joiner
+
+    class C(Client):
+        async def __call__(self, req):
+            return SimpleNamespace(users=[SimpleNamespace(bot=True, username="join_captcha_bot")],
+                                   full_chat=SimpleNamespace(about=""))
+
+    async with maker() as s:
+        reason, _ = await joiner._quality(C(), object(), Group(tg_id=-931, title="Барахолка"), s)
+    assert reason.startswith("капча")
+
+
+async def test_stays_when_leads_come(maker):
+    gid = await _group(maker, captcha_since=now() - timedelta(days=4), last_lead_at=now() - timedelta(days=1))
+    client = Client()
+    assert await captchas.check_one(SimpleNamespace(clients={1: client}), gid) == "still"
+    assert "LeaveChannelRequest" not in client.calls
+
+
+async def test_admin_text_and_setting(maker):
+    from app.services import settings
+
+    assert settings.validate("mod_bot_username", "@my_moder_bot") == "my_moder_bot"
+    assert settings.validate("mod_bot_username", "-") == ""
+    async with maker() as s:
+        await settings.put(s, "mod_bot_username", "my_moder_bot")
+        text = await captchas.admin_text(s, Group(title="Барахолка Махачкала"))
+    assert "@my_moder_bot" in text and len(text) <= 256

@@ -621,27 +621,40 @@ async def captcha_list(cb: CallbackQuery) -> None:
     head = ("🧩 <b>Капча</b> — в этих группах бот-модератор просит разведчика подтвердить, что он не бот. "
             "Пока не пройдёте, разведчик может только читать (заявки идут), писать нельзя.\n"
             "Откройте ссылку <b>с телефона разведчика</b> и нажмите кнопку проверки, затем «✅ Прошёл».\n"
-            "ИИ капчу не проходит — Telegram за это блокирует аккаунт.\n"
-            + (f"Не пройдёте за {days} дн. — разведчик сам выйдет (⚙️ → 🔍 Разведчик → «Капча: выйти через»)."
-               if days else "Автовыход выключен (⚙️ → 🔍 Разведчик → «Капча: выйти через»)."))
+            "ИИ капчу не проходит — Telegram за это блокирует аккаунт. Лучший выход — «📋 Текст админу»: "
+            "предложить админу бесплатного бота-антиспама, тогда капча не нужна.\n"
+            + (f"Не пройдёте за {days} дн. и заявок оттуда не будет — разведчик сам выйдет (⚙️ → 🧹 Проверка групп и капча)."
+               if days else "Автовыход выключен (⚙️ → 🧹 Проверка групп и капча)."))
     if not groups_:
         return await reply(cb, head + "\n\nСейчас таких групп нет ✅", kb([[("◀️ Назад", "gr:menu")]]))
     await reply(cb, head + f"\n\nГрупп: {len(groups_)} (карточки ниже).", kb([[("◀️ Назад", "gr:menu")]]))
+    from app.scout import captchas
+
     for g in groups_:
-        await cb.message.answer(*_captcha_card(g, days), disable_web_page_preview=True)
+        async with Session() as s:
+            note = await captchas.admin_text(s, g)
+        await cb.message.answer(*_captcha_card(g, days, note), disable_web_page_preview=True)
 
 
-def _captcha_card(g: Group, days: int):
+def _captcha_card(g: Group, days: int, admin_text: str = ""):
     from app.scout import captchas
 
     until = captchas.leave_at(g, days)
+    leads = captchas.has_leads(g)
     text = (f"🧩 <b>{esc(g.title)}</b> · {g.members} уч.\nКапча с {g.captcha_since:%d.%m %H:%M}"
-            + (f", выйду {until:%d.%m}" if until else "")
+            + ("\n📥 Заявки отсюда идут — из группы не выхожу" if leads else (f", выйду {until:%d.%m}" if until else ""))
             + ("" if g.captcha_link else "\nСообщение бота не нашёл — откройте группу и найдите проверку."))
     url = g.captcha_link or captchas.group_url(g)
     rows = ([[("🧩 Открыть сообщение бота" if g.captcha_link else "🧩 Открыть группу", f"url:{url}")]] if url else [])
-    rows += [[("✅ Прошёл — проверить", f"gr:capok:{g.id}"), ("⏳ Ещё время", f"gr:capwait:{g.id}")],
-             [("🚪 Выйти из группы", f"gr:capout:{g.id}")]]
+    rows += [[("✅ Прошёл — проверить", f"gr:capok:{g.id}"), ("⏳ Ещё время", f"gr:capwait:{g.id}")]]
+    admin = []
+    if admin_text:
+        admin.append(("📋 Текст админу", f"copy:{admin_text}"))
+    if g.rules_contact:
+        admin.append((f"✍️ @{g.rules_contact}"[:30], f"url:https://t.me/{g.rules_contact}"))
+    if admin:
+        rows.append(admin)
+    rows.append([("🚪 Выйти из группы", f"gr:capout:{g.id}")])
     return text, kb(rows)
 
 
@@ -681,7 +694,9 @@ async def captcha_wait(cb: CallbackQuery) -> None:
         g.captcha_since = now()  # срок автовыхода отсчитывается заново
         days = await settings.get_int(s, "captcha_leave_days")
         await s.commit()
-        text, markup = _captcha_card(g, days)
+        from app.scout import captchas
+
+        text, markup = _captcha_card(g, days, await captchas.admin_text(s, g))
     await cb.answer(f"Хорошо, подожду ещё {days} дн." if days else "Хорошо")
     try:
         await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)

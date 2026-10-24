@@ -144,7 +144,8 @@ async def test_toggles_in_sections_and_settings_split(maker):
 
     scout = next(keys for _, title, keys in settings.SECTIONS if title == "Разведчик")
     ads = next(keys for _, title, keys in settings.SECTIONS if title == "Реклама в группах")
-    assert "group_rules_check" in scout and "group_audit" in scout and len(scout) <= 16
+    checks = next(keys for _, title, keys in settings.SECTIONS if title == "Проверка групп и капча")
+    assert "group_rules_check" in checks and "group_audit" in checks and len(scout) <= 12
     assert all(k.startswith("adpost_") for k in ads)
     cb = MagicMock()
     cb.data = "gr:tg:group_rules_check"
