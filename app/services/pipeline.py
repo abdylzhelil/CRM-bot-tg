@@ -23,6 +23,17 @@ class Incoming:
     link: str = ""
 
 
+async def _niche_name(session: AsyncSession, category_id) -> str:
+    """«Ремонт → Сантехники» — чтобы ИИ понимал, по какой нише нашлось сообщение."""
+    from app.models import Category
+
+    cat = await session.get(Category, category_id) if category_id else None
+    if cat is None:
+        return ""
+    parent = await session.get(Category, cat.parent_id) if cat.parent_id else None
+    return f"{parent.name} → {cat.name}" if parent else cat.name
+
+
 async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> Lead | None:
     """Возвращает новый Lead или None (не заявка / спам / дубль)."""
     author = msg.author
@@ -99,7 +110,7 @@ async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> 
 
     # исполнитель рекламирует свои услуги («Сделаю сайт за 3 дня…») — это не заказчик (force — админ вернул вручную)
     if not force and not whitelisted:
-        kind, by = await offers.verdict(session, msg.text)
+        kind, by = await offers.verdict(session, msg.text, niche=await _niche_name(session, m.category_id))
         if kind != "request":
             session.add(FilteredMessage(
                 text=msg.text[:2000], author_id=author.user_id, username=author.username, first_name=author.first_name,

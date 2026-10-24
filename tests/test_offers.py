@@ -115,3 +115,25 @@ async def test_double_start_does_not_crash(maker, monkeypatch):
 
     await asyncio.gather(*(mw(handler, object(), {"event_from_user": tg, "event_chat": None}) for _ in range(3)))
     assert seen == [555001] * 3
+
+
+async def test_ai_checks_every_lead_and_niche(maker, monkeypatch):
+    """Владелец 24.10: «с заявками тоже нужно с ИИ, не то часто приходят» — ИИ смотрит и «ясные» по правилам заявки."""
+    from app import config
+    from app.services import llm, settings
+
+    monkeypatch.setattr(config, "GIGACHAT_AUTH_KEY", "g")
+    seen = []
+
+    async def fake_complete(provider, system, text, max_tokens=400, json_mode=False):
+        seen.append(text)
+        return '{"kind": "НЕ_ПО_НИШЕ"}' if "карту" in text else '{"kind": "ЗАКАЗЧИК"}'
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    async with maker() as s:
+        assert await offers.verdict(s, "Ищу кто сделает перевод на карту срочно", niche="Переводчики") == ("other", "ИИ: не по нише")
+        assert "Ниша: Переводчики" in seen[-1]
+        assert await offers.verdict(s, "Ищу сантехника, течёт кран") == ("request", "ИИ")
+        await settings.put(s, "ai_check_leads", "0")  # выключено — «ясные» заявки ИИ не тратят
+        n = len(seen)
+        assert await offers.verdict(s, "Ищу сантехника, течёт кран") == ("request", "правила")
+        assert len(seen) == n

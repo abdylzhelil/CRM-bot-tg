@@ -66,11 +66,14 @@ _INVITE_RE = [re.compile(p, re.I | re.M) for p in _INVITE]
 _VACANCY_RE = [re.compile(p, re.I | re.M) for p in _VACANCY]
 
 SYSTEM = (
-    "Ты фильтр заявок для фрилансеров. Тебе дают сообщение из Telegram-группы в тегах <данные>. "
-    "Определи, кто автор (поле kind):\n"
-    "ЗАКАЗЧИК — автор ищет исполнителя, товар или услугу, просит помочь, спрашивает цену или совет;\n"
-    "ИСПОЛНИТЕЛЬ — автор сам предлагает свои услуги или товар, рекламирует себя, ищет клиентов;\n"
-    "ДРУГОЕ — ни то ни другое (новости, болтовня, вакансия с наймом в штат и т. п.).\n"
+    "Ты фильтр заявок для фрилансеров и мастеров. Тебе дают сообщение из Telegram-группы в тегах <данные> "
+    "и нишу, по которой оно нашлось. Определи, кто автор (поле kind):\n"
+    "ЗАКАЗЧИК — автор сам ищет исполнителя, мастера, товар или услугу, просит помочь, спрашивает цену или совет "
+    "по теме ниши;\n"
+    "ИСПОЛНИТЕЛЬ — автор сам предлагает свои услуги или товар, рекламирует себя, ищет клиентов, продаёт, сдаёт;\n"
+    "НЕ_ПО_НИШЕ — автор что-то ищет, но не по этой нише (слово совпало случайно, например «перевод на карту» для ниши "
+    "«переводчики»);\n"
+    "ДРУГОЕ — ни то ни другое: новости, болтовня, вакансия в штат, «заработок»/крипта/ставки, приглашения в чаты, спам.\n"
 )
 
 
@@ -95,14 +98,16 @@ def rule_verdict(text: str) -> str:
     return "unsure" if seller else "request"
 
 
-async def ai_verdict(s: AsyncSession, text: str, client=None) -> str | None:
-    """Спросить Haiku 5.5. offer / request / other или None (ИИ выключен, лимит, ошибка — тогда оставляем заявку)."""
+async def ai_verdict(s: AsyncSession, text: str, client=None, niche: str = "") -> str | None:
+    """Спросить ИИ. offer / request / other / niche или None (ИИ выключен, лимит, ошибка — тогда оставляем заявку)."""
     from app.services import brain
 
-    res = await brain.ask(s, "leads", SYSTEM, text.strip()[:1500],
-                          brain.obj({"kind": {"type": "string", "enum": ["ЗАКАЗЧИК", "ИСПОЛНИТЕЛЬ", "ДРУГОЕ"]}}),
+    data = (f"Ниша: {niche}\n" if niche else "") + text.strip()[:1500]
+    res = await brain.ask(s, "leads", SYSTEM, data,
+                          brain.obj({"kind": {"type": "string", "enum": ["ЗАКАЗЧИК", "ИСПОЛНИТЕЛЬ", "НЕ_ПО_НИШЕ", "ДРУГОЕ"]}}),
                           client, flag="ai_classify", max_tokens=64)
-    return {"ЗАКАЗЧИК": "request", "ИСПОЛНИТЕЛЬ": "offer", "ДРУГОЕ": "other"}.get((res or {}).get("kind"))
+    return {"ЗАКАЗЧИК": "request", "ИСПОЛНИТЕЛЬ": "offer", "НЕ_ПО_НИШЕ": "niche",
+            "ДРУГОЕ": "other"}.get((res or {}).get("kind"))
 
 
 async def learn(s: AsyncSession, text: str, kind: str) -> None:
@@ -132,13 +137,20 @@ async def by_examples(s: AsyncSession, text: str) -> str | None:
     return None
 
 
-async def verdict(s: AsyncSession, text: str, client=None) -> tuple[str, str]:
-    """(offer|other|request, кто решил: примеры/правила/ИИ). Только offer и other отсеиваются."""
+async def verdict(s: AsyncSession, text: str, client=None, niche: str = "") -> tuple[str, str]:
+    """(offer|other|request, кто решил: примеры/правила/ИИ). Только offer и other отсеиваются.
+    С `ai_check_leads`=1 ИИ проверяет и то, что правила сочли заявкой (там часто проскакивает лишнее)."""
+    from app.services import settings
+
     learned = await by_examples(s, text)
     if learned:
         return learned, "ваши отметки"
     v = rule_verdict(text)
-    if v != "unsure":
+    if v in ("offer", "other"):
         return v, "правила"
-    by_ai = await ai_verdict(s, text, client)
+    if v == "request" and await settings.get(s, "ai_check_leads") != "1":
+        return v, "правила"
+    by_ai = await ai_verdict(s, text, client, niche)
+    if by_ai == "niche":
+        return "other", "ИИ: не по нише"
     return (by_ai, "ИИ") if by_ai else ("request", "правила")
