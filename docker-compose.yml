@@ -6,6 +6,8 @@ services:
     environment:
       # база: по умолчанию SQLite в data/; после переноса в PostgreSQL — строка CRM_DATABASE_URL в .env (docs/DB_MOVE.md)
       DATABASE_URL: ${CRM_DATABASE_URL:-sqlite+aiosqlite:///data/crm.db}
+      # меньше «кусков» памяти у Python (база и сеть работают в потоках) — бот занимает на 10–20% меньше (сервер 1 ГБ)
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - ./data:/srv/data
     logging:  # журнал контейнера не растёт бесконечно: до 3 файлов по 10 МБ
