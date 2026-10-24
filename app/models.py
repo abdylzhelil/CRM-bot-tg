@@ -107,11 +107,12 @@ class Group(Base):
     offer_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     bot_member: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # в группе есть сам бот КлиентРадар
     board_on: Mapped[bool] = mapped_column(Boolean, default=True)  # 📊 рейтинг заявок в закрепе (если бот — админ с правом закрепа)
-    board_admin: Mapped[int] = mapped_column(BigInteger, default=0)  # кто добавил бота — ему комиссия днями 💎
+    board_admin: Mapped[int] = mapped_column(BigInteger, default=0)  # кто добавил бота — ему комиссия кредитами 💰
     board_msg_id: Mapped[int] = mapped_column(BigInteger, default=0)
     board_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     board_note: Mapped[str] = mapped_column(String(120), default="")  # почему рейтинг не выходит (нет прав и т. п.)
-    board_earned: Mapped[float] = mapped_column(Float, default=0)  # начислено админу, дней 💎
+    board_earned: Mapped[float] = mapped_column(Float, default=0)  # начислено админу, дней 💎 (до 25.10)
+    board_credits: Mapped[int] = mapped_column(Integer, default=0)  # начислено админу кредитами 💰 (с 25.10)
 
 
 class FeedChat(Base):
@@ -147,6 +148,31 @@ class Feedback(Base):
     read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     answer: Mapped[str] = mapped_column(Text, default="")  # что ответил владелец
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CreditTx(Base):
+    """💰 Движение кредитов: + комиссия админу группы, ручное начисление; − покупка дней 💎, кода бота модерации."""
+    __tablename__ = "credit_tx"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[int] = mapped_column(Integer)  # + начислено / − списано
+    kind: Mapped[str] = mapped_column(String(16), default="")  # board/admin/days/modcode/return/reverse
+    note: Mapped[str] = mapped_column(String(200), default="")
+    ref: Mapped[str] = mapped_column(String(64), default="", index=True)  # защита от повтора: pay-<charge_id> и т. п.
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+class ModCode(Base):
+    """Код активации тарифа бота модерации (владелец создаёт его там командой /newcode и добавляет сюда).
+    Продаётся за кредиты; если кодов нет — заявка ждёт (code=""), пока владелец не добавит."""
+    __tablename__ = "mod_codes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)  # monthly/yearly/forever
+    code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # 0 — в запасе
+    price: Mapped[int] = mapped_column(Integer, default=0)  # списано кредитов
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    sold_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class SearchQuery(Base):
@@ -376,6 +402,7 @@ class User(Base):
     trial_used: Mapped[bool] = mapped_column(Boolean, default=False)  # пробный 💎 уже был
     on_trial: Mapped[bool] = mapped_column(Boolean, default=False)  # сейчас пробный 💎 (не оплачен)
     guarantee_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # начало текущей недели «гарантии заявок»
+    credits: Mapped[int] = mapped_column(Integer, default=0)  # 💰 кредиты (1 кредит = 1 ₽ внутри бота), история — credit_tx
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
 

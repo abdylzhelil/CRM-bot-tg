@@ -160,7 +160,7 @@ async def rating_view(target, user: User, group_id: int = 0) -> None:
         mine = await boards.my_groups(s, user.tg_id)
     if mine:
         body += "\n\n🤝 <b>Группы, куда вы добавили бота</b>:\n" + "\n".join(
-            f"• {esc(g.title)} — пришло {came}, с 💎 {paid}, вам начислено {g.board_earned:.1f} дн."
+            f"• {esc(g.title)} — пришло {came}, с 💎 {paid}, вам начислено {g.board_credits or 0} кредитов 💰"
             + (f" ({esc(g.board_note)})" if g.board_note else "") for g, came, paid in mine)
     suffix = f":{group_id}" if group_id else ""
     rows = [[(f"🔍 {name}"[:40], f"rt:n:{cid}{suffix}")] for cid, name, _, _ in items[:8]]
@@ -168,7 +168,7 @@ async def rating_view(target, user: User, group_id: int = 0) -> None:
     if link:
         rows.append([("➕ Поставить бота в мою группу", f"url:{link}")])
         body += ("\n\n➕ Есть своя группа или чат? Поставьте бота — в закрепе будет такой рейтинг, а вам — "
-                 "дни 💎 с оплат участников.")
+                 "кредиты 💰 с оплат участников (обмен на дни 💎 и бота модерации).")
     if not user.onboarded:
         body += "\n\nЧтобы получать такие заявки себе — выберите свои ниши ниже 👇"
     else:
@@ -261,8 +261,8 @@ async def admin_boards(cb: CallbackQuery) -> None:
                 User.source == boards.source_tag(g.id))) or 0
             stats[g.id] = (admin, came)
     head = ("📊 <b>Рейтинг в группах</b> — в группах, где КлиентРадар админ с правом закреплять, в закрепе висит рейтинг "
-            f"заявок по нишам и кнопка «📥 Получать заявки». Админу, который добавил бота, — {pct}% купленных дней 💎 "
-            "с каждой оплаты пришедших. Админ группы выключает командой /rating off."
+            f"заявок по нишам и кнопка «📥 Получать заявки». Админу, который добавил бота, — {pct}% суммы оплаты "
+            "кредитами 💰 с каждой оплаты пришедших (🛠 Управление → 💰 Кредиты). Админ группы выключает командой /rating off."
             + ("" if on else "\n⏸ Выключено: ⚙️ → 📊 Рейтинг в группах."))
     if not groups_:
         return await reply(cb, head + "\n\nБота пока нет ни в одной группе — «➕ Добавить бота в группу».",
@@ -274,7 +274,7 @@ async def admin_boards(cb: CallbackQuery) -> None:
                 + ("📌 в закрепе" if g.board_msg_id and not g.board_note else f"⚠️ {esc(g.board_note or 'ещё не публиковался')}")
                 + ("" if g.board_on else " · ⏸ выключен")
                 + f"\nДобавил: {esc(admin.name) if admin else ('id ' + str(g.board_admin) if g.board_admin else '—')}"
-                + f" · пришло людей: {came} · начислено: {g.board_earned:.1f} дн.")
+                + f" · пришло людей: {came} · начислено: {g.board_credits or 0} кр.")
         await cb.message.answer(text, reply_markup=kb([[("🔄 Обновить", f"gr:bdu:{g.id}"),
                                                          ("⏸ Выключить" if g.board_on else "▶️ Включить", f"gr:bdt:{g.id}")]]))
 

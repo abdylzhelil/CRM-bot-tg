@@ -313,6 +313,7 @@ async def profile(target, user: User) -> None:
         negatives = (await s.scalars(select(UserNegative.word).where(UserNegative.user_id == user.tg_id))).all()
         total = await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.user_id == user.tg_id))
         plan = await plan_line(s, user)
+        show_credits = (user.credits or 0) > 0 or await settings.get(s, "credits_enabled") == "1"
     text = (
         f"👤 <b>Профиль</b>\n"
         f"Тариф: {plan}\n"
@@ -324,15 +325,16 @@ async def profile(target, user: User) -> None:
         f"{'⏸ Заявки на паузе' if user.paused else ''}"
         + (f"\n🔕 Уведомления о заявках выключены {mute.until_text(user)}" if mute.is_muted(user) else "")
     )
-    await reply(target, text, kb(([[("📱 Кабинет", f"webapp:{config.WEBAPP_URL}/app/")]] if config.WEBAPP_URL else []) + [
+    await reply(target, text, kb([r for r in ([[("📱 Кабинет", f"webapp:{config.WEBAPP_URL}/app/")]] if config.WEBAPP_URL else []) + [
         [("🎯 Ниши", "pf:niches"), ("📍 Город", "pf:city")],
         [("⛔ Минус-слова", "pf:neg"), ("🌙 Тишина", "pf:quiet")],
         [("📋 Мой шаблон ответа", "pf:tpl"), ("💰 Мои цены", "pf:prices")],
         [("▶️ Возобновить" if user.paused else "⏸ Пауза", "pf:pause"), ("💎 Тариф", "pf:plan")],
         [("⚡ Автонастройка", "pf:auto"), ("🤝 Пригласить друзей", "pf:ref")],
         [("🔔 Уведомления: выкл — включить" if mute.is_muted(user) else "🔕 Выключить уведомления на время", "mt:menu")],
+        [(f"💰 Мои кредиты: {user.credits or 0}", "cr:menu")] if show_credits else [],
         [("💬 Написать владельцу бота", "fb:write")],
-    ]))
+    ] if r]))
 
 
 @router.callback_query(F.data == "pf:auto")

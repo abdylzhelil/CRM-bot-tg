@@ -1,4 +1,4 @@
-"""📊 Рейтинг заявок: закреп в группах с ботом, комиссия админу днями 💎, рейтинг в боте (подробно — на 💎)."""
+"""📊 Рейтинг заявок: закреп в группах с ботом, комиссия админу кредитами 💰, рейтинг в боте (подробно — на 💎)."""
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -51,8 +51,11 @@ async def test_commission_to_group_admin(maker, tgbot):
     async with maker() as s:
         admin = await s.get(User, 777)
         g = await s.get(Group, gid)
-    assert admin.plan == "full" and admin.plan_until > now() + timedelta(days=5) and abs(g.board_earned - 6) < 0.01
-    assert any("начислено" in t for t in tgbot.texts(777))
+    assert admin.credits == 98 and g.board_credits == 98 and admin.plan != "full"  # 20% от 490 ₽ — кредитами, не днями
+    assert any("98 кредитов" in t for t in tgbot.texts(777))
+    async with maker() as s:  # повтор того же платежа — второй раз не начисляем
+        new, _ = await payments.apply(s, 888, 30, 49000, "RUB", "ch-1")
+        assert not new and (await s.get(User, 777)).credits == 98
 
 
 async def test_group_board_posts_and_pins(maker):

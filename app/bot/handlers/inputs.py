@@ -366,6 +366,22 @@ HANDLERS["feedback"] = _feedback
 HANDLERS["fb_reply"] = _fb_reply
 
 
+async def _cra_codes(s, m, d, text):
+    from app.bot.handlers import credits as credits_h
+
+    return await credits_h.on_codes(s, m, d, text)
+
+
+async def _cra_adj(s, m, d, text):
+    from app.bot.handlers import credits as credits_h
+
+    return await credits_h.on_adjust(s, m, d, text)
+
+
+HANDLERS["cra_codes"] = _cra_codes
+HANDLERS["cra_adj"] = _cra_adj
+
+
 async def _gr_place(s, m, d, text):
     from app.bot.handlers import groups as groups_h
 

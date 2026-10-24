@@ -54,7 +54,7 @@ async def user_card(target, tg_id: int) -> None:
     text = (
         f"👤 <b>{esc(u.name or '—')}</b> {('@' + esc(u.username)) if u.username else ''}\n"
         f"ID: <code>{u.tg_id}</code>{' · администратор' if u.is_admin else ''}\n"
-        f"Тариф: {plan}{until}\nГород: {esc(u.city or 'вся Россия')}\nНиши: {esc(', '.join(niches)) or '—'}\n"
+        f"Тариф: {plan}{until}\n💰 Кредиты: {u.credits or 0}\nГород: {esc(u.city or 'вся Россия')}\nНиши: {esc(', '.join(niches)) or '—'}\n"
         f"Заявок: сегодня {today}, всего {total} · клиентов в CRM: {clients}\n"
         f"С нами с {u.created_at:%d.%m.%Y}, был(а) {u.last_seen:%d.%m %H:%M} UTC"
         f"{chr(10) + '⛔ Бот заблокирован пользователем' if u.blocked else ''}"

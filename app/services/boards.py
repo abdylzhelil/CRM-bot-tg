@@ -5,7 +5,7 @@
 админ с правом закреплять: значит, админ группы сам этого захотел. Без прав — молчит, как раньше.
 
 Кто пришёл по кнопке (users.source = "g<id>") и оплатил 💎, — админ, добавивший бота (groups.board_admin),
-получает `board_percent`% купленных дней (решение владельца 24.10: комиссия днями, не деньгами).
+получает `board_percent`% суммы оплаты кредитами 💰 (services/credits.py; до 25.10 — днями).
 
 В боте: те же цифры для города пользователя; список самих заявок по нише — только на 💎.
 Авторов заявок нигде не показываем.
@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Category, Group, Lead, User, now
-from app.services import geo, plans, settings
+from app.services import geo, settings
 
 TOP = 10
 _SOURCE = re.compile(r"^g(\d+)$")
@@ -104,8 +104,11 @@ async def due(s: AsyncSession) -> list[Group]:
         Group.board_at.is_(None) | (Group.board_at < now() - every)).limit(10))).all())
 
 
-async def reward(s: AsyncSession, user: User, bought: timedelta) -> tuple[int, timedelta, str] | None:
-    """Покупатель пришёл из группы с ботом — админу группы board_percent% купленных дней. Коммит — на вызывающем."""
+async def reward(s: AsyncSession, user: User, amount_kop: int, ref: str) -> tuple[int, int, str] | None:
+    """Покупатель пришёл из группы с ботом — админу группы board_percent% суммы оплаты кредитами 💰
+    (решение владельца 25.10; раньше — днями). → (админ, кредитов, группа). Коммит — на вызывающем."""
+    from app.services import credits
+
     m = _SOURCE.match(user.source or "")
     if not m:
         return None
@@ -113,13 +116,13 @@ async def reward(s: AsyncSession, user: User, bought: timedelta) -> tuple[int, t
     if g is None or not g.board_admin or g.board_admin == user.tg_id:
         return None
     admin = await s.get(User, g.board_admin)
-    percent = await settings.get_int(s, "board_percent")
-    share = bought * percent / 100
-    if admin is None or share <= timedelta(0):
+    amount = credits.commission(amount_kop, await settings.get_int(s, "board_percent"))
+    if admin is None or amount <= 0:
         return None
-    plans.extend(admin, share)
-    g.board_earned = (g.board_earned or 0) + share.total_seconds() / 86400
-    return admin.tg_id, share, g.title
+    if await credits.add(s, admin, amount, "board", g.title[:80], ref=f"pay-{ref}") is None:
+        return None
+    g.board_credits = (g.board_credits or 0) + amount
+    return admin.tg_id, amount, g.title
 
 
 async def my_groups(s: AsyncSession, tg_id: int) -> list[tuple[Group, int, int]]:

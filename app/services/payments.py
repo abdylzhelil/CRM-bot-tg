@@ -39,7 +39,7 @@ async def apply(s: AsyncSession, user_id: int, days: int, amount: int, currency:
     share = await referrals.share_of_bonus(s, user, bought)
     from app.services import boards
 
-    board = await boards.reward(s, user, bought)  # пришёл по кнопке из закрепа группы — админу группы комиссия днями
+    board = await boards.reward(s, user, amount, charge_id)  # пришёл по кнопке из закрепа группы — админу кредиты 💰
     user.on_trial, user.guarantee_at, user.missed_count = False, None, 0  # оплатил: пробный кончился, гарантия — с нуля
     await s.commit()
     if board:
@@ -70,13 +70,15 @@ async def _send_recent(user_id: int) -> None:
         pass
 
 
-async def _tell_board_admin(admin_id: int, share: timedelta, title: str) -> None:
+async def _tell_board_admin(admin_id: int, amount: int, title: str) -> None:
     try:
         from app.bot import notify
+        from app.bot.common import kb
 
-        days = share.total_seconds() / 86400
         await notify._bot.send_message(admin_id, f"🎁 Человек из вашей группы «{title[:60]}» оплатил 💎 — вам начислено "
-                                                 f"{days:.1f} дн. полного тарифа. Спасибо, что поставили КлиентРадар!")
+                                                 f"{amount} кредитов 💰. Их можно обменять на дни 💎 или на бота модерации "
+                                                 "для вашей группы. Спасибо, что поставили КлиентРадар!",
+                                       reply_markup=kb([[("💰 Мои кредиты", "cr:menu")]]))
     except Exception:
         pass
 
@@ -123,6 +125,9 @@ async def take_back(s: AsyncSession, payment: Payment) -> None:
         payment.refunded, payment.refunded_at = True, now()
         await s.commit()
         return
+    from app.services import credits
+
+    await credits.reverse_payment(s, payment.charge_id)  # комиссию админу группы с этой оплаты забираем
     if user is not None and not user.is_admin and user.plan_until is not None:
         user.plan_until = user.plan_until - timedelta(days=payment.days)
         if user.plan_until <= now():

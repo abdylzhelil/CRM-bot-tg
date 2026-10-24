@@ -16,7 +16,7 @@ from app.bot import captcha, intro, notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU, kb
 from app.bot.handlers import (
-    accounts, adposts, blacklist, board, broadcast, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, feedback, leads, mute, mysearch, profile, settings, stats,
+    accounts, adposts, blacklist, board, broadcast, credits, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, feedback, leads, mute, mysearch, profile, settings, stats,
     submissions, users_admin,
 )
 from app.db import Session
@@ -35,7 +35,7 @@ HELP = (
     "Не ваша заявка — «🙈 Не моё». Спам — «🚫 Спам». Взяли клиента — «✅ В работу», он попадёт в «👥 Клиенты».\n\n"
     "🏆 <b>Рейтинг</b> — сколько заявок по каким нишам в вашем городе.\n"
     "➕ <b>Есть своя группа или чат?</b> Поставьте туда бота кнопкой ниже — в закрепе будет рейтинг заявок, "
-    "а вам — дни 💎 с оплат участников.\n"
+    "а вам — кредиты 💰 с оплат участников.\n"
     "🤝 <b>Пригласите друга</b> — 👤 Профиль → 🤝 Пригласить: по +7 дней 💎 вам и ему.\n\n"
     "Что-то непонятно — просто напишите сюда сообщение, владелец бота ответит."
 )
@@ -51,6 +51,7 @@ USER_COMMANDS = [
     BotCommand(command="invite", description="Пригласить друзей (+дни 💎)"),
     BotCommand(command="catalog", description="Каталог групп и бонусы"),
     BotCommand(command="ads", description="📣 Заказать рекламу"),
+    BotCommand(command="credits", description="💰 Мои кредиты"),
     BotCommand(command="profile", description="Профиль и настройки"),
     BotCommand(command="terms", description="Условия оплаты"),
     BotCommand(command="privacy", description="Политика конфиденциальности"),
@@ -119,6 +120,7 @@ def admin_panel(unread: int = 0):
         [("🗂 Категории", "adm:categories"), ("🔑 Ключевые слова", "adm:keywords")],
         [("🛡 Чёрный список", "adm:blacklist"), ("⚙️ Настройки", "adm:settings")],
         [("📣 Рассылка", "adm:broadcast"), ("🪪 Лицензии", "adm:licenses")],
+        [("💰 Кредиты", "cra:menu")],
     ])
 
 
@@ -344,13 +346,13 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     admin.callback_query.filter(IsAdmin())
     admin.include_routers(
         accounts.router, adposts.admin_router, groups.router, categories.router, keywords.router, blacklist.router,
-        settings.router, users_admin.router, submissions.router, broadcast.router, licenses.router, mysearch.admin_router, feedback.admin_router, board.admin_router, admin_nav,
+        settings.router, users_admin.router, submissions.router, broadcast.router, licenses.router, mysearch.admin_router, feedback.admin_router, board.admin_router, credits.admin_router, admin_nav,
     )
     # личка: всем пользователям
     private = Router(name="private")
     private.message.filter(F.chat.type == "private")
     private.include_routers(
-        captcha.router, base, inputs.router, profile.router, catalog.router, mysearch.router, mute.router, feedback.router, board.router, adposts.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
+        captcha.router, base, inputs.router, profile.router, catalog.router, mysearch.router, mute.router, feedback.router, board.router, credits.router, adposts.router, payments.router, leads.router, clients.router, stats.router, admin, fallback,
     )
     dp.include_routers(board.group_router, ingroup.router, payments.checkout, private)
 
