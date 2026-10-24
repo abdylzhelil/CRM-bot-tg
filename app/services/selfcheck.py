@@ -199,7 +199,11 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
     # ИИ (информация)
     from app.services import ai
 
-    add(OK if ai.enabled() else "⚪️", "ИИ-помощник", "ключ есть" if ai.enabled() else "без ключа — работаем по бесплатным правилам")
+    from app.services import llm
+
+    which = await ai.provider(s)
+    add(OK if which else "⚪️", "ИИ-помощник", (f"{llm.NAMES.get(which, which)} — проверить связь: команда /aitest") if which
+        else "без ключа — работаем по бесплатным правилам")
     return out
 
 

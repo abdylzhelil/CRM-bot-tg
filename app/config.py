@@ -35,5 +35,17 @@ STATS_CHANNEL = os.getenv("STATS_CHANNEL", "")
 HEARTBEAT_URL = os.getenv("HEARTBEAT_URL", "")
 # ИИ на Claude (черновики ответов): ключ с console.anthropic.com. Пусто — ИИ выключен.
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Российские ИИ (те же строки, что в .env бота модерации — можно скопировать оттуда): app/services/llm.py
+# AI_PROVIDER: gigachat | yandex | local | anthropic | пусто — первый, для которого есть ключ
+AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()
+GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY", "")
+GIGACHAT_SCOPE = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+GIGACHAT_MODEL = os.getenv("GIGACHAT_MODEL", "GigaChat")
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY", "")
+YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID", "")
+YANDEX_MODEL = os.getenv("YANDEX_MODEL", "yandexgpt-lite/latest")
+LOCAL_AI = os.getenv("LOCAL_AI", "0") == "1"
+LOCAL_AI_URL = os.getenv("LOCAL_AI_URL", "http://ollama:11434")
+LOCAL_AI_MODEL = os.getenv("LOCAL_AI_MODEL", "qwen2.5:1.5b")
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")

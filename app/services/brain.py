@@ -1,4 +1,4 @@
-"""ИИ-помощник для спорных случаев (Claude Haiku 5.5): правила групп, условия ботов, проверка текста рекламы,
+"""ИИ-помощник для спорных случаев (GigaChat / YandexGPT / своя модель — services/llm.py, или Claude Haiku 5.5): правила групп, условия ботов, проверка текста рекламы,
 подбор групп покупателю, объяснение ошибок оплаты, «заказчик или исполнитель».
 
 Принципы:
@@ -39,7 +39,10 @@ async def ask(s: AsyncSession, purpose: str, system: str, data: str, schema: dic
 
     if not await available(s, flag):
         return None
+    which = "anthropic" if client is not None else await ai.provider(s)
     await s.commit()  # не держим базу открытой, пока ждём ответ
+    if which != "anthropic":
+        return await _ask_ru(s, which, purpose, system, data, schema, max_tokens)
     try:
         resp = await (client or ai.make_client()).messages.create(
             model=MODEL, max_tokens=max_tokens, system=system + "\n" + GUARD,
@@ -59,6 +62,23 @@ async def ask(s: AsyncSession, purpose: str, system: str, data: str, schema: dic
         return json.loads(next(b.text for b in resp.content if b.type == "text"))
     except (StopIteration, ValueError):
         return None
+
+
+async def _ask_ru(s: AsyncSession, which: str, purpose: str, system: str, data: str, schema: dict,
+                  max_tokens: int) -> dict | None:
+    """Тот же вопрос российскому ИИ (GigaChat / YandexGPT / своя модель): JSON просим словами и проверяем сами."""
+    from app.services import llm
+
+    try:
+        raw = await llm.complete(which, system + "\n" + GUARD + "\n" + llm.schema_hint(schema),
+                                 f"<данные>\n{data[:6000]}\n</данные>", max_tokens, json_mode=True)
+    except llm.LlmError as e:
+        log.warning("ИИ-помощник (%s, %s) недоступен: %s", purpose, which, e)
+        return None
+    s.add(AiCall(user_id=0, model=which, purpose=purpose, input_tokens=(len(system) + len(data)) // 4,
+                 output_tokens=len(raw) // 4))
+    await s.commit()
+    return llm.fits(llm.extract_json(raw), schema)
 
 
 def obj(props: dict, required: list[str] | None = None) -> dict:
@@ -162,11 +182,15 @@ async def today_line(s: AsyncSession) -> str:
                             .where(AiCall.user_id == 0, AiCall.created_at >= day_start()).group_by(AiCall.purpose))).all()
     names = {"leads": "заявки", "rules": "правила групп", "bots": "условия ботов", "ad_text": "тексты рекламы",
              "groups": "подбор групп", "error": "ошибки"}
-    if not ai.enabled():
-        return "⚪️ ИИ-помощник: нет ключа ANTHROPIC_API_KEY — работаем по правилам (бесплатно)"
+    from app.services import llm
+
+    which = await ai.provider(s)
+    if not which:
+        return "⚪️ ИИ-помощник: нет ключа ИИ (GigaChat, YandexGPT или Claude) — работаем по правилам (бесплатно)"
+    name = llm.NAMES.get(which, which)
     if not rows:
-        return "🤖 ИИ-помощник: сегодня спорных случаев не было"
+        return f"🤖 ИИ-помощник ({name}): сегодня спорных случаев не было"
     total = sum(r[1] for r in rows)
-    cost = sum(ai.cost_usd(MODEL, r[2], r[3]) for r in rows)
-    return (f"🤖 ИИ-помощник сегодня: {total} решений (~${cost:.3f}) — "
+    cost = sum(ai.cost_usd(MODEL, r[2], r[3]) for r in rows) if which == "anthropic" else 0
+    return (f"🤖 ИИ-помощник ({name}) сегодня: {total} решений" + (f" (~${cost:.3f})" if cost else "") + " — "
             + ", ".join(f"{names.get(r[0] or 'leads', r[0])} {r[1]}" for r in rows))

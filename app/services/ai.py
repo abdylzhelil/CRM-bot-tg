@@ -38,7 +38,17 @@ class AiError(Exception):
 
 
 def enabled() -> bool:
-    return bool(config.ANTHROPIC_API_KEY)
+    """Есть ключ хоть одного ИИ (GigaChat, YandexGPT, своя модель или Claude)."""
+    from app.services import llm
+
+    return bool(llm.available())
+
+
+async def provider(s: AsyncSession) -> str:
+    """Какой ИИ сейчас работает (⚙️ → ✨ ИИ → «Какой ИИ»). "" — ни одного ключа."""
+    from app.services import llm
+
+    return llm.pick(await settings.get(s, "ai_provider"))
 
 
 def make_client() -> anthropic.AsyncAnthropic:
@@ -77,6 +87,21 @@ async def draft_reply(s: AsyncSession, user: User, lead: Lead, niche: str, templ
     if limit is not None and await used_today(s, user.tg_id) >= limit:
         raise AiError(f"Лимит ИИ на сегодня исчерпан ({limit}). Платный тариф даёт больше." if not is_paid(user)
                       else f"Лимит ИИ на сегодня исчерпан ({limit}). Завтра будет снова.")
+    which = "anthropic" if client is not None else await provider(s)
+    if which != "anthropic":  # российский ИИ (GigaChat / YandexGPT / своя модель) — те же ключи, что у бота модерации
+        from app.services import llm
+
+        await s.commit()  # не держим базу, пока ждём ответ
+        try:
+            text = (await llm.complete(which, SYSTEM, build_prompt(lead.text, niche, user, template, prices), 600)).strip()
+        except llm.LlmError as e:
+            log.warning("черновик ИИ (%s): %s", which, e)
+            raise AiError("ИИ временно недоступен, попробуйте позже или используйте 📋 Шаблон.") from None
+        if not text:
+            raise AiError("ИИ вернул пустой ответ, попробуйте ещё раз.")
+        s.add(AiCall(user_id=user.tg_id, model=which, input_tokens=len(SYSTEM + lead.text) // 4, output_tokens=len(text) // 4))
+        await s.commit()
+        return text[:1200]
     model = await settings.get(s, "ai_model")
     if model not in MODELS:
         model = MODELS[0]

@@ -69,8 +69,9 @@ async def status_text() -> str:
         f"{_flag(d['pay_ready'])} Ключи оплаты в .env: {'есть' if d['pay_ready'] else 'нет'}",
         f"{_flag(refund != '0')} Возврат: {refund} дн." if refund != "0" else f"{_flag(False)} Возврат выключен",
         f"{_flag(d['autorenew'])} Автопродление   {_flag(d['license'])} Лицензия   {_flag(d['ads'])} Реклама групп",
-        f"{_flag(d['ai'])} Claude (платно)" + (f", модель {esc(d['ai_model'])}" if d["ai"] else "")
-        + ("" if d["ai_key"] or not d["ai"] else " — ⚠️ нет ANTHROPIC_API_KEY"),
+        f"{_flag(d['ai'])} ИИ-черновики"
+        + (f": {esc(_ai_name(d))}" if d["ai"] and d["ai_key"] else "")
+        + ("" if d["ai_key"] or not d["ai"] else " — ⚠️ нет ключа ИИ в .env"),
         ai_line,
         f"{_flag(bool(d['stats_channel']))} Канал статистики: {esc(d['stats_channel']) or 'не подключён'}",
     ] + ([sysmem.line(d["memory"])] if d["memory"] else []))
@@ -225,6 +226,13 @@ async def publish_now(cb: CallbackQuery) -> None:
 
 
 # ---------- /aitest: сравнить ИИ-модели на ваших заявках (платно, только по подтверждению) ----------
+def _ai_name(d: dict) -> str:
+    from app.services import llm
+
+    which = d.get("ai_provider", "")
+    return f"Claude, модель {d['ai_model']}" if which == "anthropic" else llm.NAMES.get(which, which)
+
+
 AITEST_MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5")
 EST_TOKENS = (1300, 300)  # примерно: вход / выход на один черновик
 
@@ -232,8 +240,20 @@ EST_TOKENS = (1300, 300)  # примерно: вход / выход на оди�
 @router.message(Command("aitest"))
 async def aitest(m: Message, command: CommandObject) -> None:
     if not ai.enabled():
-        return await m.answer("🔑 Ключ ANTHROPIC_API_KEY не задан в .env — проверка невозможна, ничего не тратится.\n"
-                              "Как подключить ИИ: файл docs/AI_PLAN.md в репозитории.")
+        return await m.answer("🔑 Ключа ИИ нет в .env (GIGACHAT_AUTH_KEY, YANDEX_API_KEY или ANTHROPIC_API_KEY) — "
+                              "проверка невозможна, ничего не тратится.\nКак подключить: docs/AI_PLAN.md.")
+    async with Session() as s:
+        which = await ai.provider(s)
+    if which != "anthropic":  # российский ИИ: проверить связь и ключ одним коротким запросом
+        from app.services import llm
+
+        try:
+            reply_text = await llm.complete(which, "Ответь одним словом.", "Скажи: работает", 10)
+            return await m.answer(f"✅ ИИ на связи: {esc(llm.NAMES.get(which, which))}. Ответ: «{esc(reply_text[:50])}».\n"
+                                  "Сравнение моделей по цене — только для Claude.")
+        except llm.LlmError as e:
+            return await m.answer(f"⛔ ИИ не отвечает: {esc(llm.NAMES.get(which, which))} — {esc(str(e))}.\n"
+                                  "Проверьте ключи в .env (те же строки, что у бота модерации) и перезапустите бота.")
     arg = (command.args or "").strip()
     n = min(max(int(arg), 1), 10) if arg.isdigit() else 5
     est = sum(ai.cost_usd(model, *EST_TOKENS) for model in AITEST_MODELS) * n

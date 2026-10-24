@@ -58,6 +58,7 @@ DEFAULTS: dict[str, str] = {
     "license_days": "30",
     "ai_enabled": "0",
     "ai_model": "claude-haiku-5-5",
+    "ai_provider": "auto",
     "ai_free_daily": "3",
     "ai_paid_daily": "30",
     "ai_classify": "1",
@@ -123,11 +124,12 @@ LABELS: dict[str, str] = {
     "license_enabled": "Лицензия бота модерации за заявки группы (1 — включено)",
     "license_leads": "Лицензия: заявок группы за один период",
     "license_days": "Лицензия: дней за период",
-    "ai_enabled": "Claude для черновиков (1 — включено, платно; 0 — простой бесплатный черновик по правилам)",
-    "ai_model": "Модель ИИ (claude-haiku-5-5 — рекомендуем, самая дешёвая; claude-sonnet-5-5; claude-opus-5-5)",
+    "ai_enabled": "ИИ для черновиков ответа (1 — включено; 0 — простой бесплатный черновик по правилам)",
+    "ai_model": "Модель Claude (если ИИ — Claude): claude-haiku-5-5 — рекомендуем, самая дешёвая; claude-sonnet-5-5; claude-opus-5-5",
+    "ai_provider": "Какой ИИ: auto, gigachat, yandex, local, anthropic",
     "ai_free_daily": "ИИ: запросов в сутки на бесплатном тарифе",
     "ai_paid_daily": "ИИ: запросов в сутки на платном тарифе",
-    "ai_classify": "ИИ-фильтр: отличать заказчика от исполнителя, рекламирующего услуги (1/0; нужен ANTHROPIC_API_KEY)",
+    "ai_classify": "ИИ-фильтр: отличать заказчика от исполнителя, рекламирующего услуги (1/0; нужен ключ ИИ)",
     "ai_decide": "ИИ-помощник в спорных случаях: правила групп, условия ботов, проверка рекламы, подбор групп, объяснение ошибок (1/0)",
     "ai_classify_daily": "ИИ-помощник и фильтр: запросов в сутки всего (защита от расходов)",
     "channel_hour": "Час публикации статистики в канале",
@@ -170,7 +172,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                         "user_search_free", "user_search_full", "user_search_days", "adpost_auto_allow",
                         "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
-    ("✨", "ИИ", ["ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
+    ("✨", "ИИ", ["ai_provider", "ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
 ]
 
@@ -201,7 +203,7 @@ SHORT: dict[str, str] = {
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
     "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "offer_votes_to_learn": "Голосов «Исполнитель» для обучения", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
-    "ai_enabled": "Claude (1/0)", "ai_model": "Модель ИИ", "ai_free_daily": "ИИ в сутки: бесплатные",
+    "ai_enabled": "ИИ-черновики (1/0)", "ai_model": "Модель Claude", "ai_provider": "Какой ИИ", "ai_free_daily": "ИИ в сутки: бесплатные",
     "ai_paid_daily": "ИИ в сутки: платные", "ai_classify": "ИИ-фильтр заявок (1/0)", "ai_decide": "ИИ-помощник (1/0)", "ai_classify_daily": "ИИ в сутки (помощник)",
 }
 
@@ -262,12 +264,13 @@ HINTS: dict[str, str] = {
     "license_enabled": "Лицензия бота модерации за заявки группы. Бот модерации сам это не проверяет.",
     "license_leads": "Сколько заявок группы нужно за один период лицензии.",
     "license_days": "На сколько дней продлевается лицензия.",
-    "ai_enabled": "Платно! Нужен ANTHROPIC_API_KEY в .env. 0 — бесплатный черновик по правилам.",
+    "ai_enabled": "Черновик ответа клиенту пишет ИИ (кнопка «✨ Черновик»). GigaChat для физлиц — бесплатно в пределах лимита Сбера, YandexGPT и Claude — платно. 0 — бесплатный черновик по правилам.",
+    "ai_provider": "auto — первый ИИ, ключ которого есть в .env (порядок: GigaChat, YandexGPT, своя модель, Claude). gigachat — Сбер, yandex — YandexGPT / AI Studio, local — своя модель на сервере (Ollama бота модерации), anthropic — Claude. Ключи те же, что в .env бота модерации.",
     "ai_model": "Haiku — самая дешёвая, для коротких черновиков её обычно хватает. Sonnet примерно в 20 раз дороже, Opus примерно в 40 раз. Сравнить качество на ваших заявках: команда /aitest.",
     "ai_free_daily": "Лимит на бесплатном тарифе, чтобы не тратить деньги.",
     "ai_paid_daily": "Лимит на платном тарифе.",
-    "ai_classify": "Спорные сообщения (не ясно, ищет человек исполнителя или сам предлагает услуги) спрашиваем у Claude Haiku 5.5 — около $0.03 на 1000 проверок. Явную рекламу услуг бесплатный фильтр отсеивает и без ИИ. Без ключа ANTHROPIC_API_KEY ничего не тратится. Отсеянное: 🛡 Чёрный список → «🙅 Отсеянные».",
-    "ai_decide": "Claude Haiku 5.5 решает спорное там, где не справляются правила: читает правила групп и сообщения ботов (что нужно, чтобы писать), проверяет текст рекламы на запрещёнку, подбирает группы покупателю (кнопка «🤖 Подобрать»), объясняет ошибки оплаты по-русски. Деньги ИИ не двигает. Около $1–3 в месяц. Без ключа ANTHROPIC_API_KEY ничего не тратит.",
+    "ai_classify": "Спорные сообщения (не ясно, ищет человек исполнителя или сам предлагает услуги) спрашиваем у ИИ. Явную рекламу услуг бесплатный фильтр отсеивает и без ИИ. Без ключа ИИ ничего не тратится. Отсеянное: 🛡 Чёрный список → «🙅 Отсеянные».",
+    "ai_decide": "ИИ решает спорное там, где не справляются правила: читает правила групп и сообщения ботов (что нужно, чтобы писать), проверяет текст рекламы на запрещёнку, подбирает группы покупателю (кнопка «🤖 Подобрать»), объясняет ошибки оплаты по-русски. Деньги ИИ не двигает. Без ключа ИИ ничего не тратит.",
     "ai_classify_daily": "Общий лимит запросов ИИ-помощника и фильтра заявок в сутки. Дальше — работаем по правилам, без ИИ.",
     "channel_hour": "Во сколько публикуется сводка в канал.",
     "niche_daily_limit": "Защита от заваливания предложениями ниш.",
@@ -357,6 +360,9 @@ def validate(key: str, text: str) -> str:
     elif key in ("report_hour", "channel_hour"):
         if not text.isdigit() or int(text) > 23:
             raise SettingError("Нужен час от 0 до 23")
+    elif key == "ai_provider":
+        if text not in ("auto", "gigachat", "yandex", "local", "anthropic"):
+            raise SettingError("Допустимо: auto, gigachat, yandex, local, anthropic")
     elif key == "ai_model":
         from app.services.ai import MODELS
 

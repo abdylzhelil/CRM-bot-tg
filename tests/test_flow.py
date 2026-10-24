@@ -305,7 +305,7 @@ async def test_aitest_command_confirmation_and_no_key_spends_nothing(app_bot, ma
     bot, dp, api = app_bot
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
     await dp.feed_update(bot, text_update(ADMIN_ID, "/aitest"))
-    assert "не задан" in api.texts(ADMIN_ID)[-1]  # без ключа — ничего не тратится
+    assert "Ключа ИИ нет" in api.texts(ADMIN_ID)[-1]  # без ключа — ничего не тратится
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
     claude = FakeClaude()
     monkeypatch.setattr("app.services.ai.make_client", lambda: claude)

@@ -85,7 +85,9 @@ async def admin_checklist(s: AsyncSession) -> tuple[list[str], list[str]]:
         ok.append("Продажа 💎 выключена (цены 0) — так и задумано, пока не готовы принимать оплату")
     put(await settings.get(s, "refund_days") != "0" or not selling, "Срок возврата задан", "Продаёте 💎, но возврат выключен (refund_days=0)")
     ai_on = await settings.get(s, "ai_enabled") == "1"
-    put(not ai_on or bool(config.ANTHROPIC_API_KEY), "ИИ выключен или с ключом", "ИИ включён, но нет ANTHROPIC_API_KEY")
+    from app.services import llm
+
+    put(not ai_on or bool(llm.available()), "ИИ выключен или с ключом", "ИИ включён, но в .env нет ключа ИИ (GigaChat, YandexGPT или Claude)")
     mem = sysmem.read()
     if mem:
         put(mem["level"] == "ok", sysmem.line(mem), sysmem.line(mem) + " — пора увеличить память сервера или разгрузить его")
