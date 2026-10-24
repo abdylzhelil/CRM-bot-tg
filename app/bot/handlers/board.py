@@ -121,49 +121,75 @@ async def rating_cmd(m: Message, bot: Bot) -> None:
 
 
 # ---------- в боте: рейтинг по нишам города пользователя; заявки ниши — на 💎 ----------
-@router.callback_query(F.data == "rt:menu")
-async def rating_menu(cb: CallbackQuery, user: User) -> None:
+def group_of(payload: str | None) -> int:
+    """`src_g12` (кнопка «📥 Получать заявки» в закрепе группы) → 12, иначе 0."""
+    import re
+
+    m = re.fullmatch(r"src_g(\d+)", payload or "")
+    return int(m.group(1)) if m else 0
+
+
+def _user_place(user: User) -> tuple[str, str, str]:
     from app.services import geo
 
     city = user.city or ""
     region = geo.region_of(city)
     if city in geo.REGIONS and city not in geo.CITIES:
         city, region = "", city
+    return city, region, user.city or "вся Россия"
+
+
+async def rating_view(target, user: User, group_id: int = 0) -> None:
+    """🏆 Рейтинг: кнопка в главном меню, «📥 Получать заявки» из группы (место — как у группы), /start rating."""
     async with Session() as s:
-        body = await boards.text(s, city, region, user.city or "вся Россия")
+        g = await s.get(Group, group_id) if group_id else None
+        city, region, label = boards.place_of(g) if g is not None else _user_place(user)
+        body = await boards.text(s, city, region, label)
         items, _, _ = await boards.counts(s, city, region)
         mine = await boards.my_groups(s, user.tg_id)
     if mine:
         body += "\n\n🤝 <b>Группы, куда вы добавили бота</b>:\n" + "\n".join(
             f"• {esc(g.title)} — пришло {came}, с 💎 {paid}, вам начислено {g.board_earned:.1f} дн."
             + (f" ({esc(g.board_note)})" if g.board_note else "") for g, came, paid in mine)
-    rows = [[(f"🔍 {name}"[:40], f"rt:n:{cid}")] for cid, name, _, _ in items[:8]]
-    rows.append([("◀️ Закрыть", "rt:close")])
-    await reply(cb, body + "\n\nНажмите нишу, чтобы увидеть сами заявки (на 💎).", kb(rows))
+    suffix = f":{group_id}" if group_id else ""
+    rows = [[(f"🔍 {name}"[:40], f"rt:n:{cid}{suffix}")] for cid, name, _, _ in items[:8]]
+    if not user.onboarded:
+        body += "\n\nЧтобы получать такие заявки себе — выберите свои ниши ниже 👇"
+    else:
+        rows.append([("◀️ Закрыть", "rt:close")])
+    await reply(target, body + "\n\nНажмите нишу, чтобы увидеть сами заявки (на 💎).", kb(rows))
 
 
-@router.callback_query(F.data.regexp(r"^rt:n:\d+$"))
+@router.callback_query(F.data == "rt:menu")
+async def rating_menu(cb: CallbackQuery, user: User) -> None:
+    await rating_view(cb, user)
+
+
+@router.callback_query(F.data.regexp(r"^rt:n:\d+(:\d+)?$"))
 async def rating_niche(cb: CallbackQuery, user: User) -> None:
-    from app.services import geo
-
+    parts = cb.data.split(":")
+    cid, gid = int(parts[2]), int(parts[3]) if len(parts) > 3 else 0
+    back = f"rt:g:{gid}" if gid else "rt:menu"
     if user.plan != "full" and not user.is_admin:
         return await reply(cb, "🔒 Сами заявки по всем нишам и подробности — на полном тарифе 💎.\n"
                                "Бесплатно приходят заявки по вашим нишам (до 5 в день).",
-                           kb([[("💎 Тариф", "pf:plan")], [("◀️ Назад", "rt:menu")]]))
-    cid = int(cb.data.split(":")[2])
-    city = user.city or ""
-    region = geo.region_of(city)
-    if city in geo.REGIONS and city not in geo.CITIES:
-        city, region = "", city
+                           kb([[("💎 Тариф", "pf:plan")], [("◀️ Назад", back)]]))
     async with Session() as s:
+        g = await s.get(Group, gid) if gid else None
+        city, region, label = boards.place_of(g) if g is not None else _user_place(user)
         leads = await boards.leads_of(s, cid, city, region)
     if not leads:
         return await cb.answer("За неделю заявок в этой нише нет", show_alert=True)
-    lines = [f"🔍 Последние заявки ниши ({esc(user.city or 'вся Россия')}):"]
+    lines = [f"🔍 Последние заявки ниши ({esc(label)}):"]
     for ld in leads:
         lines.append(f"\n• {ld.created_at:%d.%m} · {esc(ld.city or ld.region or '')} · {esc(ld.group_title[:30])}\n"
                      f"{html.escape(' '.join(ld.text.split())[:220])}")
-    await reply(cb, "\n".join(lines)[:3900], kb([[("◀️ Назад", "rt:menu")]]))
+    await reply(cb, "\n".join(lines)[:3900], kb([[("◀️ Назад", back)]]))
+
+
+@router.callback_query(F.data.regexp(r"^rt:g:\d+$"))
+async def rating_group(cb: CallbackQuery, user: User) -> None:
+    await rating_view(cb, user, group_id=int(cb.data.split(":")[2]))
 
 
 @router.callback_query(F.data == "rt:close")

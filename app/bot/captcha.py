@@ -74,5 +74,11 @@ async def answer(cb: CallbackQuery, user: User) -> None:
         from app.bot.handlers import adposts
 
         return await adposts.link_entry(cb.message, user)
-    await intro.send_radar(cb.message)
+    from app.bot.handlers import board
+
+    gid = board.group_of(param)
+    if gid or param == "rating":  # пришёл по кнопке из закрепа группы — сначала её рейтинг
+        await board.rating_view(cb.message, user, group_id=gid)
+    else:
+        await intro.send_radar(cb.message)
     await profile.show_niches(cb.message, user)

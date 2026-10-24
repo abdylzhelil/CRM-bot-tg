@@ -104,3 +104,19 @@ async def test_offer_auto_marks(maker):
         await s.commit()
         rows = {g.title: g.offer_status for g in (await s.scalars(__import__("sqlalchemy").select(Group))).all()}
     assert rows == {"A": "bot", "B": "skip"}
+
+
+async def test_rating_opens_in_one_tap(maker):
+    """Владелец 24.10: «почему нажимаешь — сразу к рейтингу не перекидывает»: кнопка в меню и ссылка из группы."""
+    from app.bot.common import USER_MENU
+    from app.bot.handlers import board
+
+    assert "🏆 Рейтинг" in USER_MENU
+    gid, _ = await _data(maker)
+    assert board.group_of(f"src_g{gid}") == gid and board.group_of("src_site") == 0
+    m = MagicMock()
+    m.answer = AsyncMock()
+    user = SimpleNamespace(tg_id=9, city="", plan="free", is_admin=False, onboarded=False)
+    await board.rating_view(m, user, group_id=gid)
+    body = m.answer.call_args.args[0]
+    assert "Махачкала" in body and "выберите свои ниши" in body  # место группы, а не пустой город новичка

@@ -141,8 +141,14 @@ async def start(m: Message, state: FSMContext, user: User, command: CommandObjec
             if referrer:
                 await referrals.attach(s, user, referrer)
             await referrals.attach_source(s, user, command.args)
+    group_id = board.group_of(command.args)  # пришёл по кнопке из закрепа группы — сразу её рейтинг
+    if command.args == "rating" or group_id:
+        if user.verified:
+            await board.rating_view(m, user, group_id=group_id)
+        if user.onboarded:
+            return
     if not user.onboarded:
-        if user.verified and command.command == "start":  # непроверенным анимацию покажем после проверки «я не бот» (captcha)
+        if user.verified and command.command == "start" and not group_id:  # непроверенным анимацию — после «я не бот»
             await intro.send_radar(m)
         return await profile.show_niches(m, user)
     await m.answer("📡 Главное меню — выберите раздел:", reply_markup=menu_keyboard(user))
@@ -252,6 +258,7 @@ async def open_section(m: Message, state: FSMContext, user: User, section: str) 
         "👤 Профиль": lambda: profile.profile_menu(m, user),
         "🌐 Каталог": lambda: catalog.catalog_menu(m, user),
         "📊 Статистика": lambda: stats.stats(m, user),
+        "🏆 Рейтинг": lambda: board.rating_view(m, user),
         "🔍 Группы": lambda: groups.groups_menu(m),
         "🗂 Категории": lambda: categories.categories_menu(m),
         "🔑 Ключевые слова": lambda: keywords.keywords_menu(m),
