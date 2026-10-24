@@ -301,6 +301,7 @@ async def inspect_rules(manager, g: Group, s=None) -> tuple[str, str, list[str]]
     if contact.lower() in {b.lower() for b in bots}:  # бот — не тот, с кем договариваться
         contact = ""
     g.rules_policy, g.rules_summary, g.rules_contact = policy, summary[:255], contact
+    g.admins = ",".join(admins[:5])[:160]  # для «🤝 Предложить бота админам»
     g.rules_checked_at = now()
     lines = []
     if ai is not None and ai.get("summary"):
@@ -436,7 +437,8 @@ async def rules_round(manager) -> int:
         await s.commit()
     if text:
         await notify._send(text, notify.InlineKeyboardMarkup(inline_keyboard=[[
-            notify.InlineKeyboardButton(text="📋 Правила групп — списки", callback_data="gr:rules")]]))
+            notify.InlineKeyboardButton(text="📋 Правила групп — списки", callback_data="gr:rules")],
+            [notify.InlineKeyboardButton(text="🤝 Предложить бота админам", callback_data="gr:bo")]]))
     return done
 
 

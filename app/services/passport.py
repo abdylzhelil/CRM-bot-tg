@@ -118,6 +118,12 @@ async def digest(s: AsyncSession, force: bool = False) -> str:
         problems.append(f"🗑 рекламных постов удалили админы: {deleted}")
     if failed:
         problems.append(f"⚠️ постов не вышло: {failed}")
+    from app.services import botoffer
+
+    can_offer = (await botoffer.counts(s)).get("", 0)
+    if can_offer:
+        lines.append(f"\n🤝 Можно предложить бота админам: {can_offer} групп (🔍 Группы → 🤝 Предложить бота админам) — "
+                     "текст уже готов, отправка одним нажатием.")
     if audit["checked"]:
         lines.append(f"\n🧹 Проверка групп: проверено {audit['checked']}, вышли из спамных {audit['left']}, "
                      f"оставили без заявок {audit['muted']} (🔍 Группы → 🧹 Проверка групп).")

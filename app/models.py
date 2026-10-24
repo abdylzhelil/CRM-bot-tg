@@ -102,6 +102,9 @@ class Group(Base):
     captcha_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)  # разведчику нельзя писать (капча/«я не бот») с этого момента
     captcha_link: Mapped[str] = mapped_column(String(255), default="")  # ссылка на сообщение бота с проверкой
     captcha_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    admins: Mapped[str] = mapped_column(String(160), default="")  # @админы группы (через запятую), из «правил групп»
+    offer_status: Mapped[str] = mapped_column(String(8), default="", index=True)  # предложение админу: ""/sent/bot/ads/no/skip
+    offer_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class FeedChat(Base):

@@ -31,6 +31,9 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         from app.scout import captchas
 
         cap_n = await captchas.count(s)
+        from app.services import botoffer
+
+        offer_n = (await botoffer.counts(s)).get("", 0)
     from app.bot.handlers import adposts as adposts_h
 
     ad_orders, ad_groups = await adposts_h.counts()
@@ -61,6 +64,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk"), ("📋 Правила групп", "gr:rules")],
         [("🗺 Города и регионы", "gr:geo"), ("🧹 Проверка групп", "gr:audit")],
         [(f"🧩 Капча {cap_n}", "gr:cap"), (f"🖐 Вступить вручную {cnt.get('manual', 0)}", "gr:man")],
+        [(f"🤝 Предложить бота админам {offer_n}", "gr:bo")],
         [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
@@ -647,13 +651,13 @@ def _captcha_card(g: Group, days: int, admin_text: str = ""):
     url = g.captcha_link or captchas.group_url(g)
     rows = ([[("🧩 Открыть сообщение бота" if g.captcha_link else "🧩 Открыть группу", f"url:{url}")]] if url else [])
     rows += [[("✅ Прошёл — проверить", f"gr:capok:{g.id}"), ("⏳ Ещё время", f"gr:capwait:{g.id}")]]
-    admin = []
-    if admin_text:
-        admin.append(("📋 Текст админу", f"copy:{admin_text}"))
-    if g.rules_contact:
-        admin.append((f"✍️ @{g.rules_contact}"[:30], f"url:https://t.me/{g.rules_contact}"))
-    if admin:
-        rows.append(admin)
+    from app.services import botoffer
+
+    who = botoffer.contact(g)
+    if who and admin_text:  # чат с админом, где предложение уже вставлено — остаётся «Отправить»
+        rows.append([(f"✉️ Предложить бота @{who}"[:40], f"url:{botoffer.link(who, admin_text)}")])
+    elif admin_text:
+        rows.append([("📋 Текст админу", f"copy:{admin_text}")])
     rows.append([("🚪 Выйти из группы", f"gr:capout:{g.id}")])
     return text, kb(rows)
 
@@ -793,5 +797,87 @@ async def manual_no(cb: CallbackQuery) -> None:
     await cb.answer("Убрал в «🚫 Пропущены» — оттуда можно вернуть", show_alert=True)
     try:
         await cb.message.delete()
+    except Exception:
+        pass
+
+
+# ---------- 🤝 Предложить бота админам (services/botoffer.py): пишет владелец сам, одним нажатием ----------
+@router.callback_query(F.data == "gr:bo")
+async def offer_menu(cb: CallbackQuery) -> None:
+    from app.services import botoffer
+
+    async with Session() as s:
+        cnt = await botoffer.counts(s)
+        groups_ = await botoffer.todo(s)
+        bot = await settings.get(s, "mod_bot_username")
+        texts = {g.id: await botoffer.text(s, g) for g in groups_}
+    head = ("🤝 <b>Предложить бота админам</b> — группы разведчика, где известен админ (из правил группы). "
+            "Нажмите «✉️ Написать»: откроется чат с админом, текст уже вставлен — остаётся «Отправить». "
+            "Потом отметьте «✅ Отправил».\n"
+            "Пишете вы со своего аккаунта: если писать незнакомым с аккаунта-разведчика, Telegram его ограничит "
+            "и поиск заявок остановится.\n"
+            + ("" if bot else "\n⚠️ Впишите имя вашего бота модерации: ⚙️ → 🧹 Проверка групп и капча → «Бот модерации (@)».\n")
+            + f"\nНе предлагали: {cnt.get('', 0)}" + (" (первыми — группы с капчей)" if groups_ else ""))
+    rows = [[(f"{label} · {cnt.get(code, 0)}", f"gr:bol:{code}")] for code, label in botoffer.STATUSES.items()]
+    rows.append([("◀️ Назад", "gr:menu")])
+    await reply(cb, head, kb(rows))
+    for g in groups_:
+        await cb.message.answer(*_offer_card(g, texts[g.id]), disable_web_page_preview=True)
+
+
+def _offer_card(g: Group, message: str):
+    from app.services import botoffer
+
+    who = botoffer.contact(g)
+    note = ("🧩 капча" if g.captcha_since else "🖐 нужно вступить вручную" if g.status == "manual" else "")
+    text = (f"<b>{esc(g.title)}</b> · {g.members} уч." + (f" · {note}" if note else "")
+            + (f"\n📋 {esc(g.rules_summary)}" if g.rules_summary else "")
+            + (f"\nСтатус: {botoffer.STATUSES[g.offer_status]}" if g.offer_status in botoffer.STATUSES else ""))
+    rows = [[(f"✉️ Написать @{who}"[:40], f"url:{botoffer.link(who, message)}")]] if who else []
+    if g.offer_status == "":
+        rows.append([("✅ Отправил", f"gr:bos:{g.id}:sent"), ("⏭ Не сейчас", f"gr:bos:{g.id}:skip")])
+    elif g.offer_status == "sent":
+        rows.append([("🛡 Поставили бота", f"gr:bos:{g.id}:bot"), ("🤝 Договорились о рекламе", f"gr:bos:{g.id}:ads")])
+        rows.append([("👎 Отказ", f"gr:bos:{g.id}:no"), ("↩️ Не отправлял", f"gr:bos:{g.id}:")])
+    else:
+        rows.append([("↩️ Вернуть в «не предлагали»", f"gr:bos:{g.id}:")])
+    return text, kb(rows)
+
+
+@router.callback_query(F.data.regexp(r"^gr:bol:(sent|bot|ads|no|skip)$"))
+async def offer_list(cb: CallbackQuery) -> None:
+    from app.services import botoffer
+
+    code = cb.data.split(":")[2]
+    async with Session() as s:
+        groups_ = await botoffer.listing(s, code)
+        texts = {g.id: await botoffer.text(s, g) for g in groups_}
+    if not groups_:
+        return await cb.answer("Пусто", show_alert=True)
+    await cb.answer()
+    await cb.message.answer(f"{botoffer.STATUSES[code]} (последние, до 15):")
+    for g in groups_:
+        await cb.message.answer(*_offer_card(g, texts[g.id]), disable_web_page_preview=True)
+
+
+@router.callback_query(F.data.regexp(r"^gr:bos:\d+:(sent|bot|ads|no|skip)?$"))
+async def offer_set(cb: CallbackQuery) -> None:
+    from app.services import botoffer
+
+    _, _, gid, code = cb.data.split(":")
+    async with Session() as s:
+        g = await s.get(Group, int(gid))
+        if g is None:
+            return await cb.answer("Группа не найдена", show_alert=True)
+        await botoffer.mark(s, g, code)
+        await s.commit()
+        message = await botoffer.text(s, g)
+    await cb.answer({"sent": "Отметил: ждём ответа", "bot": "🛡 Отлично — бот в группе",
+                     "ads": "🤝 Договорились — правила группы больше не мешают рекламе. Разрешить рекламу: «📢 Группы для рекламы»",
+                     "no": "Отметил отказ", "skip": "Отложил", "": "Вернул в «не предлагали»"}[code],
+                    show_alert=code == "ads")
+    text, markup = _offer_card(g, message)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except Exception:
         pass

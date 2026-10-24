@@ -47,12 +47,10 @@ def kick_reason(full) -> str:
 
 
 async def admin_text(s: AsyncSession, g: Group) -> str:
-    """Готовый текст админу группы (отправляет владелец сам). До 256 знаков — кнопка «скопировать»."""
-    bot = await settings.get(s, "mod_bot_username")
-    offer = (f"Можем бесплатно поставить бота-антиспама @{bot}: удаляет рекламу и спам." if bot
-             else "Можем бесплатно поставить нашего бота-антиспама: удаляет рекламу и спам.")
-    return (f"Здравствуйте! В «{g.title[:40]}» капча не пропустила наш аккаунт. {offer} "
-            "Добавите — капча нам не нужна. Интересно?")[:256]
+    """Готовый текст админу группы (отправляет владелец сам) — общий с «🤝 Предложить бота админам»."""
+    from app.services import botoffer
+
+    return await botoffer.text(s, g)
 
 
 def restricted(ent) -> bool:
