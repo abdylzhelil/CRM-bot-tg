@@ -229,6 +229,7 @@ async def main() -> None:
     manager = ScoutManager()
     bot, dp = build(manager)
     await manager.start()
+    from app.bot.handlers import board as board_h
     from app.services import selfcheck
 
     loops = {
@@ -239,6 +240,7 @@ async def main() -> None:
         "чистка аккаунтов": cleanup_loop(), "срок хранения заявок": retention_loop(), "чеки": receipts_loop(),
         "сторож (heartbeat)": heartbeat.heartbeat_loop(),
         "включение уведомлений (🔕)": mute_h.expire_loop(bot),
+        "рейтинг в группах": board_h.board_loop(bot),
     }
     selfcheck.TASKS = {name: asyncio.create_task(c) for name, c in loops.items()}  # для «🧪 Самопроверки»
     tasks = list(selfcheck.TASKS.values())

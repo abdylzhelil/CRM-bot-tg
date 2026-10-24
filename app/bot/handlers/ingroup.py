@@ -2,12 +2,13 @@
 
 Бот видит все сообщения группы, только если у него выключен privacy mode
 (@BotFather → /setprivacy → Disable) или он администратор группы.
-В группах бот ничего не пишет.
+В группах бот ничего не пишет — кроме рейтинга заявок в закрепе, если его сделали админом с правом закреплять
+(handlers/board.py, services/boards.py).
 """
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.filters import ChatMemberUpdatedFilter, JOIN_TRANSITION, LEAVE_TRANSITION
+from aiogram.filters import ChatMemberUpdatedFilter, JOIN_TRANSITION, LEAVE_TRANSITION, PROMOTED_TRANSITION
 from aiogram.types import Chat, ChatMemberUpdated, Message
 from sqlalchemy import select
 
@@ -53,6 +54,7 @@ async def upsert_group(bot: Bot, chat: Chat, status: str = "joined") -> tuple[Gr
             except Exception:
                 pass
         g.status = status
+        g.bot_member = status == "joined"
         await s.commit()
         return g, new
 
@@ -74,6 +76,7 @@ async def bot_added(event: ChatMemberUpdated, bot: Bot) -> None:
         return
     g, _ = await upsert_group(bot, event.chat)
     who = event.from_user.full_name if event.from_user else "—"
+    await _adopted(g.id, event.from_user.id if event.from_user else 0)
     text = (
         f"✅ Бот добавлен в группу «{esc(g.title)}» ({g.members} участников), добавил: {esc(who)}.\n"
         "Заявки из неё будут приходить сюда."
@@ -81,6 +84,49 @@ async def bot_added(event: ChatMemberUpdated, bot: Bot) -> None:
     if not await reads_all(bot, event.chat.id):
         text += "\n\n" + PRIVACY_HINT
     await notify._send(text)
+    from app.bot.handlers import board
+
+    await board.update_one(bot, g.id)  # сразу админом — сразу рейтинг в закрепе
+
+
+async def _adopted(gid: int, by: int) -> None:
+    """Бота добавили: запомнить, кто добавил (ему комиссия), и отметить предложение «поставили бота»."""
+    from app.models import User
+    from app.services import botoffer
+
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        if g is None:
+            return
+        if by and not g.board_admin:
+            g.board_admin = by
+        if g.offer_status in ("", "sent", "skip"):
+            await botoffer.mark(s, g, "bot")
+        known = await s.get(User, by) if by else None
+        await s.commit()
+    if known is not None:  # человек уже пользуется ботом — можно написать ему лично
+        try:
+            await notify._bot.send_message(by, (
+                f"🙏 Спасибо, что добавили КлиентРадар в «{esc(g.title)}»!\n"
+                "Сделайте бота админом с правом закреплять сообщения — он будет держать в закрепе рейтинг заявок по нишам "
+                "вашего города. Кто из группы подключится и оплатит 💎, — вам процент днями полного тарифа."))
+        except Exception:
+            pass
+
+
+@router.my_chat_member(ChatMemberUpdatedFilter(PROMOTED_TRANSITION))
+async def bot_promoted(event: ChatMemberUpdated, bot: Bot) -> None:
+    """Бота сделали админом — сразу выложить рейтинг (если можно закреплять)."""
+    if event.chat.type not in ("group", "supergroup"):
+        return
+    g, _ = await upsert_group(bot, event.chat)
+    from app.bot.handlers import board
+
+    async with Session() as s:
+        row = await s.get(Group, g.id)
+        row.board_at = None
+        await s.commit()
+    await board.update_one(bot, g.id)
 
 
 @router.my_chat_member(ChatMemberUpdatedFilter(LEAVE_TRANSITION))

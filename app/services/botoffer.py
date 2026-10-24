@@ -67,3 +67,61 @@ async def mark(s: AsyncSession, g: Group, status: str) -> None:
     g.offer_status, g.offer_at = status, now()
     if status == "ads":
         g.ad_agreed = True
+
+
+STALE = 7  # дней без ответа — «⏭ Не сейчас» (можно вернуть)
+
+
+async def sweep(s: AsyncSession) -> int:
+    """Авто-отметки: бот уже в группе (наш КлиентРадар или бот модерации) → «поставили бота»; без ответа 7 дней → «не сейчас»."""
+    from datetime import timedelta
+
+    from app.models import FeedChat
+
+    n = 0
+    feed = set((await s.scalars(select(FeedChat.tg_id))).all())
+    for g in (await s.scalars(select(Group).where(Group.offer_status.in_(("", "sent"))))).all():
+        if g.bot_member or g.tg_id in feed:
+            await mark(s, g, "bot")
+            n += 1
+        elif g.offer_status == "sent" and g.offer_at and now() - g.offer_at > timedelta(days=STALE):
+            await mark(s, g, "skip")
+            n += 1
+    return n
+
+
+async def daily(bot) -> int:
+    """Раз в день (после 10:00 по местному времени) — offer_daily готовых предложений владельцу, одним сообщением на группу."""
+    from app.db import Session
+    from app.models import Setting
+    from app.services import quiet
+
+    local = quiet.to_local(now())
+    if local.hour < 10:
+        return 0
+    async with Session() as s:
+        row = await s.get(Setting, "offer_batch_at")
+        today = local.date().isoformat()
+        if row is not None and row.value == today:
+            return 0
+        if row is None:
+            s.add(Setting(key="offer_batch_at", value=today))
+        else:
+            row.value = today
+        await sweep(s)
+        limit = await settings.get_int(s, "offer_daily")
+        groups = await todo(s, limit) if limit else []
+        texts = {g.id: await text(s, g) for g in groups}
+        await s.commit()
+    if not groups:
+        return 0
+    from app.bot import notify
+    from app.bot.handlers import groups as groups_h
+
+    await notify._send(f"🤝 <b>Предложения админам на сегодня: {len(groups)}</b>\n"
+                       "Нажмите «✉️ Написать» — текст уже вставлен, остаётся «Отправить», затем «✅ Отправил». "
+                       "Пишете со своего аккаунта, не больше 5–10 в день.")
+    for g in groups:
+        body, markup = groups_h._offer_card(g, texts[g.id])
+        await notify._send(body, markup)
+    return len(groups)

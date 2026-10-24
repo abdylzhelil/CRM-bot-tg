@@ -124,4 +124,6 @@ async def stats(m: Message, user: User) -> None:
     text = await user_report(user.tg_id)
     if user.is_admin:
         text += "\n\n<b>Весь бот</b>\n" + await users_line() + "\n" + await build_report() + await funnel_text()
-    await m.answer(text)
+    from app.bot.common import kb
+
+    await m.answer(text, reply_markup=kb([[("🏆 Заявки по нишам в моём городе", "rt:menu")]]))

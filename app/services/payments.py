@@ -37,8 +37,24 @@ async def apply(s: AsyncSession, user_id: int, days: int, amount: int, currency:
     bought = timedelta(days=days)
     plans.extend(user, bought)
     share = await referrals.share_of_bonus(s, user, bought)
+    from app.services import boards
+
+    board = await boards.reward(s, user, bought)  # пришёл по кнопке из закрепа группы — админу группы комиссия днями
     await s.commit()
+    if board:
+        await _tell_board_admin(*board)
     return True, share
+
+
+async def _tell_board_admin(admin_id: int, share: timedelta, title: str) -> None:
+    try:
+        from app.bot import notify
+
+        days = share.total_seconds() / 86400
+        await notify._bot.send_message(admin_id, f"🎁 Человек из вашей группы «{title[:60]}» оплатил 💎 — вам начислено "
+                                                 f"{days:.1f} дн. полного тарифа. Спасибо, что поставили КлиентРадар!")
+    except Exception:
+        pass
 
 
 def refunds_enabled() -> bool:

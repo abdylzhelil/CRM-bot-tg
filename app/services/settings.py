@@ -26,6 +26,10 @@ DEFAULTS: dict[str, str] = {
     "group_audit_leave": "1",
     "captcha_leave_days": "0",
     "captcha_skip": "1",
+    "board_enabled": "1",
+    "board_hours": "3",
+    "board_percent": "20",
+    "offer_daily": "5",
     "mod_bot_username": "",
     "user_search_full": "10",
     "user_search_days": "3",
@@ -103,6 +107,10 @@ LABELS: dict[str, str] = {
     "captcha_leave_days": "Выйти из группы, если капчу не прошли за N дней (0 — не выходить)",
     "captcha_skip": "Группы с ботом-капчей — не вступать автоматически, а в «🖐 Вступить вручную»",
     "mod_bot_username": "Ваш бот модерации (@имя) — для текста админу группы с капчей",
+    "board_enabled": "Рейтинг заявок в закрепе групп с ботом",
+    "board_hours": "Обновлять рейтинг в группах раз в N часов",
+    "board_percent": "Комиссия админу группы, % от оплат (днями 💎)",
+    "offer_daily": "Готовых предложений админам в день",
     "user_search_full": "«Найти группы для меня»: запросов у 💎",
     "user_search_days": "Повторять поиск по запросу пользователя раз в N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
@@ -189,6 +197,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🧹", "Проверка групп и капча", ["join_check", "group_audit", "group_audit_leave", "group_rules_check",
                                      "captcha_skip", "captcha_leave_days", "mod_bot_username"]),
     ("📣", "Реклама в группах", ["adpost_enabled", "adpost_auto_allow", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
+    ("📊", "Рейтинг в группах", ["board_enabled", "board_hours", "board_percent", "offer_daily"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_provider", "ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_check_leads", "ai_decide", "ai_classify_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
@@ -219,6 +228,10 @@ SHORT: dict[str, str] = {
     "captcha_leave_days": "Капча: выйти через, дн",
     "captcha_skip": "Капча: не вступать",
     "mod_bot_username": "Бот модерации (@)",
+    "board_enabled": "Рейтинг в закрепе",
+    "board_hours": "Обновлять, ч",
+    "board_percent": "Комиссия админу, %",
+    "offer_daily": "Предложений в день",
     "user_search_full": "Поиск для меня: 💎",
     "user_search_days": "Повтор поиска, дн",
     "join_retry_max": "Попыток вступить",
@@ -254,6 +267,10 @@ HINTS: dict[str, str] = {
     "captcha_leave_days": "В группах, где после вступления бот-модератор просит капчу, разведчику нельзя писать (реклама туда не идёт), но читать можно — заявки приходят. Список — 🔍 Группы → «🧩 Капча» со ссылкой на сообщение бота. 0 (по умолчанию) — никогда не выходить; N — выйти, если за N дней капчу не прошли и заявок оттуда не было.",
     "captcha_skip": "1 — перед вступлением разведчик смотрит ботов и описание группы; если там бот-капча, который выкидывает не прошедших проверку (Shieldy, Join Captcha и т. п.), разведчик сам не вступает (вступление не тратится), а группа попадает в 🔍 Группы → «🖐 Вступить вручную»: вы вступаете с телефона разведчика и проходите проверку сами — группа не теряется. 0 — вступать везде автоматически.",
     "mod_bot_username": "@имя вашего бота модерации. Подставляется в готовый текст админу группы с капчей («🧩 Капча» → «📋 Текст админу»): админ добавляет бота-антиспам, капча для нашего аккаунта больше не нужна. «-» — очистить.",
+    "board_enabled": "1 — в группах, где бот КлиентРадар — админ с правом закреплять, он держит в закрепе рейтинг заявок по нишам в городе группы и кнопку «📥 Получать заявки». Кто пришёл по этой кнопке и оплатил 💎 — админ, добавивший бота, получает комиссию днями 💎. Без прав админа бот, как раньше, ничего не пишет. Список — 🔍 Группы → «📊 Рейтинг в группах». 0 — выключить везде.",
+    "board_hours": "Раз во сколько часов бот обновляет сообщение с рейтингом в группах (редактирует то же сообщение, новое не шлёт).",
+    "board_percent": "Какой процент от купленных дней получает админ группы, из которой пришёл покупатель (по кнопке в закрепе). 0 — без комиссии.",
+    "offer_daily": "Сколько готовых предложений «поставить бота» бот присылает вам раз в день (одно нажатие — отправить админу). 0 — не присылать.",
     "adpost_auto_allow": "1 — группы, куда вступил разведчик, бот сам открывает для рекламы: проверяет права и правила группы и, "
                          "если реклама там не запрещена, показывает её покупателям (по 3 группы раз в ~5 минут). Группу, которую вы "
                          "выключили сами, повторно не открывает. Больше групп — больше постов с аккаунта разведчика: включайте, когда "
@@ -362,7 +379,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave", "ai_check_leads", "captcha_skip"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave", "ai_check_leads", "captcha_skip", "board_enabled"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),
@@ -370,7 +387,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
-    "user_search_free": (0, 20), "user_search_full": (0, 50), "user_search_days": (1, 60), "captcha_leave_days": (0, 60),
+    "user_search_free": (0, 20), "user_search_full": (0, 50), "user_search_days": (1, 60), "board_hours": (1, 72), "board_percent": (0, 100), "offer_daily": (0, 20), "captcha_leave_days": (0, 60),
     "join_retry_days": (1, 60), "join_retry_max": (1, 20), "adpost_price": (0, 100_000), "adpost_daily_limit": (1, 50), "adpost_group_daily": (1, 50),
     "adpost_gap_min": (1, 1440),  # 0 — заявку не пробовали бы вовсе
     "spam_suspicious": (0, 100), "spam_block": (0, 100),

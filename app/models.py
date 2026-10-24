@@ -105,6 +105,13 @@ class Group(Base):
     admins: Mapped[str] = mapped_column(String(160), default="")  # @админы группы (через запятую), из «правил групп»
     offer_status: Mapped[str] = mapped_column(String(8), default="", index=True)  # предложение админу: ""/sent/bot/ads/no/skip
     offer_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    bot_member: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # в группе есть сам бот КлиентРадар
+    board_on: Mapped[bool] = mapped_column(Boolean, default=True)  # 📊 рейтинг заявок в закрепе (если бот — админ с правом закрепа)
+    board_admin: Mapped[int] = mapped_column(BigInteger, default=0)  # кто добавил бота — ему комиссия днями 💎
+    board_msg_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    board_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    board_note: Mapped[str] = mapped_column(String(120), default="")  # почему рейтинг не выходит (нет прав и т. п.)
+    board_earned: Mapped[float] = mapped_column(Float, default=0)  # начислено админу, дней 💎
 
 
 class FeedChat(Base):

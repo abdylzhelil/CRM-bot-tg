@@ -64,7 +64,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk"), ("📋 Правила групп", "gr:rules")],
         [("🗺 Города и регионы", "gr:geo"), ("🧹 Проверка групп", "gr:audit")],
         [(f"🧩 Капча {cap_n}", "gr:cap"), (f"🖐 Вступить вручную {cnt.get('manual', 0)}", "gr:man")],
-        [(f"🤝 Предложить бота админам {offer_n}", "gr:bo")],
+        [(f"🤝 Предложить бота админам {offer_n}", "gr:bo"), ("📊 Рейтинг в группах", "gr:brd")],
         [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
