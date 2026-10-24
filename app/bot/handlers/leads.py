@@ -185,7 +185,7 @@ def reply_rows(lead: Lead, text: str) -> list[list[tuple[str, str]]]:
     first = []
     if len(text) <= COPY_MAX:
         first.append(("📋 Скопировать ответ", f"copy:{text}"))
-    if lead.link:
+    if lead.link and not lead.gone_at:
         first.append(("💬 Ответить в группе", f"url:{lead.link}"))
     if first:
         rows.append(first)
@@ -197,6 +197,8 @@ def reply_rows(lead: Lead, text: str) -> list[list[tuple[str, str]]]:
 def reply_hint(lead: Lead, text: str) -> str:
     """Короткая подсказка, как отправить ответ, — под текст ответа."""
     copy = "«📋 Скопировать ответ»" if len(text) <= COPY_MAX else "нажмите на текст ответа (скопируется)"
+    if lead.gone_at:
+        return f"\n\n<i>Сообщение уже удалено в группе. Как ответить: {copy} → «✍️ Написать в личку».</i>"
     if lead.link:
         where = ("«💬 Ответить в группе» → свайп по сообщению клиента влево → вставьте текст"
                  + ("" if lead.username else ". В личку этому человеку, скорее всего, не написать — он скрыл профиль"))

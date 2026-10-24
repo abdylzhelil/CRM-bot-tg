@@ -11,6 +11,7 @@ from telethon.tl.types import Channel
 from app.bot import notify
 from app.db import Session
 from app.models import FeedChat, Group, SearchQuery, now
+from app.scout.manager import public_username
 from app.services import groupcheck, junk, settings
 
 log = logging.getLogger(__name__)
@@ -169,7 +170,7 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
         ok = not reason and members >= opt["min_members"] and (msgs_day < 0 or msgs_day >= opt["min_msgs"])
         async with Session() as s:
             g = Group(
-                tg_id=tg_id, username=chat.username or "", title=chat.title or "",
+                tg_id=tg_id, username=public_username(chat), title=chat.title or "",
                 members=members, msgs_per_day=msgs_day, lang=detect_lang(chat.title or ""),
                 status=("approved" if opt["auto"] or owner is not None else "candidate") if ok else "skipped",
                 skip_reason=reason,

@@ -137,5 +137,6 @@ async def leads_of(s: AsyncSession, cat_id: int, city: str, region: str, limit: 
     """Последние заявки ниши (и её подниш) в месте — только для 💎."""
     ids = {cat_id} | set((await s.scalars(select(Category.id).where(Category.parent_id == cat_id))).all())
     return list((await s.scalars(select(Lead).where(
-        Lead.category_id.in_(ids), Lead.created_at > now() - timedelta(days=7), *_where(city, region))
+        Lead.category_id.in_(ids), Lead.created_at > now() - timedelta(days=7), Lead.gone_at.is_(None),
+        *_where(city, region))
         .order_by(Lead.created_at.desc()).limit(limit))).all())

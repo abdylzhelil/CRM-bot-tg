@@ -73,7 +73,7 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
     rows = [
         [reply, InlineKeyboardButton(text="📋 Шаблон", callback_data=f"lead:tpl:{d}")],
     ]
-    if lead.link:  # бот сам не пишет клиенту — отвечаем на его сообщение в группе
+    if lead.link and not getattr(lead, "gone_at", None):  # бот сам не пишет клиенту — отвечаем на его сообщение в группе
         rows.append([InlineKeyboardButton(text="💬 Ответить в группе", url=lead.link)])
     rows += [
         [InlineKeyboardButton(text="✅ В работу", callback_data=f"lead:take:{d}"),
@@ -108,6 +108,8 @@ def lead_text(lead: Lead, category: str) -> str:
     if len(text) > 400:
         text = text[:400] + "…"
     link = f'\n<a href="{lead.link}">Ссылка на сообщение</a>' if lead.link else ""
+    if getattr(lead, "gone_at", None):
+        link = "\n🗑 Сообщение уже удалено в группе — отвечайте автору в личку"
     place = f"\nГде: {html.escape(lead.city or lead.region)}" if (lead.city or lead.region) else ""
     spam = f"\nСпам-скор: {lead.spam_score}" if lead.suspicious else ""
     return (

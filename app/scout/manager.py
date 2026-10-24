@@ -24,6 +24,18 @@ log = logging.getLogger(__name__)
 DEAD = (AuthKeyUnregisteredError, SessionRevokedError, UserDeactivatedBanError, UserDeactivatedError)
 
 
+def public_username(chat) -> str:
+    """Публичный @адрес группы. У групп с несколькими адресами (коллекционные имена) `username` пуст —
+    берём первый активный из `usernames`; иначе ссылка t.me/c/… открывается только участникам («сообщение не найдено»)."""
+    name = getattr(chat, "username", None)
+    if name:
+        return name
+    for u in getattr(chat, "usernames", None) or []:
+        if getattr(u, "active", False) and getattr(u, "username", None):
+            return u.username
+    return ""
+
+
 class ScoutManager:
     def __init__(self) -> None:
         self.clients: dict[int, TelegramClient] = {}
@@ -101,7 +113,7 @@ class ScoutManager:
                 return
             chat = await event.get_chat()
             title = getattr(chat, "title", "") or ""
-            username = getattr(chat, "username", None)
+            username = public_username(chat)
             link = (
                 f"https://t.me/{username}/{event.id}" if username
                 else f"https://t.me/c/{getattr(chat, 'id', 0)}/{event.id}"

@@ -284,6 +284,8 @@ class Lead(Base):
     # new / postponed / taken / rejected / spam
     status: Mapped[str] = mapped_column(String(12), default="new", index=True)
     notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    gone_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # сообщение удалили в группе (проверка разведчиком)
+    alive_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
 
 

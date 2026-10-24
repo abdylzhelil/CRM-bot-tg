@@ -518,6 +518,52 @@ async def audit_round(manager) -> dict[str, int]:
     return out
 
 
+async def liveness_round(manager, limit_groups: int = 8) -> int:
+    """Свежие заявки (до суток): сообщение ещё на месте? Удалённое (автор/админ группы) — `leads.gone_at`:
+    в карточке «удалено — пишите в личку», кнопка «Ответить в группе» убирается, в рейтинге не показывается.
+    Один запрос на группу (до 100 сообщений). Возвращает число найденных удалённых."""
+    from datetime import timedelta as _td
+
+    from app.models import Lead
+
+    async with Session() as s:
+        rows = (await s.execute(select(Lead.id, Lead.group_id, Lead.message_id).where(
+            Lead.created_at > now() - _td(days=1), Lead.gone_at.is_(None), Lead.message_id > 0,
+            Lead.group_id.is_not(None), Lead.status != "spam",
+            Lead.alive_checked_at.is_(None) | (Lead.alive_checked_at < now() - _td(hours=2)))
+            .order_by(Lead.created_at.desc()).limit(400))).all()
+        by_group: dict[int, list[tuple[int, int]]] = {}
+        for lid, gid, mid in rows:
+            by_group.setdefault(gid, []).append((lid, mid))
+        groups = {g.id: g for g in (await s.scalars(select(Group).where(Group.id.in_(list(by_group))))).all()}
+        await s.commit()
+    gone = 0
+    for gid, items in list(by_group.items())[:limit_groups]:
+        g = groups.get(gid)
+        client = manager.clients.get(g.account_id) if g is not None and g.account_id else None
+        if client is None:
+            continue
+        try:
+            entity = await resolve(client, g)
+            msgs = await client.get_messages(entity, ids=[m for _, m in items[:100]])
+        except Exception:
+            log.info("проверка заявок группы %s не удалась", g.title if g else gid, exc_info=True)
+            continue
+        alive = {getattr(m, "id", None) for m in (msgs or []) if m is not None and not getattr(m, "deleted", False)}
+        async with Session() as s:
+            for lid, mid in items[:100]:
+                lead = await s.get(Lead, lid)
+                if lead is None:
+                    continue
+                lead.alive_checked_at = now()
+                if mid not in alive:
+                    lead.gone_at = now()
+                    gone += 1
+            await s.commit()
+        await asyncio.sleep(random.uniform(2, 5))
+    return gone
+
+
 async def try_conditions(s, manager, post: AdPost, g: Group, acc_id: int, client, entity, since) -> list[str]:
     """Один раз на пост: выполнить условия группы (подписка, пригласить своих). Возвращает сделанное."""
     from app.scout import conditions
@@ -707,6 +753,8 @@ async def publish_loop(manager) -> None:
                 await rules_round(manager)
             if ticks % 10 == 7:  # ~раз в 10 минут — перепроверка следующих 3 вступивших групп (🧹 Проверка групп)
                 await audit_round(manager)
+            if ticks % 15 == 11:  # ~раз в 15 минут — свежие заявки ещё на месте в группе?
+                await liveness_round(manager)
             if ticks % 10 == 5:  # ~раз в 10 минут — не просит ли бот группы капчу (🧩 Капча)
                 from app.scout.captchas import captcha_round
 
