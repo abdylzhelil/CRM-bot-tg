@@ -105,6 +105,9 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
             first = [(wanted, "now")]
         elif await delivered_today(s, wanted.tg_id) < limit:
             first = [(wanted, "late")]
+    from app.services import upsell
+
+    upsell.record_missed([u for u in free if load[u.tg_id] >= limit])  # «лимит исчерпан — мимо прошло N»
     free = [u for u in free if load[u.tg_id] < limit]
     pool = len(paid) + len(free)
     k = min(await settings.get_int(s, "max_recipients"), -(-pool // await niche_flow(s, root)))

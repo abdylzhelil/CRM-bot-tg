@@ -80,10 +80,35 @@ async def reminder_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def missed_once() -> int:
+    """«Лимит исчерпан — мимо прошло N заявок» бесплатным (раз в день каждому)."""
+    from app.models import User
+    from app.services import upsell
+
+    button = notify.InlineKeyboardMarkup(inline_keyboard=[[
+        notify.InlineKeyboardButton(text="💎 Открыть все заявки", callback_data="pf:plan")]])
+    sent = 0
+    async with Session() as s:
+        limit = await settings.get_int(s, "free_daily_limit")
+        users = await upsell.due_missed(s)
+        texts = {u.tg_id: upsell.missed_text(u, limit) for u in users}
+        for u in users:
+            u.missed_noted = upsell.today()
+        await s.commit()
+    for uid, text in texts.items():
+        await send_to(uid, text, button)
+        sent += 1
+    return sent
+
+
 async def delivery_loop() -> None:
     """Заявки с задержкой (бесплатный тариф) и накопленные за режим тишины."""
+    ticks = 0
     while True:
+        ticks += 1
         try:
+            if ticks % 15 == 0:  # ~раз в 5 минут
+                await missed_once()
             await notify.flush_due()
         except Exception as e:
             log.exception("delivery_loop")
@@ -111,11 +136,26 @@ async def expiry_once() -> int:
         notify.InlineKeyboardButton(text="💎 Продлить", callback_data="pf:plan")]])
     async with Session() as s:
         renew_on = payments.autorenew_on(await settings.get(s, "autorenew"))
+        from app.services import upsell
+
+        for u, got, add in await upsell.guarantee_due(s):  # гарантия заявок: мало пришло за неделю — дни 💎
+            sent += 1
+            await send_to(u.tg_id, upsell.guarantee_text(got, add, await settings.get_int(s, "guarantee_min")))
         soon = (await s.scalars(select(User).where(
             User.plan == "full", User.plan_until.is_not(None), ~User.blocked,
             User.plan_until > now(), User.plan_until < now() + timedelta(days=3)))).all()
         for u in soon:
             if u.expiry_notice == u.plan_until:
+                continue
+            if u.on_trial:  # пробный: напоминаем в последние сутки, с цифрами
+                if u.plan_until > now() + timedelta(days=1):
+                    continue
+                u.expiry_notice = u.plan_until
+                sent += 1
+                total, got = await upsell.week_stats(s, u)
+                await send_to(u.tg_id, f"⏳ Пробный 💎 заканчивается {local_day(u.plan_until)}. За это время вам пришло "
+                              f"{got} заявок; без 💎 будет не больше {await settings.get_int(s, 'free_daily_limit')} в день "
+                              "и с задержкой. Продлить — одной кнопкой:", button)
                 continue
             u.expiry_notice = u.plan_until
             sent += 1
@@ -132,12 +172,15 @@ async def expiry_once() -> int:
         for u in ended:
             if renew_on and u.renew_method and u.renew_for != u.plan_until:
                 continue  # автопродление ещё попробует — раньше времени «закончился» не пишем
-            u.plan, u.plan_until, u.expiry_notice = "free", None, None
+            trial = u.on_trial
+            u.plan, u.plan_until, u.expiry_notice, u.on_trial, u.guarantee_at = "free", None, None, False, None
             u.winback_at = now() + timedelta(days=3)
             if not u.blocked:
                 sent += 1
-                await send_to(u.tg_id, "⌛ 💎 Полный тариф закончился. Сейчас у вас бесплатный: заявок до 5 в день, "
-                              "с задержкой. Продлить можно в любой момент.", button)
+                await send_to(u.tg_id, ("⌛ Пробный 💎 закончился" if trial else "⌛ 💎 Полный тариф закончился")
+                              + ". Сейчас у вас бесплатный: заявок до "
+                              f"{await settings.get_int(s, 'free_daily_limit')} в день, с задержкой. "
+                              "Продлить можно в любой момент.", button)
         # через 3 дня после конца — одно мягкое «вернуть 💎», если человек так и не продлил
         back = (await s.scalars(select(User).where(
             User.plan == "free", User.winback_at.is_not(None), User.winback_at <= now(), ~User.blocked, ~User.is_admin))).all()

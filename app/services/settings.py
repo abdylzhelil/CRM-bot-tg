@@ -63,6 +63,9 @@ DEFAULTS: dict[str, str] = {
     "price_90": "0",
     "price_365": "0",
     "refund_days": "3",
+    "trial_days": "3",
+    "guarantee_min": "10",
+    "guarantee_days": "7",
     "ad_leads": "20",
     "ad_days": "7",
     "autorenew": "0",
@@ -142,6 +145,9 @@ LABELS: dict[str, str] = {
     "price_90": "Цена 💎 на 90 дней, ₽ (0 — не продавать)",
     "price_365": "Цена 💎 на 365 дней, ₽ (0 — не продавать)",
     "refund_days": "Возврат денег в течение N дней после оплаты (0 — без возврата)",
+    "trial_days": "Пробный 💎 новым пользователям, дней (0 — нет)",
+    "guarantee_min": "Гарантия: меньше N заявок за 7 дней — добавить дни (0 — выкл)",
+    "guarantee_days": "Гарантия: сколько дней 💎 добавить",
     "ad_leads": "Реклама группы: сколько её заявок стоит (0 — реклама выключена)",
     "ad_days": "Реклама группы: на сколько дней",
     "autorenew": "Автопродление тарифа при оплате по ссылке (1 — включено; нужно разрешение ЮKassa)",
@@ -186,7 +192,7 @@ async def put(session: AsyncSession, key: str, value: str) -> None:
 
 # Разделы меню «⚙️ Настройки»: (значок, название, [ключи])
 SECTIONS: list[tuple[str, str, list[str]]] = [
-    ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "refund_days", "autorenew", "free_daily_limit", "free_delay_min"]),
+    ("💎", "Тарифы и цены", ["price_30", "price_90", "price_365", "refund_days", "autorenew", "free_daily_limit", "free_delay_min", "trial_days", "guarantee_min", "guarantee_days"]),
     ("📥", "Раздача заявок", ["max_recipients", "share_gap_min", "pass_daily_limit"]),
     ("🎁", "Бонусы", ["bonus_leads", "bonus_max_days", "ref_days", "ref_percent", "ref_limit"]),
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
@@ -205,6 +211,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
 
 # Короткие подписи для кнопок (полные — в LABELS, их видно при редактировании)
 SHORT: dict[str, str] = {
+    "trial_days": "Пробный 💎, дн", "guarantee_min": "Гарантия: мин. заявок/нед", "guarantee_days": "Гарантия: +дней",
     "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽", "refund_days": "Срок возврата, дн", "autorenew": "Автопродление (1/0)",
     "free_daily_limit": "Бесплатный: заявок/день", "free_delay_min": "Бесплатный: задержка, мин",
     "max_recipients": "Получателей на заявку", "share_gap_min": "Интервал очереди, мин",
@@ -307,6 +314,9 @@ HINTS: dict[str, str] = {
     "price_90": "0 — пакет не продаётся.",
     "price_365": "0 — пакет не продаётся.",
     "refund_days": "Через сколько дней после оплаты возврат уже невозможен. 0 — возвраты выключены.",
+    "trial_days": "Каждый новый пользователь после регистрации один раз получает столько дней 💎 бесплатно: видит полный поток заявок и привыкает. За день до конца бот напомнит и предложит продлить. 0 — без пробного.",
+    "guarantee_min": "Гарантия заявок для оплативших: если за 7 дней пришло меньше этого числа заявок (редкая ниша, маленький город), бот сам добавит дни 💎 и посоветует добавить ниши или расширить город. 0 — без гарантии.",
+    "guarantee_days": "Сколько дней 💎 добавить по гарантии заявок за неделю, где заявок было мало.",
     "ad_leads": "Сколько заявок группы админ тратит на неделю рекламы. 0 — реклама выключена.",
     "ad_days": "На сколько дней покупается реклама.",
     "autorenew": "Включать только после разрешения ЮKassa на сохранение способа оплаты.",
@@ -387,7 +397,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
-    "user_search_free": (0, 20), "user_search_full": (0, 50), "user_search_days": (1, 60), "board_hours": (1, 72), "board_percent": (0, 100), "offer_daily": (0, 20), "captcha_leave_days": (0, 60),
+    "user_search_free": (0, 20), "user_search_full": (0, 50), "user_search_days": (1, 60), "trial_days": (0, 30), "guarantee_min": (0, 500), "guarantee_days": (0, 30), "board_hours": (1, 72), "board_percent": (0, 100), "offer_daily": (0, 20), "captcha_leave_days": (0, 60),
     "join_retry_days": (1, 60), "join_retry_max": (1, 20), "adpost_price": (0, 100_000), "adpost_daily_limit": (1, 50), "adpost_group_daily": (1, 50),
     "adpost_gap_min": (1, 1440),  # 0 — заявку не пробовали бы вовсе
     "spam_suspicious": (0, 100), "spam_block": (0, 100),

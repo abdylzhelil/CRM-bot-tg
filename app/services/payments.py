@@ -40,10 +40,34 @@ async def apply(s: AsyncSession, user_id: int, days: int, amount: int, currency:
     from app.services import boards
 
     board = await boards.reward(s, user, bought)  # пришёл по кнопке из закрепа группы — админу группы комиссия днями
+    user.on_trial, user.guarantee_at, user.missed_count = False, None, 0  # оплатил: пробный кончился, гарантия — с нуля
     await s.commit()
     if board:
         await _tell_board_admin(*board)
+    await _send_recent(user_id)
     return True, share
+
+
+async def _send_recent(user_id: int) -> None:
+    """После оплаты — заявки по нишам за последние сутки, которые человек не получил (лимит бесплатного)."""
+    try:
+        from app.bot import notify
+        from app.bot.handlers.leads import category_name
+        from app.db import Session
+        from app.models import Lead
+        from app.services.distribute import preview
+
+        async with Session() as s:
+            user = await s.get(User, user_id)
+            shown = await preview(s, user, limit=15)
+            if not shown:
+                return
+            await notify._bot.send_message(user_id, f"📥 Заявки за последние сутки, которые прошли мимо из-за лимита ({len(shown)}):")
+            for d in shown:
+                lead = await s.get(Lead, d.lead_id)
+                await notify.send_delivery(d, lead, user, await category_name(s, lead.category_id))
+    except Exception:
+        pass
 
 
 async def _tell_board_admin(admin_id: int, share: timedelta, title: str) -> None:

@@ -252,12 +252,17 @@ async def terms(m: Message) -> None:
         offers = await payments.packages(s)
         contact = await _contact(s)
         refund = refund_line(await settings.get_int(s, "refund_days"))
+        trial = await settings.get_int(s, "trial_days")
+        need, add = await settings.get_int(s, "guarantee_min"), await settings.get_int(s, "guarantee_days")
     prices = "\n".join(f"• {d} дн. — {p} ₽" for d, p in offers) or "• цены уточняйте у администратора"
+    extra = (f"Новым пользователям — {trial} дн. 💎 бесплатно, один раз.\n" if trial else "") + (
+        f"Гарантия заявок: если у оплатившего за 7 дней пришло меньше {need} заявок, добавляем {add} дн. 💎 бесплатно "
+        "(деньгами не компенсируется).\n" if need and add else "")
     await m.answer(
         "📄 <b>Условия</b>\n\n"
         "Услуга: 💎 Полный тариф Telegram-бота «КлиентРадар» — заявки приходят сразу и без дневного лимита. "
         "Это цифровая услуга: доступ включается автоматически сразу после оплаты на выбранный срок.\n\n"
-        f"Стоимость:\n{prices}\n\n"
+        f"Стоимость:\n{prices}\n\n{extra}"
         "Бот присылает сообщения людей из открытых Telegram-групп; мы не гарантируем количество заявок и сделок.\n"
         "Если окно оплаты не открывается (например, из-за VPN), отключите VPN или выберите сервер в России и повторите; "
         "можно также оплатить через администратора.\n"

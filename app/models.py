@@ -369,6 +369,12 @@ class User(Base):
     renew_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, для которого уже была попытка
     expiry_notice: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # plan_until, о котором уже напомнили
     winback_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда написать «вернуть 💎» (через 3 дня после конца), один раз
+    missed_day: Mapped[str] = mapped_column(String(10), default="")  # местная дата, за которую считаем пропущенные
+    missed_count: Mapped[int] = mapped_column(Integer, default=0)  # заявок не пришло сегодня из-за лимита бесплатного
+    missed_noted: Mapped[str] = mapped_column(String(10), default="")  # дата, когда уже сказали «лимит исчерпан»
+    trial_used: Mapped[bool] = mapped_column(Boolean, default=False)  # пробный 💎 уже был
+    on_trial: Mapped[bool] = mapped_column(Boolean, default=False)  # сейчас пробный 💎 (не оплачен)
+    guarantee_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # начало текущей недели «гарантии заявок»
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
 

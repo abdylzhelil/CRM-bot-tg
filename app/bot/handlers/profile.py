@@ -253,6 +253,16 @@ async def finish_onboarding(target, user: User) -> None:
             await notify._bot.send_message(referrer_id, f"🤝 По вашей ссылке пришёл новый пользователь — вам +{days} дн. 💎!")
         except Exception:
             pass
+    async with Session() as s:
+        from app.services import upsell
+
+        trial = await upsell.start_trial(s, user)
+        await s.commit()
+    if trial:
+        from app.bot import effects
+
+        await effects.send(msg.answer, f"🎁 Дарим {trial} дн. 💎 Полного тарифа: все заявки сразу и без лимита. "
+                                       "Попробуйте — за день до конца напомню.")
     if not user.is_admin:
         from app.bot import notify
 
@@ -461,8 +471,14 @@ async def pf_plan(cb: CallbackQuery, user: User) -> None:
         rows.append([("📱 Оплатить через СБП / по ссылке", "lnk:menu")])
     if user.renew_method:
         rows.append([("🗑 Отвязать карту", "ren:ask")])
+    async with Session() as s:
+        from app.services import upsell
+
+        total, got = await upsell.week_stats(s, user)
+    numbers = (f"📈 За 7 дней по вашим нишам{' в ' + esc(user.city) if user.city else ''}: <b>{total}</b> заявок, "
+               f"вам пришло <b>{got}</b>.\n\n" if total else "")
     await reply(cb, (
-        f"💎 <b>Тариф</b>\nСейчас: {line}\n\n"
+        f"💎 <b>Тариф</b>\nСейчас: {line}\n\n{numbers}"
         f"{PLANS['full']}: заявки приходят сразу (а заявка живёт минуты!), без дневного лимита, "
         f"вы — среди первых получателей.\n\n{how}\n"
         "Бонусные дни можно заработать: 🌐 Каталог и 🤝 Приглашения."
