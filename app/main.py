@@ -85,9 +85,9 @@ async def delivery_loop() -> None:
     while True:
         try:
             await notify.flush_due()
-        except Exception:
+        except Exception as e:
             log.exception("delivery_loop")
-            await notify.alert_once("delivery_loop", "В фоновой задаче delivery_loop ошибка (см. логи сервера).")
+            await notify.alert_once("delivery_loop", f"Раздача заявок: ошибка {type(e).__name__}: {str(e)[:150]}")
         await asyncio.sleep(20)
 
 
