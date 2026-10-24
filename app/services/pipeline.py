@@ -136,6 +136,7 @@ async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> 
         spam_score=value,
         suspicious=value >= await settings.get_int(session, "spam_suspicious"),
     )
+    lead.matched = ", ".join(m.hits)[:160]
     lead.city, lead.region = geo.detect(msg.text, msg.group_title, group.city if group else "",
                                          group.region if group else "")
     session.add(lead)

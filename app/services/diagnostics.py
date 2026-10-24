@@ -65,6 +65,13 @@ async def report(s: AsyncSession, days: int = 7) -> str:
         out.append("   Примеры ваших исправлений (для подкрутки правил):")
         out += [f"   [{'исполнитель' if k == 'offer' else 'заказчик'}] {_anon(t)}" for k, t in ex]
 
+    from app.services import badwords
+
+    bad = await badwords.suspects(s, days=max(days, 7), limit=10)
+    if bad:
+        out.append("   «Не те» заявки — слова ниш, на которые жмут «Не моё» (🔑 Ключевые слова → 🙈):")
+        out += [f"   • «{r['word']}» в «{r['category']}»: не моё {r['rejected']} из {r['total']}" for r in bad]
+
     # 3. реклама в группах
     orders = dict((await s.execute(select(AdOrder.status, func.count()).where(AdOrder.created_at >= since)
                                    .group_by(AdOrder.status))).all())

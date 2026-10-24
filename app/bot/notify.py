@@ -126,6 +126,8 @@ async def send_delivery(d: Delivery, lead: Lead, user: User, category: str) -> s
     """Карточка заявки пользователю: SENT; BLOCKED — заблокировал бота; RETRY — Telegram временно не принял, повторим."""
     assert _bot, "notify.init(bot) не вызван"
     text = lead_text(lead, category)
+    if user.is_admin and getattr(lead, "matched", ""):  # админу: по каким словам ниши заявка пришла
+        text += f"\n🔑 Слова: {html.escape(lead.matched)}"
     if d.from_user:
         async with Session() as s:
             sender = await s.get(User, d.from_user)
