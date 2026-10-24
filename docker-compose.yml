@@ -1,0 +1,27 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # база: по умолчанию SQLite в data/; после переноса в PostgreSQL — строка CRM_DATABASE_URL в .env (docs/DB_MOVE.md)
+      DATABASE_URL: ${CRM_DATABASE_URL:-sqlite+aiosqlite:///data/crm.db}
+    volumes:
+      - ./data:/srv/data
+    logging:  # журнал контейнера не растёт бесконечно: до 3 файлов по 10 МБ
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      default:
+      # общая сеть с ботом модерации: он обращается к CRM по адресу http://crm:8090
+      tgbots:
+        aliases: [crm]
+
+networks:
+  # создаётся один раз командой: docker network create tgbots
+  tgbots:
+    external: true
+    name: tgbots
+
