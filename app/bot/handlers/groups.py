@@ -55,7 +55,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"), ("🏆 Рейтинг вступивших", "gr:list:joined")],
         [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли {cnt.get('left', 0)}", "gr:list:left")],
         [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
-        [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk")],
+        [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk"), ("📋 Правила групп", "gr:rules")],
         [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
@@ -123,6 +123,76 @@ async def back_to_queue(cb: CallbackQuery) -> None:
         await s.commit()
     await cb.answer("Вернули в очередь на вступление")
     await show_list(cb, was)
+
+
+@router.callback_query(F.data == "gr:rules")
+async def rules_menu(cb: CallbackQuery) -> None:
+    from app.services import passport
+
+    async with Session() as s:
+        cnt = await passport.counts(s)
+        on = await settings.get(s, "group_rules_check") == "1"
+        from app.services import ai, llm
+
+        which = await ai.provider(s)
+    rows = [[(f"{icon} {label} · {cnt.get(code, 0)}", f"gr:rl:{code}")] for code, (icon, label) in passport.POLICIES.items()]
+    rows.append([("🔄 Прочитать следующие сейчас", "gr:rulesnow"), ("📨 Сводка сейчас", "gr:rulesdig")])
+    rows.append([("◀️ Назад", "gr:menu")])
+    await reply(cb, (
+        "📋 <b>Правила групп</b> — разведчик читает описание, закреп, ботов и админов каждой своей группы и решает, "
+        "можно ли там рекламу и к кому обращаться."
+        + (f" Читает ИИ: {esc(llm.NAMES.get(which, which))}." if which
+           else " ИИ не подключён — читаю по словам (менее точно).")
+        + f"\nЕщё не прочитано: {cnt.get('', 0)}." + ("" if on else "\n⏸ Чтение выключено: ⚙️ → 🔍 Разведчик → «Читать правила групп».")
+        + "\n\nАдминам бот сам не пишет (иначе аккаунт разведчика ограничат) — в списке «через админа» "
+        "есть готовый текст и кнопка, отправляете одним нажатием."), kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^gr:rl:(allowed|only_admin|paid|forbidden|unknown)$"))
+async def rules_list(cb: CallbackQuery) -> None:
+    from app.services import passport
+
+    code = cb.data.split(":")[2]
+    icon, label = passport.POLICIES[code]
+    async with Session() as s:
+        groups_ = await passport.listing(s, code)
+    if not groups_:
+        return await cb.answer("Пусто", show_alert=True)
+    await cb.answer()
+    await cb.message.answer(f"{icon} <b>{label}</b> (самые большие, до 15):")
+    for g in groups_:
+        text = (f"<b>{esc(g.title)}</b> · {g.members} уч." + (f" · @{esc(g.username)}" if g.username else "")
+                + (f"\n{esc(g.rules_summary)}" if g.rules_summary else "")
+                + (f"\n👤 По рекламе: @{esc(g.rules_contact)}" if g.rules_contact else "")
+                + ("\n📢 открыта для рекламы" if g.ads_allowed else ""))
+        rows = []
+        if code in ("only_admin", "paid", "unknown") and g.rules_contact:
+            rows.append([(f"✍️ Написать @{g.rules_contact}"[:40], f"url:https://t.me/{g.rules_contact}"),
+                         ("📋 Текст для админа", f"copy:{passport.ready_message(g)}")])
+        rows.append([("📢 Карточка для рекламы", f"apg:o:{g.id}")])
+        await cb.message.answer(text, reply_markup=kb(rows), disable_web_page_preview=True)
+
+
+@router.callback_query(F.data == "gr:rulesnow")
+async def rules_now(cb: CallbackQuery) -> None:
+    import asyncio
+
+    from app.scout.publisher import rules_round
+
+    if not manager or not manager.clients:
+        return await cb.answer("Нет подключённых разведчиков", show_alert=True)
+    await cb.answer("Читаю правила следующих групп — итог появится в списках через минуту", show_alert=True)
+    asyncio.create_task(rules_round(manager))
+
+
+@router.callback_query(F.data == "gr:rulesdig")
+async def rules_digest(cb: CallbackQuery) -> None:
+    from app.services import passport
+
+    async with Session() as s:
+        text = await passport.digest(s, force=True)
+        await s.commit()
+    await reply(cb, text or "Пока нечего сообщить.", kb([[("📋 Правила групп", "gr:rules")]]))
 
 
 @router.callback_query(F.data == "gr:junk")

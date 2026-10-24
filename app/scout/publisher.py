@@ -286,6 +286,21 @@ async def inspect_rules(manager, g: Group, s=None) -> tuple[str, str, list[str]]
                 g.ad_hours = ai["hours"].replace(" ", "")[:16]
         g.ad_ai_channels = ",".join(c.lstrip("@") for c in ai.get("subscribe_channels", [])[:3])
     mods = adposts.moderation_bots(bots)
+    # «📋 Правила групп»: итог для общего списка «куда что можно»
+    from app.services import passport
+
+    if ai is not None:
+        policy, summary = ai.get("ads") or "unknown", ai.get("summary") or ""
+    else:
+        policy, summary = passport.policy_from_words(verdict, about + pinned), verdict
+    contact = (ai.get("contact") if ai else "") or passport.contact_from_text(about + "\n" + pinned)
+    contact = contact.strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z]\w{3,31}", contact or ""):
+        contact = ""
+    if contact.lower() in {b.lower() for b in bots}:  # бот — не тот, с кем договариваться
+        contact = ""
+    g.rules_policy, g.rules_summary, g.rules_contact = policy, summary[:255], contact
+    g.rules_checked_at = now()
     lines = []
     if ai is not None and ai.get("summary"):
         lines.append("🤖 " + ai["summary"][:200])
@@ -386,6 +401,41 @@ async def recheck_groups(manager) -> list[str]:
                                [notify.InlineKeyboardButton(text=f"📢 {title[:30]}", callback_data=f"apg:o:{gid}")]
                                for gid, title in off[:8]]))
     return [t for _, t in off]
+
+
+async def rules_round(manager) -> int:
+    """📋 Правила групп: прочитать правила следующих групп разведчика (по PER_ROUND за заход), раз в сутки — сводка владельцу."""
+    from app.services import passport
+
+    async with Session() as s:
+        if await settings.get(s, "group_rules_check") != "1":
+            return 0
+        ids = await passport.due(s, set(manager.clients))
+    done = 0
+    for gid in ids:
+        async with Session() as s:
+            g = await s.get(Group, gid)
+            if g is None:
+                continue
+            await s.commit()  # не держим базу, пока ждём Telegram и ИИ
+            try:
+                text, _, _ = await inspect_rules(manager, g, s)
+                if text:
+                    g.ad_rules = text
+                g.rules_checked_at = g.rules_checked_at or now()  # даже если правила не прочитались — не по кругу
+            except Exception:
+                log.info("правила группы %s не прочитаны", g.title, exc_info=True)
+                g.rules_checked_at = now()
+            await s.commit()
+            done += 1
+        await asyncio.sleep(random.uniform(3, 8))
+    async with Session() as s:
+        text = await passport.digest(s)
+        await s.commit()
+    if text:
+        await notify._send(text, notify.InlineKeyboardMarkup(inline_keyboard=[[
+            notify.InlineKeyboardButton(text="📋 Правила групп — списки", callback_data="gr:rules")]]))
+    return done
 
 
 async def try_conditions(s, manager, post: AdPost, g: Group, acc_id: int, client, entity, since) -> list[str]:
@@ -573,6 +623,8 @@ async def publish_loop(manager) -> None:
             await check_posts(manager)
             if ticks % 5 == 0:  # ~раз в 5 минут — по 2 группы, чтобы не дёргать Telegram
                 await recheck_groups(manager)
+            if ticks % 10 == 3:  # ~раз в 10 минут — правила следующих 3 групп (📋 Правила групп)
+                await rules_round(manager)
             ticks += 1
             if ticks % 30 == 0:  # примерно раз в 30 минут
                 await nudge_unpaid()

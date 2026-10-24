@@ -86,6 +86,10 @@ class Group(Base):
     ad_ai_channels: Mapped[str] = mapped_column(String(160), default="")  # каналы, на которые, по мнению ИИ, надо подписаться
     join_attempts: Mapped[int] = mapped_column(Integer, default=0)  # сколько раз разведчик пытался вступить (заявка не одобрена)
     join_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда повторить заявку на вступление
+    rules_policy: Mapped[str] = mapped_column(String(12), default="", index=True)  # реклама по правилам: allowed/forbidden/only_admin/paid/unknown ("" — не проверяли)
+    rules_summary: Mapped[str] = mapped_column(String(255), default="")  # главное из правил (ИИ или правила-слова)
+    rules_contact: Mapped[str] = mapped_column(String(64), default="")  # к кому по рекламе, @ник из открытых правил группы
+    rules_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ad_auto_tried: Mapped[bool] = mapped_column(Boolean, default=False)  # бот уже сам открывал её для рекламы (adpost_auto_allow) — второй раз не открывает
     no_leads: Mapped[bool] = mapped_column(Boolean, default=False)  # заявки отсюда не брать (реклама/флуд), services/junk.py
     skip_reason: Mapped[str] = mapped_column(String(120), default="")  # почему разведчик не вступил (видно в «🚫 Пропущены»)

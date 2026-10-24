@@ -198,9 +198,13 @@ def fits(data: dict | None, schema: dict) -> dict | None:
         return None
     out = {}
     for name, spec in schema.get("properties", {}).items():
-        if name not in data:
-            return None
-        value, kind = data[name], spec.get("type")
+        kind = spec.get("type")
+        if name not in data:  # необязательное по смыслу поле модель могла пропустить — пустое значение
+            if "enum" in spec or kind == "boolean":
+                return None
+            out[name] = {"string": "", "array": [], "integer": 0}.get(kind, "")
+            continue
+        value = data[name]
         if "enum" in spec and value not in spec["enum"]:
             return None
         if kind == "boolean" and not isinstance(value, bool):
