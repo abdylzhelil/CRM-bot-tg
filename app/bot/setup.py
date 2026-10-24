@@ -27,21 +27,21 @@ from app.services import referrals
 log = logging.getLogger(__name__)
 
 HELP = (
-    "❓ <b>Как пользоваться</b>\n\n"
-    "Бот читает Telegram-группы и присылает сообщения людей, которые <b>ищут исполнителя</b> по вашим нишам "
-    "и в вашем городе. Спам, рекламу конкурентов и повторы отсеивает сам.\n\n"
-    "<b>Карточка заявки:</b>\n"
-    "✍️ Ответить — написать человеку в личку\n"
-    "💬 Ответить в группе — открыть сообщение клиента в группе и ответить там (бот сам клиенту не пишет)\n"
-    "📋 Шаблон — готовый текст ответа с вашими ценами, кнопка «📋 Скопировать ответ»\n"
-    "✅ В работу — клиент попадает в 👥 Клиенты, там этапы сделки, заметки и напоминания\n"
-    "⏰ Отложить · 🙈 Не моё (просто скрыть, в CRM не попадает) · 🚫 Спам — автор спама вам больше не придёт\n\n"
-    "🤝 <b>Приглашения</b> — 👤 Профиль → 🤝 Пригласить друзей: по +7 дней 💎 вам и другу.\n"
-    "📨 <b>Коллеге</b> — кнопка на карточке заявки: передать её коллеге в боте.\n\n"
-    "🌐 <b>Каталог</b> — добавьте свою открытую группу или канал: за заявки из неё дарим дни 💎.\n\n"
-    "<b>Настройки</b> — в 👤 Профиль: ниши, город, минус-слова, режим тишины, свой шаблон и цены, пауза. «⚡ Автонастройка» заполнит пустое за вас.\n"
-    "Заявка живёт минуты — отвечайте быстро 🔥\n\n"
-    "Команды: /menu — меню, /leads — заявки, /about — о боте, /invite — пригласить друзей, /clients — клиенты, /catalog — каталог, /profile — профиль, /terms — условия оплаты, /privacy — политика конфиденциальности, /deleteme — удалить мои данные, /cancel — отмена ввода."
+    "❓ <b>Как пользоваться — 3 шага</b>\n\n"
+    "1️⃣ <b>Выберите, что вы делаете</b> — «🎯 Мои ниши» (например, ремонт, юрист, репетитор) и «📍 Мой город».\n"
+    "2️⃣ <b>Ждите заявки</b> — бот сам находит в Telegram людей, которые ищут мастера, и присылает их сюда.\n"
+    "3️⃣ <b>Отвечайте быстро</b> — под заявкой кнопка «✍️ Ответить» (написать человеку) или «💬 Ответить в группе». "
+    "Кто откликнулся первым — того и выбирают 🔥\n\n"
+    "Не ваша заявка — «🙈 Не моё». Спам — «🚫 Спам». Взяли клиента — «✅ В работу», он попадёт в «👥 Клиенты».\n\n"
+    "🏆 <b>Рейтинг</b> — сколько заявок по каким нишам в вашем городе.\n"
+    "➕ <b>Есть своя группа или чат?</b> Поставьте туда бота кнопкой ниже — в закрепе будет рейтинг заявок, "
+    "а вам — дни 💎 с оплат участников.\n"
+    "🤝 <b>Пригласите друга</b> — 👤 Профиль → 🤝 Пригласить: по +7 дней 💎 вам и ему.\n\n"
+    "Что-то непонятно — просто напишите сюда сообщение, владелец бота ответит."
+)
+HELP_MORE = (
+    "Команды: /menu — меню, /leads — заявки, /clients — клиенты, /profile — профиль, /invite — пригласить, "
+    "/catalog — каталог, /terms — условия оплаты, /privacy — политика, /deleteme — удалить мои данные, /cancel — отмена."
 )
 
 USER_COMMANDS = [
@@ -93,6 +93,21 @@ def menu_keyboard(user: User | None = None) -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=t) for t in labels[i : i + 3]] for i in range(0, len(labels), 3)]
     # клавиатуру можно свернуть значком ⌨ в поле ввода и открыть снова
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, input_field_placeholder="Выберите раздел")
+
+
+async def help_keyboard():
+    from app.bot.handlers import board
+
+    rows = [[("🏆 Рейтинг заявок", "rt:menu")]]
+    link = await board.add_link()
+    if link:
+        rows.append([("➕ Поставить бота в мою группу", f"url:{link}")])
+    rows.append([("💬 Написать владельцу бота", "fb:write")])
+    return kb(rows)
+
+
+async def _help(m: Message):
+    await m.answer(HELP, reply_markup=await help_keyboard())
 
 
 def admin_panel(unread: int = 0):
@@ -178,7 +193,7 @@ async def about_cmd(m: Message, state: FSMContext, user: User) -> None:
 @base.message(Command("help"))
 async def help_cmd(m: Message, state: FSMContext, user: User) -> None:
     await state.clear()
-    await m.answer(HELP, reply_markup=menu_keyboard(user) if user.onboarded else None)
+    await m.answer(HELP + "\n\n" + HELP_MORE, reply_markup=await help_keyboard())
 
 
 SHORTCUTS = {"leads": "📥 Заявки", "clients": "👥 Клиенты", "profile": "👤 Профиль", "catalog": "🌐 Каталог",
@@ -265,7 +280,7 @@ async def open_section(m: Message, state: FSMContext, user: User, section: str) 
         "🛡 Чёрный список": lambda: blacklist.blacklist_menu(m),
         "👥 Пользователи": lambda: users_admin.users_menu(m),
         "⚙️ Настройки": lambda: settings.settings_menu(m),
-        "❓ Помощь": lambda: m.answer(HELP),
+        "❓ Помощь": lambda: _help(m),
         "🛠 Управление": lambda: _admin_home(m),
     }
     await handlers[section]()

@@ -51,7 +51,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         + "\n\n<b>Вступление в новые группы:</b>\n" + "\n".join(esc(x) for x in diag)
     )
     await reply(target, text, kb([
-        [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=true")],
+        [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=rating&admin=pin_messages")],
         [("🤖 Группы бота", "gr:bot"), ("❓ Как это работает", "gr:help")],
         [("🛡 Бот модерации", "fd:list"), (f"📝 От пользователей {pending}", "up:list")],
         [("▶️ Искать сейчас", "gr:search"), ("⏹ Остановить поиск", "gr:stop")],

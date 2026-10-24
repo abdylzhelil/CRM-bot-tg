@@ -121,6 +121,17 @@ async def rating_cmd(m: Message, bot: Bot) -> None:
 
 
 # ---------- в боте: рейтинг по нишам города пользователя; заявки ниши — на 💎 ----------
+async def add_link() -> str:
+    """Одна кнопка: добавить бота в свою группу СРАЗУ админом с правом закреплять (Telegram сам спросит права)."""
+    try:
+        from app.bot import notify
+
+        me = await notify._bot.me()
+        return f"https://t.me/{me.username}?startgroup=rating&admin=pin_messages"
+    except Exception:
+        return ""
+
+
 def group_of(payload: str | None) -> int:
     """`src_g12` (кнопка «📥 Получать заявки» в закрепе группы) → 12, иначе 0."""
     import re
@@ -153,6 +164,11 @@ async def rating_view(target, user: User, group_id: int = 0) -> None:
             + (f" ({esc(g.board_note)})" if g.board_note else "") for g, came, paid in mine)
     suffix = f":{group_id}" if group_id else ""
     rows = [[(f"🔍 {name}"[:40], f"rt:n:{cid}{suffix}")] for cid, name, _, _ in items[:8]]
+    link = await add_link()
+    if link:
+        rows.append([("➕ Поставить бота в мою группу", f"url:{link}")])
+        body += ("\n\n➕ Есть своя группа или чат? Поставьте бота — в закрепе будет такой рейтинг, а вам — "
+                 "дни 💎 с оплат участников.")
     if not user.onboarded:
         body += "\n\nЧтобы получать такие заявки себе — выберите свои ниши ниже 👇"
     else:
