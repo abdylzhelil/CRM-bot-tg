@@ -73,6 +73,11 @@ async def test_captcha_found_with_link_and_owner_told(maker, tgbot, monkeypatch)
 
 
 async def test_leaves_after_deadline_but_not_catalog(maker):
+    from app.services import settings
+
+    async with maker() as s:  # по умолчанию 0 — не выходить; владелец включил 3 дня
+        assert await settings.get(s, "captcha_leave_days") == "0"
+        await settings.put(s, "captcha_leave_days", "3")
     gid = await _group(maker, captcha_since=now() - timedelta(days=4))
     client = Client()
     assert await captchas.check_one(SimpleNamespace(clients={1: client}), gid) == "left"
@@ -87,11 +92,38 @@ async def test_leaves_after_deadline_but_not_catalog(maker):
     assert await captchas.check_one(SimpleNamespace(clients={1: Client()}), gid) == "still"
 
 
-async def test_kicked_goes_to_left(maker):
+async def test_kicked_goes_to_left(maker, tgbot):
     gid = await _group(maker)
     assert await captchas.check_one(SimpleNamespace(clients={1: Client(left=True)}), gid) == "kicked"
     async with maker() as s:
         assert (await s.get(Group, gid)).status == "left"
+        g = await s.get(Group, gid)  # выкинули из-за капчи — не теряем, «вступить вручную»
+        g.status, g.captcha_since, g.captcha_checked_at = "joined", now(), None
+        await s.commit()
+    assert await captchas.check_one(SimpleNamespace(clients={1: Client(left=True)}), gid) == "kicked"
+    async with maker() as s:
+        assert (await s.get(Group, gid)).status == "manual"
+
+
+async def test_captcha_closes_ads_until_passed(maker, tgbot):
+    from app.services import adposts
+
+    gid = await _group(maker, ads_allowed=True, ad_account_id=1)
+    async with maker() as s:
+        acc = await s.get(ScoutAccount, 1)
+        acc.enabled, acc.can_post = True, True
+        await s.commit()
+        assert [g.id for g in await adposts.eligible_groups(s)] == [gid]
+    assert await captchas.check_one(SimpleNamespace(clients={1: Client()}), gid) == "captcha"
+    async with maker() as s:
+        assert await adposts.eligible_groups(s) == []  # с капчей рекламу не предлагаем
+        g = await s.get(Group, gid)
+        assert g.ad_closed_at is not None
+        g.captcha_checked_at = None
+        await s.commit()
+    assert await captchas.check_one(SimpleNamespace(clients={1: Client(restricted=False)}), gid) == "passed"
+    async with maker() as s:
+        assert [g.id for g in await adposts.eligible_groups(s)] == [gid]  # прошли — снова доступна
 
 
 async def test_list_buttons(maker, monkeypatch):
@@ -125,20 +157,49 @@ def test_kick_reason_from_full_channel():
     assert captchas.kick_reason(SimpleNamespace(users=[], full_chat=SimpleNamespace(about="Вход через капчу"))) != ""
 
 
-async def test_joiner_skips_kick_captcha(maker):
-    from app.scout import joiner
+async def test_kick_captcha_goes_to_manual_join(maker, tgbot, monkeypatch):
+    """Группу с ботом-капчей не теряем: разведчик не вступает, группа — в «🖐 Вступить вручную»."""
+    from app.bot.handlers import groups as groups_h
+    from app.scout import client as scout_client, joiner
+
+    monkeypatch.setattr(scout_client, "ensure_connected", AsyncMock(return_value=True))
 
     class C(Client):
+        joined = False
+
         async def __call__(self, req):
+            if type(req).__name__ == "JoinChannelRequest":
+                self.joined = True
             return SimpleNamespace(users=[SimpleNamespace(bot=True, username="join_captcha_bot")],
                                    full_chat=SimpleNamespace(about=""))
 
     async with maker() as s:
-        reason, _ = await joiner._quality(C(), object(), Group(tg_id=-931, title="Барахолка"), s)
-    assert reason.startswith("капча")
+        s.add(ScoutAccount(id=1, name="sc", api_id=1, api_hash="x", daily_join_limit=10))
+        await s.flush()
+        s.add(Group(tg_id=-931, username="bar931", title="Барахолка", status="approved", members=500))
+        await s.commit()
+    client = C()
+    assert await joiner.join_one(client, 1) is True and not client.joined
+    async with maker() as s:
+        g = await s.scalar(select(Group).where(Group.tg_id == -931))
+    assert g.status == "manual" and g.skip_reason.startswith("капча") and g.account_id == 1
+    assert any("с телефона разведчика" in t for t in tgbot.texts(1))
+    # владелец вступил с телефона разведчика → «✅ Вступил»
+    monkeypatch.setattr(groups_h, "manager", SimpleNamespace(clients={1: Client(restricted=False)}))
+    cb = MagicMock()
+    cb.data, cb.answer = f"gr:mok:{g.id}", AsyncMock()
+    cb.message.delete = AsyncMock()
+    await groups_h.manual_ok(cb)
+    async with maker() as s:
+        g = await s.get(Group, g.id)
+    assert g.status == "joined" and g.captcha_since is None
 
 
 async def test_stays_when_leads_come(maker):
+    from app.services import settings
+
+    async with maker() as s:
+        await settings.put(s, "captcha_leave_days", "3")
     gid = await _group(maker, captcha_since=now() - timedelta(days=4), last_lead_at=now() - timedelta(days=1))
     client = Client()
     assert await captchas.check_one(SimpleNamespace(clients={1: client}), gid) == "still"

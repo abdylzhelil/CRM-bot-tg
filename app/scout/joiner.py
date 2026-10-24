@@ -119,6 +119,14 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
                     from app.services import groupcheck
 
                     groupcheck.apply_place(g, res)
+                if reason.startswith("капча"):  # бот-капча выкинет разведчика — вступить вручную с телефона, группу не теряем
+                    g.status, g.skip_reason, g.account_id = "manual", reason[:120], acc_id
+                    await s.commit()
+                    log.info("в %s — вручную: %s", g.title, reason)
+                    from app.scout.captchas import tell_manual
+
+                    await tell_manual(g.id)
+                    return True
                 if reason:  # реклама/флуд/заработок/не по-русски — вступление не тратим
                     g.status, g.skip_reason = "skipped", reason[:120]
                     await s.commit()

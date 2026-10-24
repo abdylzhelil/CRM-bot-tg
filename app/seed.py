@@ -363,6 +363,9 @@ async def seed(session: AsyncSession) -> None:
     from app.services import junk
 
     await junk.mark_existing(session)
+    from app.scout import captchas
+
+    await captchas.restore_skipped(session)
     if await session.scalar(select(func.count()).select_from(Category)):
         await add_missing(session)
         return

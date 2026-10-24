@@ -378,7 +378,8 @@ async def recheck_groups(manager) -> list[str]:
         await asyncio.sleep(2)  # не дёргаем Telegram слишком часто
         async with Session() as s:
             g = await s.get(Group, gid)
-            if g is not None and g.ads_allowed and g.ad_closed_at and now() - g.ad_closed_at >= adposts.CLOSED_GIVE_UP:
+            if (g is not None and g.ads_allowed and g.ad_closed_at and g.captcha_since is None
+                    and now() - g.ad_closed_at >= adposts.CLOSED_GIVE_UP):  # капча — ждём, пока пройдёте, не выключаем
                 g.ads_allowed = False
                 off.append((g.id, g.title))
                 await s.commit()

@@ -13,7 +13,7 @@ router = Router()
 manager = None
 STATUS = {
     "candidate": "кандидаты", "approved": "очередь", "requested": "ждут одобрения админа", "joined": "вступили", "covered": "уже с нашим ботом",
-    "skipped": "пропущены", "left": "вышли",
+    "skipped": "пропущены", "left": "вышли", "manual": "вступить вручную",
 }
 REVIEW_PAGE = 8
 BACKABLE = {"skipped": "🚫 Пропущены", "left": "👋 Вышли (ротация или вручную)"}
@@ -60,7 +60,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
         [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk"), ("📋 Правила групп", "gr:rules")],
         [("🗺 Города и регионы", "gr:geo"), ("🧹 Проверка групп", "gr:audit")],
-        [(f"🧩 Капча — пройти вручную {cap_n}", "gr:cap")],
+        [(f"🧩 Капча {cap_n}", "gr:cap"), (f"🖐 Вступить вручную {cnt.get('manual', 0)}", "gr:man")],
         [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
@@ -725,3 +725,73 @@ async def captcha_out(cb: CallbackQuery) -> None:
             await cb.message.delete()
         except Exception:
             pass
+
+
+# ---------- 🖐 Вступить вручную: группы с ботом-капчей — вступает человек с телефона разведчика ----------
+@router.callback_query(F.data == "gr:man")
+async def manual_list(cb: CallbackQuery) -> None:
+    from app.models import ScoutAccount
+
+    async with Session() as s:
+        groups_ = (await s.scalars(select(Group).where(Group.status == "manual")
+                                   .order_by(Group.members.desc()).limit(20))).all()
+        names = {a.id: a.name for a in (await s.scalars(select(ScoutAccount))).all()}
+    head = ("🖐 <b>Вступить вручную</b> — в этих группах бот-капча выкидывает новичков, которые не прошли проверку. "
+            "Разведчик сам туда не вступает (Telegram банит аккаунты, которые проходят капчу программой).\n"
+            "Откройте группу <b>с телефона разведчика</b>, вступите и пройдите проверку, затем нажмите «✅ Вступил». "
+            "Дальше разведчик читает группу как обычно.")
+    if not groups_:
+        return await reply(cb, head + "\n\nСейчас таких групп нет ✅", kb([[("◀️ Назад", "gr:menu")]]))
+    await reply(cb, head + f"\n\nГрупп: {len(groups_)} (карточки ниже).", kb([[("◀️ Назад", "gr:menu")]]))
+    from app.scout import captchas
+
+    for g in groups_:
+        who = names.get(g.account_id or 0, "")
+        text = (f"🖐 <b>{esc(g.title)}</b> · {g.members} уч.\n{esc(g.skip_reason)}"
+                + (f"\nВступать с аккаунта: {esc(who)}" if who else ""))
+        rows = ([[("🔗 Открыть группу", f"url:{captchas.group_url(g)}")]] if captchas.group_url(g) else [])
+        rows.append([("✅ Вступил — проверить", f"gr:mok:{g.id}"), ("🚫 Не нужна", f"gr:mno:{g.id}")])
+        await cb.message.answer(text, reply_markup=kb(rows), disable_web_page_preview=True)
+
+
+@router.callback_query(F.data.regexp(r"^gr:mok:\d+$"))
+async def manual_ok(cb: CallbackQuery) -> None:
+    from app.models import now
+    from app.scout import captchas
+
+    if not manager or not manager.clients:
+        return await cb.answer("Нет подключённых разведчиков", show_alert=True)
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if g is None or g.status != "manual":
+            return await cb.answer("Группа уже не в этом списке", show_alert=True)
+        await s.commit()  # не держим базу, пока спрашиваем Telegram
+        acc_id, limited = await captchas.find_member(manager, g)
+        if acc_id is None:
+            return await cb.answer("Разведчик пока не в группе. Вступите с телефона разведчика и нажмите ещё раз.",
+                                   show_alert=True)
+        g.status, g.account_id, g.joined_at, g.skip_reason = "joined", acc_id, now(), ""
+        g.captcha_since = now() if limited else None
+        g.captcha_checked_at = now()
+        await s.commit()
+    await cb.answer("✅ Вступил — разведчик читает группу" + (
+        ". Но писать пока нельзя — проверка не пройдена (группа в «🧩 Капча»)" if limited else ""), show_alert=True)
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.regexp(r"^gr:mno:\d+$"))
+async def manual_no(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if g is None or g.status != "manual":
+            return await cb.answer("Группа уже не в этом списке", show_alert=True)
+        g.status = "skipped"
+        await s.commit()
+    await cb.answer("Убрал в «🚫 Пропущены» — оттуда можно вернуть", show_alert=True)
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass

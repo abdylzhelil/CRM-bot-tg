@@ -63,7 +63,7 @@ async def eligible_groups(s: AsyncSession, city: str = "", photo: bool = False) 
     для рекламы с картинкой не показываем группы, где картинки запрещены."""
     q = (select(Group).join(ScoutAccount, ScoutAccount.id == publisher_id())
          .where(Group.status == "joined", Group.ads_allowed, ScoutAccount.enabled, ScoutAccount.can_post,
-                Group.ad_closed_at.is_(None)))  # закрытую сейчас группу выбрать нельзя (покажем с 🔒)
+                Group.ad_closed_at.is_(None), Group.captcha_since.is_(None)))  # закрытую/с капчей выбрать нельзя (покажем с 🔒)
     if photo:
         q = q.where(~Group.no_media)
     rows = (await s.scalars(q.order_by(Group.members.desc()))).all()

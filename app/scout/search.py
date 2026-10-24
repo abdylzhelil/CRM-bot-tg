@@ -116,7 +116,6 @@ async def _options(s) -> dict:
         "min_msgs": await settings.get_int(s, "min_msgs_per_day"),
         "auto": await settings.get(s, "mode") == "auto",
         "check": await settings.get(s, "join_check") == "1",
-        "captcha_skip": await settings.get(s, "captcha_skip") == "1",
     }
 
 
@@ -167,10 +166,6 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
         about = getattr(full.full_chat, "about", "") or ""
         res = groupcheck.by_rules(chat.title or "", about, texts)
         reason = res["reason"] if opt["check"] else ""
-        if opt["check"] and not reason and opt.get("captcha_skip"):
-            from app.scout.captchas import kick_reason
-
-            reason = kick_reason(full)
         ok = not reason and members >= opt["min_members"] and (msgs_day < 0 or msgs_day >= opt["min_msgs"])
         async with Session() as s:
             g = Group(

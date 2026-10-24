@@ -110,6 +110,71 @@ async def listing(s: AsyncSession, limit: int = 20) -> list[Group]:
                                  .order_by(Group.captcha_since).limit(limit))).all())
 
 
+async def _kicked(s: AsyncSession, g: Group) -> str:
+    """Разведчика удалили из группы. Если там была капча — группу не теряем: «🖐 Вступить вручную»."""
+    if g.captcha_since is not None:
+        g.status, g.skip_reason = "manual", "бот-капча удалил разведчика — вступить вручную"
+    else:
+        g.status, g.skip_reason = "left", "удалили из группы (бан или чистка)"
+    g.captcha_since, g.captcha_link = None, ""
+    await s.commit()
+    if g.status == "manual":
+        await tell_manual(g.id)
+    return "kicked"
+
+
+async def restore_skipped(s: AsyncSession) -> int:
+    """Один раз: группы, пропущенные из-за капчи прежней версией, — в «🖐 Вступить вручную» (не теряем)."""
+    from app.models import Setting
+
+    if await s.get(Setting, "captcha_manual_v1") is not None:
+        return 0
+    rows = (await s.scalars(select(Group).where(Group.status == "skipped", Group.skip_reason.like("капча%")))).all()
+    for g in rows:
+        g.status = "manual"
+    s.add(Setting(key="captcha_manual_v1", value="1"))
+    await s.commit()
+    return len(rows)
+
+
+async def manual_count(s: AsyncSession) -> int:
+    return await s.scalar(select(func.count()).select_from(Group).where(Group.status == "manual")) or 0
+
+
+async def tell_manual(gid: int) -> None:
+    """Одна группа ушла в «🖐 Вступить вручную» — сообщить владельцу с кнопкой."""
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        if g is None:
+            return
+        n = await manual_count(s)
+    rows = []
+    if group_url(g):
+        rows.append([notify.InlineKeyboardButton(text="🔗 Открыть группу", url=group_url(g))])
+    rows.append([notify.InlineKeyboardButton(text=f"🖐 Вступить вручную · {n}", callback_data="gr:man")])
+    await notify._send(f"🖐 «{html.escape(g.title)}» ({g.members} уч.) — {html.escape(g.skip_reason)}.\n"
+                       "Чтобы не терять группу, вступите в неё <b>с телефона разведчика</b> и пройдите проверку сами, "
+                       "затем «✅ Вступил» в списке.", notify.InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+async def find_member(manager, g: Group):
+    """Какой из наших разведчиков уже состоит в группе (после ручного вступления). (acc_id, ограничен ли) или (None, False)."""
+    from app.scout.publisher import resolve
+
+    order = [g.account_id] + [a for a in manager.clients if a != g.account_id] if g.account_id else list(manager.clients)
+    for acc_id in order:
+        client = manager.clients.get(acc_id)
+        if client is None:
+            continue
+        try:
+            ent = await client.get_entity(await resolve(client, g))
+        except Exception:
+            continue
+        if not getattr(ent, "left", True):
+            return acc_id, restricted(ent)
+    return None, False
+
+
 def has_leads(g: Group) -> bool:
     """Заявки из группы шли, пока висела капча: читать её полезно — не выходим."""
     return bool(g.captcha_since and g.last_lead_at and g.last_lead_at >= g.captcha_since)
@@ -147,23 +212,22 @@ async def check_one(manager, gid: int) -> str:
         try:
             ent = await client.get_entity(await resolve(client, g))
         except (ChannelPrivateError, UserBannedInChannelError):
-            g.status, g.skip_reason, g.captcha_since = "left", "удалили из группы (капчу не прошли или бан)", None
-            await s.commit()
-            return "kicked"
+            return await _kicked(s, g)
         except Exception:
             await s.commit()
             return "skip"
         if getattr(ent, "left", False):
-            g.status, g.skip_reason, g.captcha_since = "left", "удалили из группы (капчу не прошли или бан)", None
-            await s.commit()
-            return "kicked"
+            return await _kicked(s, g)
         if not restricted(ent):
             was = g.captcha_since is not None
+            if was and g.ad_closed_at and g.ad_closed_at >= g.captcha_since:
+                g.ad_closed_at = None  # закрыта была из-за капчи — для рекламы снова открыта
             g.captcha_since, g.captcha_link = None, ""
             await s.commit()
             return "passed" if was else "ok"
         if g.captcha_since is None:
             g.captcha_since = now()
+            g.ad_closed_at = g.ad_closed_at or g.captcha_since  # писать нельзя — реклама сюда не идёт, пока не пройдёте
             me = await client.get_me()
             mid = await find_message(client, ent, getattr(me, "id", 0), g.joined_at)
             g.captcha_link = (await exact_link(client, ent, g, mid) if mid else "")[:255]
