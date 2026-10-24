@@ -120,3 +120,28 @@ async def test_rating_opens_in_one_tap(maker):
     await board.rating_view(m, user, group_id=gid)
     body = m.answer.call_args.args[0]
     assert "Махачкала" in body and "выберите свои ниши" in body  # место группы, а не пустой город новичка
+
+
+async def test_take_lead_from_rating(maker, tgbot):
+    """Владелец 25.10: «как получать этих клиентов»: номер под заявкой → обычная карточка с «Ответить» (на 💎)."""
+    from sqlalchemy import select
+
+    from app.bot.handlers import board
+    from app.models import Delivery
+
+    _, root_id = await _data(maker)
+    async with maker() as s:
+        lead = await s.scalar(select(Lead).where(Lead.city == "Махачкала"))
+        s.add(User(tg_id=31, name="Мастер", onboarded=True, plan="full", city="Махачкала"))
+        await s.commit()
+        u = await s.get(User, 31)
+    cb = MagicMock()
+    cb.data, cb.answer = f"rt:t:{lead.id}", AsyncMock()
+    await board.rating_take(cb, u)
+    async with maker() as s:
+        assert await s.scalar(select(Delivery).where(Delivery.lead_id == lead.id, Delivery.user_id == 31))
+    assert any("сантехник" in t for t in tgbot.texts(31))
+    free = SimpleNamespace(tg_id=32, plan="free", is_admin=False)
+    cb.answer.reset_mock()
+    await board.rating_take(cb, free)
+    assert "полном тарифе" in cb.answer.call_args.args[0]

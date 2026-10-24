@@ -193,14 +193,43 @@ async def rating_niche(cb: CallbackQuery, user: User) -> None:
     async with Session() as s:
         g = await s.get(Group, gid) if gid else None
         city, region, label = boards.place_of(g) if g is not None else _user_place(user)
-        leads = await boards.leads_of(s, cid, city, region)
+        leads = await boards.leads_of(s, cid, city, region, limit=20)
+    from app.services import offers
+
+    leads = [ld for ld in leads if offers.rule_verdict(ld.text) not in ("offer", "other")][:10]  # старые до правок фильтра
     if not leads:
         return await cb.answer("За неделю заявок в этой нише нет", show_alert=True)
-    lines = [f"🔍 Последние заявки ниши ({esc(label)}):"]
-    for ld in leads:
-        lines.append(f"\n• {ld.created_at:%d.%m} · {esc(ld.city or ld.region or '')} · {esc(ld.group_title[:30])}\n"
+    lines = [f"🔍 Последние заявки ниши ({esc(label)}). Нажмите номер — пришлю карточку с кнопкой «✍️ Ответить»:"]
+    for i, ld in enumerate(leads, 1):
+        lines.append(f"\n<b>{i}.</b> {ld.created_at:%d.%m} · {esc(ld.city or ld.region or '')} · {esc(ld.group_title[:30])}\n"
                      f"{html.escape(' '.join(ld.text.split())[:220])}")
-    await reply(cb, "\n".join(lines)[:3900], kb([[("◀️ Назад", back)]]))
+    nums = [(f"📩 {i}", f"rt:t:{ld.id}") for i, ld in enumerate(leads, 1)]
+    rows = [nums[i:i + 5] for i in range(0, len(nums), 5)] + [[("◀️ Назад", back)]]
+    await reply(cb, "\n".join(lines)[:3900], kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^rt:t:\d+$"))
+async def rating_take(cb: CallbackQuery, user: User) -> None:
+    """Взять заявку из рейтинга: обычная карточка с «✍️ Ответить», «✅ В работу» и т. д. (только 💎)."""
+    from app.bot import notify
+    from app.bot.handlers.leads import category_name
+    from app.models import Delivery, Lead
+
+    if user.plan != "full" and not user.is_admin:
+        return await cb.answer("Брать заявки из рейтинга можно на полном тарифе 💎 (👤 Профиль → 💎 Тариф)", show_alert=True)
+    async with Session() as s:
+        lead = await s.get(Lead, int(cb.data.split(":")[2]))
+        if lead is None:
+            return await cb.answer("Заявка уже удалена", show_alert=True)
+        d = await s.scalar(select(Delivery).where(Delivery.lead_id == lead.id, Delivery.user_id == user.tg_id))
+        if d is None:
+            d = Delivery(lead_id=lead.id, user_id=user.tg_id, sent=True)
+            s.add(d)
+        d.sent = True
+        await s.commit()
+        cat = await category_name(s, lead.category_id)
+    await notify.send_delivery(d, lead, user, cat)
+    await cb.answer("Карточка заявки — ниже 👇")
 
 
 @router.callback_query(F.data.regexp(r"^rt:g:\d+$"))
