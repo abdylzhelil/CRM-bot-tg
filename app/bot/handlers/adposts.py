@@ -64,7 +64,7 @@ async def show_menu(target, user: User) -> None:
         if not await adposts.enabled(s):
             text = "Реклама в группах пока не подключена."
             if user.is_admin:
-                text += " Включить: 🛠 Управление → ⚙️ Настройки → 🔍 Разведчик → «Реклама вкл» = 1."
+                text += " Включить: 🛠 Управление → ⚙️ Настройки → 📣 Реклама в группах → «Реклама вкл» = 1."
             if isinstance(target, CallbackQuery):
                 return await target.answer(text, show_alert=True)
             return await target.answer(text)
@@ -440,7 +440,7 @@ async def adm_list(cb: CallbackQuery) -> None:
                                   .order_by(AdOrder.id.desc()).limit(20))).all()
         enabled = await adposts.enabled(s)
     rows = [[(f"№{o.id} · {adposts.STATUS[o.status]} · {o.price} ₽", f"apa:o:{o.id}")] for o in orders]
-    head = "📣 Заказы рекламы" + ("" if enabled else " (⚠️ сервис выключен: ⚙️ → 🔍 Разведчик)")
+    head = "📣 Заказы рекламы" + ("" if enabled else " (⚠️ сервис выключен: ⚙️ → 📣 Реклама в группах)")
     await reply(cb, head + (":" if orders else "\n\nАктивных заказов нет."),
                 kb(rows + [[("📜 Завершённые и отменённые", "apa:hist")], [("◀️ Назад", "gr:menu")]]))
 

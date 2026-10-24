@@ -133,3 +133,24 @@ async def test_joiner_quality_skips_earning_group(maker):
     assert reason.startswith("заработок") and res["verdict"] == "spam"
     reason, res = await joiner._quality(Client(LIVE * 3), object(), Group(tg_id=-822, title="Барахолка Дербент"))
     assert reason == "" and res["city"] == "Дербент"
+
+
+async def test_toggles_in_sections_and_settings_split(maker):
+    """Владелец не нашёл «Читать правила групп» среди 29 настроек: реклама — отдельным разделом, кнопки в самих разделах."""
+    from unittest.mock import MagicMock
+
+    from app.bot.handlers import groups as groups_h
+    from app.services import settings
+
+    scout = next(keys for _, title, keys in settings.SECTIONS if title == "Разведчик")
+    ads = next(keys for _, title, keys in settings.SECTIONS if title == "Реклама в группах")
+    assert "group_rules_check" in scout and "group_audit" in scout and len(scout) <= 16
+    assert all(k.startswith("adpost_") for k in ads)
+    cb = MagicMock()
+    cb.data = "gr:tg:group_rules_check"
+    cb.answer = AsyncMock()
+    await groups_h.toggle(cb)
+    async with maker() as s:
+        assert await settings.get(s, "group_rules_check") == "0"
+    markup = cb.answer.call_args.kwargs["reply_markup"]  # MagicMock не CallbackQuery — reply отвечает новым сообщением
+    assert any("Включить чтение правил" in b.text for row in markup.inline_keyboard for b in row)

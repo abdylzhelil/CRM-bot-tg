@@ -138,13 +138,14 @@ async def rules_menu(cb: CallbackQuery) -> None:
         which = await ai.provider(s)
     rows = [[(f"{icon} {label} · {cnt.get(code, 0)}", f"gr:rl:{code}")] for code, (icon, label) in passport.POLICIES.items()]
     rows.append([("🔄 Прочитать следующие сейчас", "gr:rulesnow"), ("📨 Сводка сейчас", "gr:rulesdig")])
+    rows.append([("⏸ Выключить чтение правил" if on else "▶️ Включить чтение правил", "gr:tg:group_rules_check")])
     rows.append([("◀️ Назад", "gr:menu")])
     await reply(cb, (
         "📋 <b>Правила групп</b> — разведчик читает описание, закреп, ботов и админов каждой своей группы и решает, "
         "можно ли там рекламу и к кому обращаться."
         + (f" Читает ИИ: {esc(llm.NAMES.get(which, which))}." if which
            else " ИИ не подключён — читаю по словам (менее точно).")
-        + f"\nЕщё не прочитано: {cnt.get('', 0)}." + ("" if on else "\n⏸ Чтение выключено: ⚙️ → 🔍 Разведчик → «Читать правила групп».")
+        + f"\nЕщё не прочитано: {cnt.get('', 0)}." + ("" if on else "\n⏸ Чтение выключено — кнопка «▶️ Включить» ниже.")
         + "\n\nАдминам бот сам не пишет (иначе аккаунт разведчика ограничат) — в списке «через админа» "
         "есть готовый текст и кнопка, отправляете одним нажатием."), kb(rows))
 
@@ -551,12 +552,14 @@ async def audit_menu(cb: CallbackQuery) -> None:
         + f"\n\nГрупп разведчика: {total}, ещё не проверены: {never}."
         + f"\nЗа неделю: проверено {week['checked']}, вышли из спамных {week['left']}, "
           f"оставили, но без заявок {week['muted']}."
-        + ("" if on else "\n⏸ Проверка выключена: ⚙️ → 🔍 Разведчик → «Перепроверка групп».")
+        + ("" if on else "\n⏸ Проверка выключена — кнопка «▶️ Включить проверку» ниже.")
         + ("\nИз спамных разведчик выходит (кроме каталога, рекламы и групп по просьбе пользователей)." if leave
-           else "\nИз спамных не выходит — только перестаёт брать заявки (⚙️ → «Выход из спамных»).")
+           else "\nИз спамных не выходит — только перестаёт брать заявки.")
         + "\n\nВернуть группу: «👋 Вышли» (снова вступит) или «🙈 Без заявок».")
     await reply(cb, text, kb([
         [("🔄 Проверить следующие сейчас", "gr:auditnow")],
+        [("⏸ Выключить проверку" if on else "▶️ Включить проверку", "gr:tg:group_audit"),
+         ("🚪 Не выходить из спамных" if leave else "🚪 Выходить из спамных", "gr:tg:group_audit_leave")],
         [("👋 Вышли", "gr:list:left"), ("🙈 Без заявок", "gr:junk")],
         [("◀️ Назад", "gr:menu")]]))
 
@@ -587,3 +590,17 @@ async def audit_now(cb: CallbackQuery) -> None:
         await cb.message.answer(f"🧹 Проверка групп: {summary}.", reply_markup=kb([[("🧹 Проверка групп", "gr:audit")]]))
 
     asyncio.create_task(run())
+
+
+TOGGLES = {"group_rules_check": "gr:rules", "group_audit": "gr:audit", "group_audit_leave": "gr:audit"}
+
+
+@router.callback_query(F.data.regexp(r"^gr:tg:(group_rules_check|group_audit|group_audit_leave)$"))
+async def toggle(cb: CallbackQuery) -> None:
+    """Включить/выключить прямо из раздела (то же, что ⚙️ → 🔍 Разведчик)."""
+    key = cb.data.split(":")[2]
+    async with Session() as s:
+        on = await settings.get(s, key) == "1"
+        await settings.put(s, key, "0" if on else "1")
+    # меню само ответит на нажатие (второй ответ Telegram не принимает) — новое состояние видно на кнопке
+    await (rules_menu(cb) if TOGGLES[key] == "gr:rules" else audit_menu(cb))

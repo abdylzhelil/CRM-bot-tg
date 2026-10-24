@@ -20,8 +20,7 @@ async def settings_menu(target: Message | CallbackQuery) -> None:
     buttons = [(f"{icon} {title}", f"st:sec:{i}") for i, (icon, title, _) in enumerate(settings.SECTIONS)]
     rows = [[("⚡ Автонастройка бота", "st:auto")], [("📋 Состояние бота", "st:status")], [("🎛 Пресеты", "st:presets"), ("🔎 Найти настройку", "st:find")]]
     rows += [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
-    rows.append([("👤 Аккаунты-разведчики", "acc:list")])
-    rows.append([("📢 Статистику в канал", "pub:now")])
+    rows.append([("👤 Аккаунты-разведчики", "acc:list"), ("📢 Статистику в канал", "pub:now")])
     await reply(target, "⚙️ <b>Настройки</b>\nВыберите раздел:", kb(rows))
 
 
@@ -37,6 +36,8 @@ async def section(cb: CallbackQuery) -> None:
     async with Session() as s:
         for key in keys:
             value = await settings.get(s, key) or "выкл"
+            if key in settings.FLAGS:  # флаг: понятнее галочкой, чем 1/0
+                value = "✅ вкл" if value == "1" else "⬜ выкл"
             rows.append([(f"{settings.SHORT.get(key, settings.LABELS[key])}: {value}", f"st:{key}")])
     idx = cb.data.split(":")[2]
     rows.append([("◀️ Все настройки", "st:menu")])
