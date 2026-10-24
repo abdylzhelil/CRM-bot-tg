@@ -26,7 +26,8 @@ async def test_main_and_section_pages(maker):
     c = cb("st:menu")
     await sh.back(c)
     main = buttons(c)
-    assert len(main) <= 15 and "💎 Тарифы и цены" in main  # раньше было ~28 кнопок в столбик
+    rows = c.answer.call_args.kwargs["reply_markup"].inline_keyboard
+    assert len(rows) <= 10 and "💎 Тарифы и цены" in main  # раньше было ~28 кнопок в столбик; разделы — по два в ряд
     c = cb("st:sec:0")
     await sh.section(c)
     page = buttons(c)

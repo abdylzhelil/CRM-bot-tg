@@ -1,4 +1,5 @@
 """Мусор из групп рекламы/флуда: приглашения во флуд, реклама баннеров, группы «без заявок»."""
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy import select
@@ -117,7 +118,9 @@ class QualityClient:
             yield Msg(t)
 
     async def __call__(self, req):
-        self.joined = True
+        if type(req).__name__ == "JoinChannelRequest":
+            self.joined = True
+        return SimpleNamespace(users=[], full_chat=SimpleNamespace(about=""))
 
     def is_connected(self):
         return True
