@@ -91,15 +91,14 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
         f"рабочих аккаунтов: {len(alive)}" + ("" if len(alive) >= 2 else
         " — добавьте второй (👤 Аккаунты → ➕): вдвое больше вступлений и запас, если первый ограничат"))
 
-    # закрытые для сообщений группы: часто там капча или «я не бот» — проходится вручную с телефона разведчика
-    closed = (await s.scalars(select(Group).where(Group.status == "joined", Group.ad_closed_at.is_not(None))
+    # капча после вступления: проходится вручную с телефона разведчика (🔍 Группы → 🧩 Капча)
+    closed = (await s.scalars(select(Group).where(Group.status == "joined", Group.captcha_since.is_not(None))
                               .order_by(Group.members.desc()))).all()
     if closed:
         names = ", ".join(g.title[:25] for g in closed[:5]) + (f" и ещё {len(closed) - 5}" if len(closed) > 5 else "")
         ads_on = await settings.get(s, "adpost_enabled") == "1"
         add(WARN if ads_on else "⚪️", "Закрытые группы (капча)",
-            f"{len(closed)}: {names} — заявки оттуда читаются, писать нельзя. Важно только для рекламы: "
-            "зайдите с телефона разведчика и пройдите проверку")
+            f"{len(closed)}: {names} — заявки оттуда читаются, писать нельзя. Ссылки на проверку: 🔍 Группы → «🧩 Капча»")
     else:
         add(OK, "Закрытые группы (капча)", "нет")
 

@@ -28,6 +28,9 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         pending = await catalog.pending_count(s)
         paused = await settings.get(s, "scout_paused") == "1"
         junk_n = await s.scalar(select(func.count()).select_from(Group).where(Group.status == "joined", Group.no_leads))
+        from app.scout import captchas
+
+        cap_n = await captchas.count(s)
     from app.bot.handlers import adposts as adposts_h
 
     ad_orders, ad_groups = await adposts_h.counts()
@@ -57,6 +60,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
         [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk"), ("📋 Правила групп", "gr:rules")],
         [("🗺 Города и регионы", "gr:geo"), ("🧹 Проверка групп", "gr:audit")],
+        [(f"🧩 Капча — пройти вручную {cap_n}", "gr:cap")],
         [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
@@ -604,3 +608,105 @@ async def toggle(cb: CallbackQuery) -> None:
         await settings.put(s, key, "0" if on else "1")
     # меню само ответит на нажатие (второй ответ Telegram не принимает) — новое состояние видно на кнопке
     await (rules_menu(cb) if TOGGLES[key] == "gr:rules" else audit_menu(cb))
+
+
+# ---------- 🧩 Капча (scout/captchas.py): ссылки на сообщения ботов-модераторов, выход, если не прошли ----------
+@router.callback_query(F.data == "gr:cap")
+async def captcha_list(cb: CallbackQuery) -> None:
+    from app.scout import captchas
+
+    async with Session() as s:
+        groups_ = await captchas.listing(s)
+        days = await settings.get_int(s, "captcha_leave_days")
+    head = ("🧩 <b>Капча</b> — в этих группах бот-модератор просит разведчика подтвердить, что он не бот. "
+            "Пока не пройдёте, разведчик может только читать (заявки идут), писать нельзя.\n"
+            "Откройте ссылку <b>с телефона разведчика</b> и нажмите кнопку проверки, затем «✅ Прошёл».\n"
+            "ИИ капчу не проходит — Telegram за это блокирует аккаунт.\n"
+            + (f"Не пройдёте за {days} дн. — разведчик сам выйдет (⚙️ → 🔍 Разведчик → «Капча: выйти через»)."
+               if days else "Автовыход выключен (⚙️ → 🔍 Разведчик → «Капча: выйти через»)."))
+    if not groups_:
+        return await reply(cb, head + "\n\nСейчас таких групп нет ✅", kb([[("◀️ Назад", "gr:menu")]]))
+    await reply(cb, head + f"\n\nГрупп: {len(groups_)} (карточки ниже).", kb([[("◀️ Назад", "gr:menu")]]))
+    for g in groups_:
+        await cb.message.answer(*_captcha_card(g, days), disable_web_page_preview=True)
+
+
+def _captcha_card(g: Group, days: int):
+    from app.scout import captchas
+
+    until = captchas.leave_at(g, days)
+    text = (f"🧩 <b>{esc(g.title)}</b> · {g.members} уч.\nКапча с {g.captcha_since:%d.%m %H:%M}"
+            + (f", выйду {until:%d.%m}" if until else "")
+            + ("" if g.captcha_link else "\nСообщение бота не нашёл — откройте группу и найдите проверку."))
+    url = g.captcha_link or captchas.group_url(g)
+    rows = ([[("🧩 Открыть сообщение бота" if g.captcha_link else "🧩 Открыть группу", f"url:{url}")]] if url else [])
+    rows += [[("✅ Прошёл — проверить", f"gr:capok:{g.id}"), ("⏳ Ещё время", f"gr:capwait:{g.id}")],
+             [("🚪 Выйти из группы", f"gr:capout:{g.id}")]]
+    return text, kb(rows)
+
+
+@router.callback_query(F.data.regexp(r"^gr:capok:\d+$"))
+async def captcha_ok(cb: CallbackQuery) -> None:
+    from app.scout import captchas
+
+    if not manager or not manager.clients:
+        return await cb.answer("Нет подключённых разведчиков", show_alert=True)
+    gid = int(cb.data.split(":")[2])
+    async with Session() as s:  # проверить сразу, без ожидания часа
+        g = await s.get(Group, gid)
+        if g is not None:
+            g.captcha_checked_at = None
+            await s.commit()
+    r = await captchas.check_one(manager, gid)
+    msg = {"passed": "✅ Пройдено — разведчик снова может писать в группе", "ok": "✅ Ограничений нет",
+           "still": "⏳ Ещё ограничен — проверка не пройдена. Откройте ссылку с телефона разведчика",
+           "kicked": "Разведчика уже удалили из группы (она в «👋 Вышли», можно вернуть в очередь)",
+           }.get(r, "Не получилось проверить, попробуйте позже")
+    await cb.answer(msg, show_alert=True)
+    if r in ("passed", "ok", "kicked"):
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data.regexp(r"^gr:capwait:\d+$"))
+async def captcha_wait(cb: CallbackQuery) -> None:
+    from app.models import now
+
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if g is None or g.captcha_since is None:
+            return await cb.answer("Капчи здесь уже нет", show_alert=True)
+        g.captcha_since = now()  # срок автовыхода отсчитывается заново
+        days = await settings.get_int(s, "captcha_leave_days")
+        await s.commit()
+        text, markup = _captcha_card(g, days)
+    await cb.answer(f"Хорошо, подожду ещё {days} дн." if days else "Хорошо")
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.regexp(r"^gr:capout:\d+$"))
+async def captcha_out(cb: CallbackQuery) -> None:
+    from app.scout import captchas
+
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        client = manager.clients.get(g.account_id) if (manager and g is not None) else None
+        if g is None or g.status != "joined":
+            return await cb.answer("Уже не в группе", show_alert=True)
+        if client is None:
+            return await cb.answer("Разведчик этой группы не подключён", show_alert=True)
+        await s.commit()
+        ok = await captchas.leave(client, g, "вышел вручную (капча)")
+        await s.commit()
+    await cb.answer("Вышел. Вернуть — 🔍 Группы → 👋 Вышли" if ok else "Не получилось выйти, попробуйте позже",
+                    show_alert=True)
+    if ok:
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass

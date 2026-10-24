@@ -704,6 +704,10 @@ async def publish_loop(manager) -> None:
                 await rules_round(manager)
             if ticks % 10 == 7:  # ~раз в 10 минут — перепроверка следующих 3 вступивших групп (🧹 Проверка групп)
                 await audit_round(manager)
+            if ticks % 10 == 5:  # ~раз в 10 минут — не просит ли бот группы капчу (🧩 Капча)
+                from app.scout.captchas import captcha_round
+
+                await captcha_round(manager)
             ticks += 1
             if ticks % 30 == 0:  # примерно раз в 30 минут
                 await nudge_unpaid()

@@ -22,6 +22,7 @@ DEFAULTS: dict[str, str] = {
     "group_audit": "1",
     "ai_check_leads": "1",
     "group_audit_leave": "1",
+    "captcha_leave_days": "3",
     "user_search_full": "10",
     "user_search_days": "3",
     "adpost_enabled": "0",
@@ -95,6 +96,7 @@ LABELS: dict[str, str] = {
     "ai_check_leads": "ИИ проверяет каждую заявку (не только спорные)",
     "group_audit": "Перепроверять вступившие группы (спам, город/регион/страна)",
     "group_audit_leave": "Выходить из спамных групп после проверки",
+    "captcha_leave_days": "Выйти из группы, если капчу не прошли за N дней (0 — не выходить)",
     "user_search_full": "«Найти группы для меня»: запросов у 💎",
     "user_search_days": "Повторять поиск по запросу пользователя раз в N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
@@ -177,7 +179,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max", "join_check",
-                        "user_search_free", "user_search_full", "user_search_days", "group_rules_check", "group_audit", "group_audit_leave"]),
+                        "user_search_free", "user_search_full", "user_search_days", "group_rules_check", "group_audit", "group_audit_leave", "captcha_leave_days"]),
     ("📣", "Реклама в группах", ["adpost_enabled", "adpost_auto_allow", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_provider", "ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_check_leads", "ai_decide", "ai_classify_daily"]),
@@ -206,6 +208,7 @@ SHORT: dict[str, str] = {
     "ai_check_leads": "ИИ: каждая заявка",
     "group_audit": "Перепроверка групп",
     "group_audit_leave": "Выход из спамных",
+    "captcha_leave_days": "Капча: выйти через, дн",
     "user_search_full": "Поиск для меня: 💎",
     "user_search_days": "Повтор поиска, дн",
     "join_retry_max": "Попыток вступить",
@@ -238,6 +241,7 @@ HINTS: dict[str, str] = {
     "ai_check_leads": "1 — подключённый ИИ (GigaChat и др.) смотрит каждое сообщение, которое прошло слова и антиспам: заказчик ли это и по этой ли нише; исполнители, «заработок», вакансии и случайные совпадения слов уходят в 🛡 → «🙅 Отсеянные» (оттуда можно вернуть). Считается в «ИИ: решений в сутки». 0 — ИИ только для спорных. Без ключа ИИ ничего не делает.",
     "group_audit": "1 — разведчик по очереди (3 группы раз в ~10 минут, каждую раз в месяц) перечитывает последние сообщения своих групп; правила и ИИ (если подключён) решают: живая группа или спам/заработок/реклама, и какой охват — город, регион или вся страна. Итог — 🔍 Группы → «🧹 Проверка групп» и «🗺 Города и регионы». 0 — не проверять.",
     "group_audit_leave": "1 — из спамных групп разведчик выходит (они в «👋 Вышли», можно вернуть); группы каталога, с рекламой, найденные по просьбе пользователя и возвращённые вами не покидает — только перестаёт брать оттуда заявки. 0 — не выходить, только не брать заявки.",
+    "captcha_leave_days": "В группах, где после вступления бот-модератор просит капчу или «я не бот», разведчику нельзя писать. Такие группы — в 🔍 Группы → «🧩 Капча» со ссылкой на сообщение бота: откройте её с телефона разведчика и пройдите проверку. Не прошли за столько дней — разведчик сам выходит (группы каталога и по просьбе пользователей не трогает). 0 — не выходить.",
     "adpost_auto_allow": "1 — группы, куда вступил разведчик, бот сам открывает для рекламы: проверяет права и правила группы и, "
                          "если реклама там не запрещена, показывает её покупателям (по 3 группы раз в ~5 минут). Группу, которую вы "
                          "выключили сами, повторно не открывает. Больше групп — больше постов с аккаунта разведчика: включайте, когда "
@@ -354,7 +358,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
     "channel_poll_min": (1, 1440),      # 0 — бесконечные запросы к t.me
     "rotation_days": (1, 365),          # 0 — разведчик вышел бы из всех групп
-    "user_search_free": (0, 20), "user_search_full": (0, 50), "user_search_days": (1, 60),
+    "user_search_free": (0, 20), "user_search_full": (0, 50), "user_search_days": (1, 60), "captcha_leave_days": (0, 60),
     "join_retry_days": (1, 60), "join_retry_max": (1, 20), "adpost_price": (0, 100_000), "adpost_daily_limit": (1, 50), "adpost_group_daily": (1, 50),
     "adpost_gap_min": (1, 1440),  # 0 — заявку не пробовали бы вовсе
     "spam_suspicious": (0, 100), "spam_block": (0, 100),

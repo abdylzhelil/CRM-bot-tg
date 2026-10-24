@@ -99,6 +99,9 @@ class Group(Base):
     region: Mapped[str] = mapped_column(String(64), default="")  # регион группы (Дагестан, Московская область…)
     audit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда разведчик перепроверял группу
     audit_verdict: Mapped[str] = mapped_column(String(10), default="")  # итог: good/spam/offtopic
+    captcha_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)  # разведчику нельзя писать (капча/«я не бот») с этого момента
+    captcha_link: Mapped[str] = mapped_column(String(255), default="")  # ссылка на сообщение бота с проверкой
+    captcha_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class FeedChat(Base):
