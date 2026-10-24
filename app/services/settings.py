@@ -19,6 +19,8 @@ DEFAULTS: dict[str, str] = {
     "user_search_free": "3",
     "adpost_auto_allow": "0",
     "group_rules_check": "1",
+    "group_audit": "1",
+    "group_audit_leave": "1",
     "user_search_full": "10",
     "user_search_days": "3",
     "adpost_enabled": "0",
@@ -89,6 +91,8 @@ LABELS: dict[str, str] = {
     "user_search_free": "«Найти группы для меня»: запросов у бесплатного тарифа",
     "adpost_auto_allow": "Сам открывать новые группы для рекламы (после проверки)",
     "group_rules_check": "Читать правила всех групп и присылать сводку (📋 Правила групп)",
+    "group_audit": "Перепроверять вступившие группы (спам, город/регион/страна)",
+    "group_audit_leave": "Выходить из спамных групп после проверки",
     "user_search_full": "«Найти группы для меня»: запросов у 💎",
     "user_search_days": "Повторять поиск по запросу пользователя раз в N дней",
     "join_retry_max": "Сколько раз пробовать вступить в группу",
@@ -171,7 +175,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
     ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max", "join_check",
-                        "user_search_free", "user_search_full", "user_search_days", "adpost_auto_allow", "group_rules_check",
+                        "user_search_free", "user_search_full", "user_search_days", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave",
                         "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_provider", "ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_decide", "ai_classify_daily"]),
@@ -197,6 +201,8 @@ SHORT: dict[str, str] = {
     "user_search_free": "Поиск для меня: бесплатно",
     "adpost_auto_allow": "Автооткрытие для рекламы",
     "group_rules_check": "Читать правила групп",
+    "group_audit": "Перепроверка групп",
+    "group_audit_leave": "Выход из спамных",
     "user_search_full": "Поиск для меня: 💎",
     "user_search_days": "Повтор поиска, дн",
     "join_retry_max": "Попыток вступить",
@@ -226,6 +232,8 @@ HINTS: dict[str, str] = {
     "join_check": "1 — перед вступлением разведчик читает название и последние сообщения группы и не вступает в рекламные "
                   "свалки, флуды, игровые и нерусскоязычные чаты (они в «🚫 Пропущены» с причиной, можно вернуть). 0 — вступает во всё из очереди.",
     "group_rules_check": "1 — разведчик по очереди (3 группы раз в ~10 минут, каждую раз в 2 недели) читает описание, закреп, ботов и админов всех своих групп; ИИ (если подключён) решает, можно ли там рекламу и к кому обращаться. Списки — 🔍 Группы → «📋 Правила групп», раз в сутки сводка вам. Сам админам не пишет. 0 — не читать.",
+    "group_audit": "1 — разведчик по очереди (3 группы раз в ~10 минут, каждую раз в месяц) перечитывает последние сообщения своих групп; правила и ИИ (если подключён) решают: живая группа или спам/заработок/реклама, и какой охват — город, регион или вся страна. Итог — 🔍 Группы → «🧹 Проверка групп» и «🗺 Города и регионы». 0 — не проверять.",
+    "group_audit_leave": "1 — из спамных групп разведчик выходит (они в «👋 Вышли», можно вернуть); группы каталога, с рекламой, найденные по просьбе пользователя и возвращённые вами не покидает — только перестаёт брать оттуда заявки. 0 — не выходить, только не брать заявки.",
     "adpost_auto_allow": "1 — группы, куда вступил разведчик, бот сам открывает для рекламы: проверяет права и правила группы и, "
                          "если реклама там не запрещена, показывает её покупателям (по 3 группы раз в ~5 минут). Группу, которую вы "
                          "выключили сами, повторно не открывает. Больше групп — больше постов с аккаунта разведчика: включайте, когда "
@@ -334,7 +342,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),

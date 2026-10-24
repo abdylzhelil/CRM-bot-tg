@@ -56,6 +56,7 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли {cnt.get('left', 0)}", "gr:list:left")],
         [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
         [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk"), ("📋 Правила групп", "gr:rules")],
+        [("🗺 Города и регионы", "gr:geo"), ("🧹 Проверка групп", "gr:audit")],
         [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
     ]))
 
@@ -407,3 +408,182 @@ async def review_all(cb: CallbackQuery) -> None:
                         .values(status="approved" if action == "j" else "skipped"))
         await s.commit()
     await review(cb)
+
+
+# ---------- 🗺 Города и регионы, 🧹 Проверка групп (services/groupcheck.py) ----------
+SCOPE_CODES = ("city", "region", "country", "none")
+
+
+@router.callback_query(F.data == "gr:geo")
+async def geo_menu(cb: CallbackQuery) -> None:
+    from app.services import groupcheck
+
+    async with Session() as s:
+        cnt = await groupcheck.scope_counts(s)
+        cities = await groupcheck.places(s, "city")
+        regions = await groupcheck.places(s, "region")
+    lines = ["🗺 <b>Группы разведчика по охвату</b> (вступившие):"]
+    for code, (icon, label) in groupcheck.SCOPES.items():
+        lines.append(f"{icon} {label}: {cnt.get(code, 0)}")
+    if cities:
+        lines.append("\n🏙 Города: " + ", ".join(f"{esc(p)} {n}" for p, n in cities))
+    if regions:
+        lines.append("🗺 Регионы: " + ", ".join(f"{esc(p)} {n}" for p, n in regions))
+    lines.append("\nОхват определяется по названию, описанию и сообщениям (и ИИ, если подключён) — при поиске, "
+                 "перед вступлением и при перепроверке. Ошибся — откройте группу в списке и поправьте.")
+    rows = [[(f"{icon} {label} · {cnt.get(code, 0)}", f"gr:gs:{code or 'none'}")]
+            for code, (icon, label) in groupcheck.SCOPES.items()]
+    rows.append([("◀️ Назад", "gr:menu")])
+    await reply(cb, "\n".join(lines), kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^gr:gs:(city|region|country|none)$"))
+async def geo_list(cb: CallbackQuery) -> None:
+    code = cb.data.split(":")[2]
+    scope = "" if code == "none" else code
+    async with Session() as s:
+        groups_ = (await s.scalars(select(Group).where(
+            Group.status == "joined", Group.kind == "group", Group.scope == scope)
+            .order_by(Group.members.desc()).limit(20))).all()
+    if not groups_:
+        return await cb.answer("Пусто", show_alert=True)
+    rows = [[(f"{g.title[:34]} · {(g.city or g.region or '—')[:16]}", f"gr:pl:{g.id}")] for g in groups_]
+    rows.append([("◀️ Назад", "gr:geo")])
+    await reply(cb, "Нажмите на группу, чтобы поправить охват (показаны самые большие, до 20):", kb(rows))
+
+
+def _place_card(g: Group) -> tuple[str, list]:
+    from app.services import groupcheck
+
+    icon, label = groupcheck.SCOPES.get(g.scope or "", groupcheck.SCOPES[""])
+    text = (f"<b>{esc(g.title)}</b> · {g.members} уч.\n{icon} Охват: {label}"
+            + (f"\n🏙 Город: {esc(g.city)}" if g.city else "") + (f"\n🗺 Регион: {esc(g.region)}" if g.region else "")
+            + (f"\n🧹 Проверка: {esc(g.audit_verdict)}" + (f" ({g.audit_at:%d.%m})" if g.audit_at else "") if g.audit_verdict else ""))
+    rows = [[("🏙 Город", f"gr:ps:{g.id}:city"), ("🗺 Регион", f"gr:ps:{g.id}:region"),
+             ("🇷🇺 Вся страна", f"gr:ps:{g.id}:country")],
+            [("✏️ Указать город/регион", f"gr:pe:{g.id}"), ("❓ Сбросить", f"gr:ps:{g.id}:none")],
+            [("◀️ Назад", f"gr:gs:{g.scope or 'none'}")]]
+    return text, rows
+
+
+@router.callback_query(F.data.regexp(r"^gr:pl:\d+$"))
+async def place_card(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+    if g is None:
+        return await cb.answer("Группа не найдена", show_alert=True)
+    text, rows = _place_card(g)
+    await reply(cb, text, kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^gr:ps:\d+:(city|region|country|none)$"))
+async def place_set(cb: CallbackQuery) -> None:
+    _, _, gid, code = cb.data.split(":")
+    async with Session() as s:
+        g = await s.get(Group, int(gid))
+        if g is None:
+            return await cb.answer("Группа не найдена", show_alert=True)
+        g.scope = "" if code == "none" else code
+        if code in ("country", "none"):
+            g.region = ""
+            if not g.catalog:
+                g.city = ""
+        elif code == "region" and not g.catalog:
+            g.city = ""
+        await s.commit()
+        text, rows = _place_card(g)
+    await cb.answer("Сохранено")
+    await reply(cb, text, kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^gr:pe:\d+$"))
+async def place_edit(cb: CallbackQuery, state: FSMContext) -> None:
+    await ask(cb, state, "gr_place", "Напишите город или регион группы (например «Махачкала» или «Дагестан»). "
+              "«-» — очистить.", group_id=int(cb.data.split(":")[2]))
+
+
+async def on_place(s, m: Message, d: dict, text: str) -> bool:
+    from app.services import geo
+
+    g = await s.get(Group, d.get("group_id", 0))
+    if g is None:
+        await m.answer("Группа не найдена")
+        return True
+    value = text.strip()[:64]
+    if value == "-":
+        g.city, g.region, g.scope = "", "", ""
+    else:
+        city, region = geo.find(value)
+        if city:
+            g.city, g.region, g.scope = city, region, "city"
+        elif region or value in geo.REGIONS:
+            g.city, g.region, g.scope = "", region or value, "region"
+        elif value.lower().endswith(("область", "край", "республика", "округ")):
+            g.city, g.region, g.scope = "", value, "region"
+        else:
+            g.city, g.region, g.scope = value, g.region, "city"
+    await s.commit()
+    body, rows = _place_card(g)
+    await m.answer(body, reply_markup=kb(rows))
+    return True
+
+
+@router.callback_query(F.data == "gr:audit")
+async def audit_menu(cb: CallbackQuery) -> None:
+    from datetime import timedelta
+
+    from app.models import now
+    from app.services import ai, groupcheck, llm
+
+    async with Session() as s:
+        week = await groupcheck.audit_stats(s, now() - timedelta(days=7))
+        total = await s.scalar(select(func.count()).select_from(Group).where(
+            Group.status == "joined", Group.kind == "group", Group.account_id.is_not(None))) or 0
+        never = await s.scalar(select(func.count()).select_from(Group).where(
+            Group.status == "joined", Group.kind == "group", Group.account_id.is_not(None), Group.audit_at.is_(None))) or 0
+        on = await settings.get(s, "group_audit") == "1"
+        leave = await settings.get(s, "group_audit_leave") == "1"
+        which = await ai.provider(s)
+    text = (
+        "🧹 <b>Проверка групп</b> — разведчик перечитывает последние сообщения своих групп и решает: живая группа "
+        "(объявления, просьбы об услугах) или спам, «заработок», реклама. Заодно определяет город/регион/всю страну.\n"
+        + (f"Решает: правила + ИИ {esc(llm.NAMES.get(which, which))}." if which else "Решает: правила (ИИ не подключён).")
+        + f"\n\nГрупп разведчика: {total}, ещё не проверены: {never}."
+        + f"\nЗа неделю: проверено {week['checked']}, вышли из спамных {week['left']}, "
+          f"оставили, но без заявок {week['muted']}."
+        + ("" if on else "\n⏸ Проверка выключена: ⚙️ → 🔍 Разведчик → «Перепроверка групп».")
+        + ("\nИз спамных разведчик выходит (кроме каталога, рекламы и групп по просьбе пользователей)." if leave
+           else "\nИз спамных не выходит — только перестаёт брать заявки (⚙️ → «Выход из спамных»).")
+        + "\n\nВернуть группу: «👋 Вышли» (снова вступит) или «🙈 Без заявок».")
+    await reply(cb, text, kb([
+        [("🔄 Проверить следующие сейчас", "gr:auditnow")],
+        [("👋 Вышли", "gr:list:left"), ("🙈 Без заявок", "gr:junk")],
+        [("◀️ Назад", "gr:menu")]]))
+
+
+@router.callback_query(F.data == "gr:auditnow")
+async def audit_now(cb: CallbackQuery) -> None:
+    import asyncio
+
+    if not manager or not manager.clients:
+        return await cb.answer("Нет подключённых разведчиков", show_alert=True)
+    await cb.answer("Проверяю следующие 3 группы — итог сообщением через пару минут", show_alert=True)
+
+    async def run() -> None:
+        from app.scout.publisher import audit_one
+        from app.services import groupcheck
+
+        names = {"good": "хорошие", "left": "вышли (спам)", "muted": "без заявок", "skip": "не прочитались"}
+        async with Session() as s:  # кнопка работает и при выключенной фоновой проверке
+            ids = await groupcheck.due(s, set(manager.clients))
+        res: dict[str, int] = {}
+        for gid in ids:
+            try:
+                r = await audit_one(manager, gid)
+            except Exception:
+                r = "skip"
+            res[r] = res.get(r, 0) + 1
+        summary = ", ".join(f"{names.get(k, k)}: {n}" for k, n in res.items()) or "проверять нечего"
+        await cb.message.answer(f"🧹 Проверка групп: {summary}.", reply_markup=kb([[("🧹 Проверка групп", "gr:audit")]]))
+
+    asyncio.create_task(run())

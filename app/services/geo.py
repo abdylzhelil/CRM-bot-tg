@@ -60,13 +60,15 @@ def find(text: str) -> tuple[str, str]:
     return "", region_only
 
 
-def detect(text: str, group_title: str = "", group_city: str = "") -> tuple[str, str]:
+def detect(text: str, group_title: str = "", group_city: str = "", group_region: str = "") -> tuple[str, str]:
     for source in (text, group_title):
         city, region = find(source) if source else ("", "")
         if city or region:
             return city, region
     if group_city:
-        return group_city, CITIES.get(group_city, group_city if group_city in REGIONS else "")
+        return group_city, CITIES.get(group_city, group_city if group_city in REGIONS else group_region)
+    if group_region:  # группа региона (определил разведчик при проверке группы)
+        return "", group_region
     return "", ""
 
 

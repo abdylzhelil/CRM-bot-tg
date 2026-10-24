@@ -89,7 +89,10 @@ async def digest(s: AsyncSession, force: bool = False) -> str:
         AdPost.status == "deleted", AdPost.sent_at > last)) or 0
     failed = await s.scalar(select(func.count()).select_from(AdPost).where(
         AdPost.status == "failed", AdPost.scheduled_at > last)) or 0
-    if not fresh and not (deleted or failed) and not force:
+    from app.services import groupcheck
+
+    audit = await groupcheck.audit_stats(s, last)
+    if not fresh and not (deleted or failed or audit["checked"]) and not force:
         return ""
     if row is None:
         s.add(Setting(key=DIGEST_KEY, value=now().isoformat()))
@@ -115,6 +118,9 @@ async def digest(s: AsyncSession, force: bool = False) -> str:
         problems.append(f"🗑 рекламных постов удалили админы: {deleted}")
     if failed:
         problems.append(f"⚠️ постов не вышло: {failed}")
+    if audit["checked"]:
+        lines.append(f"\n🧹 Проверка групп: проверено {audit['checked']}, вышли из спамных {audit['left']}, "
+                     f"оставили без заявок {audit['muted']} (🔍 Группы → 🧹 Проверка групп).")
     if problems:
         lines.append("\nПроблемы за сутки:\n" + "\n".join("• " + p for p in problems))
     left = total.get("", 0)

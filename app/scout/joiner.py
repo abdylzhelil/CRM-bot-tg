@@ -42,19 +42,24 @@ async def _retry_later(s, g: Group) -> None:
         g.join_retry_at = now() + timedelta(days=await settings.get_int(s, "join_retry_days"))
 
 
-async def _quality(client: TelegramClient, entity, g: Group) -> str:
-    """Почему не стоит вступать ("" — вступаем). Сообщения открытой группы читаются без вступления."""
+async def _quality(client: TelegramClient, entity, g: Group, s=None) -> tuple[str, dict]:
+    """Почему не стоит вступать ("" — вступаем) и итог проверки (охват группы).
+    Сообщения открытой группы читаются без вступления; правила, затем ИИ (если подключён)."""
     from app.scout.search import _sample
-    from app.services import junk
+    from app.services import groupcheck, junk
 
     reason = junk.title_reason(g.title)
     if reason:
-        return reason
+        return reason, {}
     try:
         _, texts = await _sample(client, entity)
     except Exception:
-        return ""
-    return junk.content_reason(texts)
+        texts = []
+    if s is None:
+        res = groupcheck.by_rules(g.title, "", texts)
+    else:
+        res = await groupcheck.assess(s, g.title, "", texts)
+    return ("" if res["verdict"] == "good" else res["reason"] or "не подходит"), res
 
 
 async def join_one(client: TelegramClient, acc_id: int) -> bool:
@@ -97,9 +102,16 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
         try:
             entity = await client.get_entity(g.username or g.tg_id)
             if g.status == "approved" and g.skip_reason != "вернул админ" and check:
-                reason = await _quality(client, entity, g)
-                if reason:  # реклама/флуд/не по-русски — вступление не тратим
-                    g.status, g.skip_reason = "skipped", reason
+                reason, res = await _quality(client, entity, g, s)
+                if res:
+                    g.audit_verdict = res.get("verdict", "")
+                    if res.get("ai"):  # ИИ уже посмотрел — перепроверка этой группы через месяц
+                        g.audit_at = now()
+                    from app.services import groupcheck
+
+                    groupcheck.apply_place(g, res)
+                if reason:  # реклама/флуд/заработок/не по-русски — вступление не тратим
+                    g.status, g.skip_reason = "skipped", reason[:120]
                     await s.commit()
                     log.info("не вступаю в %s: %s", g.title, reason)
                     return True

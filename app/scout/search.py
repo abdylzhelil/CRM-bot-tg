@@ -11,7 +11,7 @@ from telethon.tl.types import Channel
 from app.bot import notify
 from app.db import Session
 from app.models import FeedChat, Group, SearchQuery, now
-from app.services import junk, settings
+from app.services import groupcheck, junk, settings
 
 log = logging.getLogger(__name__)
 
@@ -163,7 +163,9 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
         except Exception:
             log.exception("данные группы %s", chat.title)
             continue
-        reason = (junk.title_reason(chat.title or "") or junk.content_reason(texts)) if opt["check"] else ""
+        about = getattr(full.full_chat, "about", "") or ""
+        res = groupcheck.by_rules(chat.title or "", about, texts)
+        reason = res["reason"] if opt["check"] else ""
         ok = not reason and members >= opt["min_members"] and (msgs_day < 0 or msgs_day >= opt["min_msgs"])
         async with Session() as s:
             g = Group(
@@ -174,6 +176,7 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
                 wanted_by=owner.user_id if owner is not None and ok else 0,
                 wanted_search=owner.id if owner is not None and ok else 0,
             )
+            groupcheck.apply_place(g, res)
             s.add(g)
             await s.commit()
         if ok:

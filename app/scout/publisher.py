@@ -7,6 +7,7 @@ import re
 from datetime import timedelta
 
 from sqlalchemy import select, update
+from telethon import functions
 from telethon.errors import (
     ChannelPrivateError,
     ChatAdminRequiredError,
@@ -438,6 +439,82 @@ async def rules_round(manager) -> int:
     return done
 
 
+async def audit_one(manager, gid: int) -> str:
+    """Перепроверить одну вступившую группу (правила + ИИ по последним сообщениям). Спамную — покинуть
+    (если не защищена: каталог, реклама, просьба пользователя, вернул админ), иначе — не брать из неё заявки.
+    Возвращает итог: good / left / muted / skip."""
+    from app.scout.search import _sample
+    from app.services import groupcheck
+
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        if g is None or g.status != "joined":
+            return "skip"
+        client = manager.clients.get(g.account_id)
+        leave_on = await settings.get(s, "group_audit_leave") == "1"
+        await s.commit()  # не держим базу, пока ждём Telegram и ИИ
+        if client is None:
+            return "skip"
+        about, texts = "", []
+        try:
+            entity = await resolve(client, g)
+            try:
+                about = (await client(functions.channels.GetFullChannelRequest(entity))).full_chat.about or ""
+            except Exception:
+                pass
+            _, texts = await _sample(client, entity)
+        except Exception:
+            log.info("проверка группы %s: не прочитал", g.title, exc_info=True)
+        g.audit_at = now()
+        if not texts:  # прочитать не вышло — повторим через месяц, ничего не решаем
+            await s.commit()
+            return "skip"
+        res = await groupcheck.assess(s, g.title, about, texts)
+        g.audit_verdict = res["verdict"]
+        groupcheck.apply_place(g, res)
+        if res["verdict"] == "good":
+            await s.commit()
+            return "good"
+        reason = ("проверка: " + (res["reason"] or "не подходит"))[:120]
+        guard = groupcheck.protected(g) or ("вернул админ" if g.skip_reason == "вернул админ" else "")
+        if guard or not leave_on:
+            g.no_leads, g.skip_reason = True, reason  # остаёмся, но заявки отсюда не берём («🙈 Без заявок»)
+            await s.commit()
+            return "muted"
+        await s.commit()
+        try:
+            await client(functions.channels.LeaveChannelRequest(entity))
+        except Exception:
+            log.info("проверка группы %s: не вышел", g.title, exc_info=True)
+            g.no_leads, g.skip_reason = True, reason
+            await s.commit()
+            return "muted"
+        g.status, g.skip_reason = "left", reason
+        await s.commit()
+        log.info("вышел из группы %s: %s", g.title, reason)
+        return "left"
+
+
+async def audit_round(manager) -> dict[str, int]:
+    """🧹 Проверка групп: перепроверить следующие вступившие группы (по groupcheck.PER_ROUND за заход)."""
+    from app.services import groupcheck
+
+    async with Session() as s:
+        if await settings.get(s, "group_audit") != "1":
+            return {}
+        ids = await groupcheck.due(s, set(manager.clients))
+    out: dict[str, int] = {}
+    for gid in ids:
+        try:
+            r = await audit_one(manager, gid)
+        except Exception:
+            log.exception("проверка группы %s", gid)
+            r = "skip"
+        out[r] = out.get(r, 0) + 1
+        await asyncio.sleep(random.uniform(5, 15))
+    return out
+
+
 async def try_conditions(s, manager, post: AdPost, g: Group, acc_id: int, client, entity, since) -> list[str]:
     """Один раз на пост: выполнить условия группы (подписка, пригласить своих). Возвращает сделанное."""
     from app.scout import conditions
@@ -625,6 +702,8 @@ async def publish_loop(manager) -> None:
                 await recheck_groups(manager)
             if ticks % 10 == 3:  # ~раз в 10 минут — правила следующих 3 групп (📋 Правила групп)
                 await rules_round(manager)
+            if ticks % 10 == 7:  # ~раз в 10 минут — перепроверка следующих 3 вступивших групп (🧹 Проверка групп)
+                await audit_round(manager)
             ticks += 1
             if ticks % 30 == 0:  # примерно раз в 30 минут
                 await nudge_unpaid()

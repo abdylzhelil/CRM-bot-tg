@@ -95,6 +95,10 @@ class Group(Base):
     skip_reason: Mapped[str] = mapped_column(String(120), default="")  # почему разведчик не вступил (видно в «🚫 Пропущены»)
     wanted_by: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # пользователь, для которого нашли («🔎 Найти группы для меня»)
     wanted_search: Mapped[int] = mapped_column(Integer, default=0, index=True)  # его запрос (user_searches.id)
+    scope: Mapped[str] = mapped_column(String(8), default="", index=True)  # охват: city/region/country ("" — не определён), services/groupcheck.py
+    region: Mapped[str] = mapped_column(String(64), default="")  # регион группы (Дагестан, Московская область…)
+    audit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # когда разведчик перепроверял группу
+    audit_verdict: Mapped[str] = mapped_column(String(10), default="")  # итог: good/spam/offtopic
 
 
 class FeedChat(Base):

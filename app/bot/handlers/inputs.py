@@ -16,7 +16,7 @@ router = Router()
 
 
 # действия, которые доступны только администратору
-ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_", "apa_", "apg_", "fb_")
+ADMIN_ACTIONS = ("setting", "kw_", "cat_", "bl_", "acc_", "query_", "us_", "bc_", "apa_", "apg_", "fb_", "gr_")
 
 
 @router.message(Ask.value, F.text, ~F.text.startswith("/"))  # команда (/ads, /terms…) — это не ответ на вопрос
@@ -364,4 +364,13 @@ async def _fb_reply(s, m, d, text):
 
 HANDLERS["feedback"] = _feedback
 HANDLERS["fb_reply"] = _fb_reply
+
+
+async def _gr_place(s, m, d, text):
+    from app.bot.handlers import groups as groups_h
+
+    return await groups_h.on_place(s, m, d, text)
+
+
+HANDLERS["gr_place"] = _gr_place
 HANDLERS["acc_limit"] = lambda s, m, d, t: acc_field(s, m, d, t, "limit")
