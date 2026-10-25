@@ -93,6 +93,7 @@ DEFAULTS: dict[str, str] = {
     "bonus_max_days": "180",
     "cleanup_days": "7",
     "cleanup_warn_days": "1",
+    "blocked_keep_days": "14",
     "lead_keep_days": "90",
 }
 
@@ -182,6 +183,7 @@ LABELS: dict[str, str] = {
     "bonus_max_days": "Потолок бонусных дней вперёд (бонусы и приглашения)",
     "cleanup_days": "Удалять не завершивших регистрацию через N дней (0 — не удалять)",
     "cleanup_warn_days": "Предупреждать об удалении за N дней (0 — не предупреждать)",
+    "blocked_keep_days": "Удалять заблокировавших бота через N дней (0 — не удалять)",
     "lead_keep_days": "Хранить заявки N дней, потом удалять (0 — хранить всегда)",
 }
 
@@ -219,7 +221,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("📣", "Реклама в группах", ["adpost_enabled", "adpost_auto_allow", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("📊", "Рейтинг в группах", ["board_enabled", "board_hours", "board_percent", "offer_daily"]),
     ("💰", "Кредиты", ["credits_enabled", "mod_price_monthly", "mod_price_yearly", "mod_price_forever"]),
-    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "lead_keep_days"]),
+    ("🛡", "Антиспам", ["spam_suspicious", "spam_block", "dedupe_days", "spam_votes_to_ban", "offer_votes_to_learn", "cleanup_days", "cleanup_warn_days", "blocked_keep_days", "lead_keep_days"]),
     ("✨", "ИИ", ["ai_provider", "ai_enabled", "ai_model", "ai_free_daily", "ai_paid_daily", "ai_classify", "ai_check_leads", "ai_decide", "ai_classify_daily"]),
     ("📊", "Отчёты", ["report_hour"]),
 ]
@@ -264,7 +266,7 @@ SHORT: dict[str, str] = {
     "adpost_group_daily": "Постов в группу в сутки",
     "adpost_gap_min": "Пауза, мин", "adpost_footer": "Подпись", "adpost_require_erid": "Только с erid (1/0)",
     "spam_suspicious": "Порог «подозрительный»", "spam_block": "Порог «спам»",
-    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "offer_votes_to_learn": "Голосов «Исполнитель» для обучения", "lead_keep_days": "Хранить заявки, дн",
+    "dedupe_days": "Окно дублей, дн", "cleanup_days": "Удалять пустых через, дн", "cleanup_warn_days": "Предупредить за, дн", "blocked_keep_days": "Удалять заблокировавших через, дн", "spam_votes_to_ban": "Голосов «спам» для бана", "offer_votes_to_learn": "Голосов «Исполнитель» для обучения", "lead_keep_days": "Хранить заявки, дн",
     "report_hour": "Час вечернего отчёта",
     "ai_enabled": "ИИ-черновики (1/0)", "ai_model": "Модель Claude", "ai_provider": "Какой ИИ", "ai_free_daily": "ИИ в сутки: бесплатные",
     "ai_paid_daily": "ИИ в сутки: платные", "ai_classify": "ИИ-фильтр заявок (1/0)", "ai_decide": "ИИ-помощник (1/0)", "ai_classify_daily": "ИИ в сутки (помощник)",
@@ -362,6 +364,7 @@ HINTS: dict[str, str] = {
     "bonus_max_days": "Больше этого бонусами не накопить (купленные дни — без потолка).",
     "cleanup_days": "Незавершившие регистрацию удаляются через столько дней. 0 — не удалять.",
     "cleanup_warn_days": "За сколько дней до удаления прислать предупреждение. 0 — без предупреждения.",
+    "blocked_keep_days": "Кто заблокировал бота и не заходил столько дней — удаляется (заявки, настройки). Не удаляем тех, у кого оплаты, кредиты, клиенты в CRM или реклама. Напишет боту снова — просто зарегистрируется заново. 0 — не удалять.",
     "lead_keep_days": "Заявки содержат тексты и ники людей из групп. Через столько дней они удаляются (кроме тех, что взяты в работу). 0 — не удалять.",
 }
 
@@ -428,7 +431,7 @@ RANGES: dict[str, tuple[int, int]] = {
     "spam_suspicious": (0, 100), "spam_block": (0, 100),
     "ref_percent": (0, 100), "bonus_leads": (1, 1000), "free_delay_min": (0, 1440), "free_daily_limit": (0, 1000),
     "share_gap_min": (0, 60), "refund_days": (0, 60), "ad_days": (1, 365), "license_days": (1, 365),
-    "cleanup_days": (0, 365), "cleanup_warn_days": (0, 30), "lead_keep_days": (0, 3650), "default_join_limit": (1, 50),
+    "cleanup_days": (0, 365), "cleanup_warn_days": (0, 30), "blocked_keep_days": (0, 365), "lead_keep_days": (0, 3650), "default_join_limit": (1, 50),
     "price_30": (0, 1_000_000), "price_90": (0, 1_000_000), "price_365": (0, 1_000_000),
 }
 

@@ -224,6 +224,8 @@ async def cleanup_loop() -> None:
                 await cleanup.warn_due(s, _try_send)
             async with Session() as s:
                 await cleanup.auto_cleanup(s)
+            async with Session() as s:
+                await cleanup.auto_blocked(s)
         except Exception:
             log.exception("cleanup_loop")
             await notify.alert_once("cleanup_loop", "В фоновой задаче cleanup_loop ошибка (см. логи сервера).")

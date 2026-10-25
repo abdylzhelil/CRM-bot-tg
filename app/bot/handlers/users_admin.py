@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from app.bot.common import ask, esc, kb, reply
 from app.db import Session
 from app.models import PLANS, Category, Client, Delivery, User, UserCategory
-from app.services import retention
+from app.services import retention, settings
 from app.services import users_admin as users_svc
 from app.services.distribute import delivered_today, is_paid
 
@@ -20,12 +20,15 @@ async def users_menu(target: Message | CallbackQuery) -> None:
     from app.bot.handlers.stats import users_line
 
     async with Session() as s:
-        users = (await s.scalars(select(User).order_by(User.last_seen.desc()).limit(25))).all()
+        users = (await s.scalars(select(User).where(~User.blocked).order_by(User.last_seen.desc()).limit(25))).all()
+        blocked = await s.scalar(select(func.count()).select_from(User).where(User.blocked)) or 0
     rows = [[(("💎 " if is_paid(u) else "") + ("⛔ " if u.blocked else "") + ("⚪ " if not u.onboarded else "") + (u.name or str(u.tg_id))[:40]
               + (f" · {u.city}" if u.city else ""), f"us:open:{u.tg_id}")] for u in users]
     rows.append([("🔎 Найти по ID или @нику", "us:find")])
     rows.append([("🗑 Удалить данные автора заявки", "us:forget")])
     rows.append([("🧹 Убрать пустые аккаунты", "us:clean")])
+    if blocked:
+        rows.append([(f"⛔ Заблокировали бота · {blocked}", "us:blk")])
     await reply(target, await users_line() + "\nПоследние активные:", kb(rows))
 
 
@@ -120,6 +123,50 @@ async def clean_do(cb: CallbackQuery) -> None:
         ids = await empty_users(s)
         await cleanup.remove(s, ids)
     await cb.answer(f"Удалено: {len(ids)}", show_alert=True)
+    await users_menu(cb)
+
+
+# ---------- заблокировавшие бота ----------
+@router.callback_query(F.data == "us:blk")
+async def blocked_list(cb: CallbackQuery) -> None:
+    from app.services import cleanup
+
+    async with Session() as s:
+        users = (await s.scalars(select(User).where(User.blocked).order_by(User.last_seen.desc()).limit(25))).all()
+        total = await s.scalar(select(func.count()).select_from(User).where(User.blocked)) or 0
+        removable = len(await cleanup.blocked_users(s, 0))
+        days = await settings.get_int(s, "blocked_keep_days")
+    rows = [[(("💎 " if is_paid(u) else "") + (u.name or str(u.tg_id))[:40] + f" · был(а) {u.last_seen:%d.%m}", f"us:open:{u.tg_id}")]
+            for u in users]
+    if removable:
+        rows.append([(f"🧹 Удалить {removable} без оплат и клиентов", "us:blk:ask")])
+    rows.append([("◀️ К списку", "us:menu")])
+    auto = f"Сами удаляются через {days} дн." if days else "Автоудаление выключено (⚙️ → 🛡 Антиспам)."
+    await reply(cb, f"⛔ <b>Заблокировали бота: {total}</b>\nЗаявки им не отправляются, в раздаче они не участвуют. {auto} "
+                "Те, у кого есть оплаты, кредиты, клиенты в CRM или реклама, остаются. Напишут боту снова — вернутся сами.",
+                kb(rows))
+
+
+@router.callback_query(F.data == "us:blk:ask")
+async def blocked_ask(cb: CallbackQuery) -> None:
+    from app.services import cleanup
+
+    async with Session() as s:
+        n = len(await cleanup.blocked_users(s, 0))
+    await reply(cb, f"Удалить из базы {n} чел., заблокировавших бота? Их заявки и настройки сотрутся.",
+                kb([[(f"✅ Удалить {n}", "us:blk:do"), ("❌ Не надо", "us:blk")]]))
+
+
+@router.callback_query(F.data == "us:blk:do")
+async def blocked_do(cb: CallbackQuery) -> None:
+    from app.services import cleanup, erase
+
+    done = 0
+    async with Session() as s:
+        for u in await cleanup.blocked_users(s, 0):
+            if await erase.erase_user(s, u.tg_id):
+                done += 1
+    await cb.answer(f"Удалено: {done}", show_alert=True)
     await users_menu(cb)
 
 

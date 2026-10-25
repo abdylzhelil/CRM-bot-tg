@@ -39,6 +39,36 @@ async def empty_users(s: AsyncSession, days: int) -> list[User]:
     return out
 
 
+async def blocked_users(s: AsyncSession, days: int) -> list[User]:
+    """Заблокировали бота и не заходили дольше days дней. Не трогаем админов, тех, у кого оплаты, заказы рекламы, кредиты,
+    группы с нашим ботом или клиенты в CRM (там их данные и деньги)."""
+    cutoff = now() - timedelta(days=days)
+    users = (await s.scalars(select(User).where(User.blocked, ~User.is_admin, User.last_seen < cutoff))).all()
+    out = []
+    for x in users:
+        has = (x.credits or 0) + (x.credits_hold or 0)
+        for model in (Client, Payment, AdOrder, CreditTx):
+            has += await s.scalar(select(func.count()).select_from(model).where(model.user_id == x.tg_id)) or 0
+        has += await s.scalar(select(func.count()).select_from(Group).where(Group.board_admin == x.tg_id)) or 0
+        if not has:
+            out.append(x)
+    return out
+
+
+async def auto_blocked(s: AsyncSession) -> int:
+    """Удалить заблокировавших бота через blocked_keep_days (0 — не удалять)."""
+    from app.services import erase
+
+    days = await settings.get_int(s, "blocked_keep_days")
+    if days <= 0:
+        return 0
+    done = 0
+    for u in await blocked_users(s, days):
+        if await erase.erase_user(s, u.tg_id):
+            done += 1
+    return done
+
+
 async def remove(s: AsyncSession, ids: list[int]) -> None:
     if not ids:
         return

@@ -73,7 +73,8 @@ async def users_line() -> str:
         total = await s.scalar(select(func.count()).select_from(User))
         active = await s.scalar(select(func.count()).select_from(User).where(User.last_seen > now() - timedelta(days=7)))
         paid = await s.scalar(select(func.count()).select_from(User).where(User.plan == "full"))
-        ready = await s.scalar(select(func.count()).select_from(User).where(User.onboarded)) or 0
+        ready = await s.scalar(select(func.count()).select_from(User).where(User.onboarded, ~User.blocked)) or 0
+        gone = await s.scalar(select(func.count()).select_from(User).where(User.blocked)) or 0
         unverified = await s.scalar(select(func.count()).select_from(User).where(~User.verified)) or 0
         pay = (await s.execute(select(func.count(), func.coalesce(func.sum(Payment.amount - Payment.refunded_amount), 0)).where(
             Payment.created_at > now() - timedelta(days=30)))).one()
@@ -89,14 +90,15 @@ async def users_line() -> str:
         c_total, c_holders, c_earned = await credits.totals(s)
     if c_earned or c_total:
         money += f"\n💰 Кредиты: на счетах {c_total} у {c_holders} чел., начислено всего {c_earned}"
-    empty = total - ready
+    empty = total - ready - gone
+    extra_gone = f"\n⛔ Заблокировали бота: {gone}" if gone else ""
     extra = f"\n🧹 Не завершили регистрацию: {empty}" + (f" (не прошли проверку: {unverified})" if unverified else "") if empty else ""
     async with Session() as s:
         from app.services import ai
 
         calls, tin, tout = await ai.usage_summary(s)
     ai_line = f"\n✨ ИИ за 30 дней: {calls} ответов, токенов: {tin:,} вход / {tout:,} выход".replace(",", " ") if calls else ""
-    return f"👥 Пользователей: {ready} (зарегистрированы), активных за неделю: {active}, на полном тарифе: {paid}{extra}{money}{ai_line}"
+    return f"👥 Пользователей: {ready} (зарегистрированы), активных за неделю: {active}, на полном тарифе: {paid}{extra}{extra_gone}{money}{ai_line}"
 
 
 async def funnel_text() -> str:

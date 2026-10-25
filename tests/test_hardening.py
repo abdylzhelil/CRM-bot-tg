@@ -365,3 +365,24 @@ async def test_stats_show_refunds(maker):
         await s.commit()
     line = await stats.users_line()
     assert "Оплаты за 30 дней: 2 шт. на 1190 ₽" in line and "Возвраты по этим оплатам: 1 шт. на 300 ₽" in line
+
+
+async def test_blocked_users_removed_but_paying_kept(maker):
+    from datetime import timedelta
+
+    from app.models import Payment, User, now
+    from app.services import cleanup, settings
+
+    await make_user(maker, 71, blocked=True, last_seen=now() - timedelta(days=30))
+    await make_user(maker, 72, blocked=True, last_seen=now() - timedelta(days=30))
+    await make_user(maker, 73, blocked=True, last_seen=now() - timedelta(days=1))
+    async with maker() as s:
+        s.add(Payment(user_id=72, amount=49000, days=30, charge_id="c72"))
+        await s.commit()
+    async with maker() as s:
+        assert await cleanup.auto_blocked(s) == 1
+    async with maker() as s:
+        assert await s.get(User, 71) is None
+        assert await s.get(User, 72) is not None and await s.get(User, 73) is not None
+        await settings.put(s, "blocked_keep_days", "0")
+        assert await cleanup.auto_blocked(s) == 0
