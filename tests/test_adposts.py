@@ -10,7 +10,7 @@ from telethon.errors import ChatWriteForbiddenError, FloodWaitError, PeerFloodEr
 from app import config
 from app.bot.handlers import adposts as ah
 from app.bot.handlers import payments as ph
-from app.models import AdOrder, AdPost, Group, ScoutAccount, User, now
+from app.models import PendingLink, AdOrder, AdPost, Group, ScoutAccount, User, now
 from app.scout import publisher
 from app.services import adposts, payments, settings
 from tests.conftest import ADMIN_ID, make_user
@@ -628,9 +628,12 @@ async def test_second_payment_for_same_order_is_not_lost(maker, tgbot, monkeypat
     async with maker() as s:
         await adposts.approve(s, await s.get(AdOrder, oid))
     yk = FakeYK()
-    for _ in range(2):  # покупатель нажал «Оплатить» дважды и оплатил обе ссылки
+    for _ in range(2):  # покупатель нажал «Оплатить» дважды (с перерывом больше получаса) и оплатил обе ссылки
         async with maker() as s:
             await payments.create_ad_link(s, await s.get(AdOrder, oid), "https://t.me/b", api=yk)
+            for row in (await s.scalars(select(PendingLink))).all():
+                row.created_at = now() - timedelta(minutes=31)
+            await s.commit()
     for pid in ("yk-1", "yk-2"):
         yk.payments[pid].update(status="succeeded", paid=True)
     assert await ph.process_links(yk) == 2

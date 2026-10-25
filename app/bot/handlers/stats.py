@@ -83,6 +83,12 @@ async def users_line() -> str:
     if back[0]:
         money += (f"\n↩️ Возвраты по этим оплатам: {back[0]} шт. на {back[1] / 100:.0f} ₽ "
                   "(комиссия ЮKassa за них не возвращается)")
+    async with Session() as s:
+        from app.services import credits
+
+        c_total, c_holders, c_earned = await credits.totals(s)
+    if c_earned or c_total:
+        money += f"\n💰 Кредиты: на счетах {c_total} у {c_holders} чел., начислено всего {c_earned}"
     empty = total - ready
     extra = f"\n🧹 Не завершили регистрацию: {empty}" + (f" (не прошли проверку: {unverified})" if unverified else "") if empty else ""
     async with Session() as s:

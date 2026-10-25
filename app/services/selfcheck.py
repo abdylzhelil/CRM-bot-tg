@@ -162,6 +162,15 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
         add(OK, "Автопродление", f"включено, привязанных карт: {cards}")
     else:
         add("⚪️", "Автопродление", f"выключено (⚙️ → «Автопродление» = 1, когда ЮKassa разрешит), привязанных карт: {cards}")
+    # кредиты: кто ждёт код бота модерации
+    from app.services import credits
+
+    waiting = await credits.waiting_of(s)
+    late = [w for w in waiting if w.sold_at and w.sold_at < now() - timedelta(hours=12)]
+    if late:
+        add(WARN, "Коды бота модерации", f"{len(late)} чел. ждут код дольше 12 ч — 🛠 Управление → 💰 Кредиты → ➕ Коды")
+    elif waiting:
+        add("⚪️", "Коды бота модерации", f"ждут кода: {len(waiting)} — добавьте коды (🛠 → 💰 Кредиты)")
     stuck = await s.scalar(select(func.count()).select_from(PendingLink).where(
         ~PendingLink.done, PendingLink.created_at < now() - timedelta(hours=4))) or 0
     if stuck:

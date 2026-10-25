@@ -76,6 +76,8 @@ async def answer(cb: CallbackQuery, user: User) -> None:
         return await adposts.link_entry(cb.message, user)
     from app.bot.handlers import board
 
+    if await board.quick_join(cb.message, user, param):  # нажал нишу в закрепе — ниша и город уже выбраны
+        return
     gid = board.group_of(param)
     if gid or param == "rating":  # пришёл по кнопке из закрепа группы — сначала её рейтинг
         await board.rating_view(cb.message, user, group_id=gid)

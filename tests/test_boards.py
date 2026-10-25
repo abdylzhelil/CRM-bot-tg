@@ -148,3 +148,37 @@ async def test_take_lead_from_rating(maker, tgbot):
     cb.answer.reset_mock()
     await board.rating_take(cb, free)
     assert "полном тарифе" in cb.answer.call_args.args[0]
+
+
+async def test_niche_buttons_in_pin_and_one_tap_join(maker, tgbot):
+    """Владелец 25.10: в закрепе — кнопка на каждую нишу; нажал — ниша и город группы уже выбраны, пробные дни, заявки."""
+    from app.bot.handlers import board
+    from app.models import UserCategory
+    from app.services import referrals
+
+    gid, root_id = await _data(maker)
+    bot = MagicMock()
+    bot.me = AsyncMock(return_value=SimpleNamespace(id=1, username="klientradarbot"))
+    bot.get_chat_member = AsyncMock(return_value=SimpleNamespace(status="administrator", can_pin_messages=True))
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=55))
+    bot.pin_chat_message = AsyncMock()
+    await board.update_one(bot, gid)
+    markup = bot.send_message.call_args.kwargs["reply_markup"]
+    urls = [b.url for row in markup.inline_keyboard for b in row]
+    assert f"https://t.me/klientradarbot?start=src_g{gid}_c{root_id}" in urls and urls[-1].endswith(f"src_g{gid}")
+    payload = f"src_g{gid}_c{root_id}"
+    assert board.group_of(payload) == gid and board.niche_of(payload) == root_id
+    assert referrals.parse_source(payload) == f"g{gid}"  # комиссия админу группы всё равно считается
+    async with maker() as s:
+        s.add(User(tg_id=4040, name="Новичок", source=f"g{gid}"))
+        await s.commit()
+        u = await s.get(User, 4040)
+    m = MagicMock()
+    m.answer = AsyncMock()
+    assert await board.quick_join(m, u, payload)
+    async with maker() as s:
+        row = await s.get(User, 4040)
+        assert row.onboarded and row.city == "Махачкала" and row.plan == "full" and row.on_trial
+        assert await s.get(UserCategory, (4040, root_id)) is not None
+    assert "Всё настроил" in m.answer.call_args_list[0].args[0]
+    assert not await board.quick_join(m, row, payload)  # уже зарегистрирован — обычный рейтинг

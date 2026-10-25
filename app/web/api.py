@@ -385,6 +385,72 @@ async def renew_off(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "message": "Карта отвязана, автопродление отключено"})
 
 
+# ---------- 💰 кредиты (та же логика, что в боте: services/credits.py) ----------
+async def credits_get(request: web.Request) -> web.Response:
+    from app.services import credits
+
+    user: User = request[USER_KEY]
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+        hist = await credits.history(s, user.tg_id, 20)
+        waiting = await credits.waiting_of(s, user.tg_id)
+        codes = await credits.codes_of(s, user.tg_id)
+        days = await credits.day_offers(s)
+        mods = await credits.mod_offers(s)
+        pct = await settings.get_int(s, "board_percent")
+        bot_name = (await settings.get(s, "mod_bot_username") or "").lstrip("@")
+    name = lambda k: credits.MOD_KINDS.get(k, (k,))[0].replace("🛡 ", "")  # noqa: E731
+    return web.json_response({
+        "balance": row.credits or 0, "percent": pct, "mod_bot": bot_name,
+        "history": [{"line": credits.tx_line(t)} for t in hist],
+        "waiting": [{"id": w.id, "title": name(w.kind), "price": w.price} for w in waiting],
+        "codes": [{"title": name(c.kind), "code": c.code} for c in codes],
+        "days": [{"days": d, "price": p} for d, p in days],
+        "mods": [{"kind": k, "title": t.replace("🛡 ", ""), "price": p, "stock": n} for k, t, p, n in mods],
+    })
+
+
+async def credits_buy(request: web.Request) -> web.Response:
+    """{"days": 30} — дни 💎; {"mod": "monthly"} — код бота модерации; {"cancel": id} — отменить ждущую заявку."""
+    from app.bot.handlers import credits as credits_h
+    from app.models import ModCode
+    from app.services import credits
+
+    user: User = request[USER_KEY]
+    data = await read_json(request) or {}
+    async with credits_h._lock, Session() as s:
+        row = await s.get(User, user.tg_id)
+        try:
+            if "days" in data:
+                price = await credits.buy_days(s, row, _int(data.get("days"), 0))
+                msg = f"Готово: +{_int(data.get('days'), 0)} дн. 💎, списано {price}"
+                mc = None
+            elif "mod" in data:
+                mc = await credits.buy_mod(s, row, str(data.get("mod")))
+                msg = "Код готов" if mc.code else "Заявка принята — код придёт в чат с ботом, как только владелец его добавит"
+            elif "cancel" in data:
+                mc = await s.get(ModCode, _int(data.get("cancel"), 0))
+                if mc is None or mc.user_id != user.tg_id:
+                    return err("not_found", "Заявка не найдена", 404)
+                back = await credits.cancel_waiting(s, mc)
+                mc, msg = None, f"Отменено, вернули {back}"
+            else:
+                return err("invalid", "Что купить?", 422)
+        except credits.CreditError as e:
+            return err("invalid", str(e), 422)
+        await s.commit()
+        balance = row.credits
+    if mc is not None and not mc.code:
+        try:
+            from app.bot import notify
+
+            await notify._send(f"🔑 {user.name or user.tg_id} купил код бота модерации за кредиты, а кодов в запасе нет.",
+                               credits_h.kb([[("🔑 Добавить коды", f"cra:add:{mc.kind}")]]))
+        except Exception:
+            pass
+    return web.json_response({"ok": True, "message": msg, "balance": balance, "code": mc.code if mc else ""})
+
+
 async def pay_create(request: web.Request) -> web.Response:
     """Создаёт платёж ЮKassa (СБП или карта) и возвращает ссылку; тариф включится сам после оплаты (как в боте)."""
     user: User = request[USER_KEY]

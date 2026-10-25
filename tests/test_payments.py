@@ -246,8 +246,11 @@ async def test_link_canceled_and_expired(maker, tgbot, monkeypatch):
     await make_user(maker, 71)
     yk = FakeYK()
     async with maker() as s:
-        await payments.create_link(s, 71, 30, "https://t.me/x", api=yk)
-        await payments.create_link(s, 71, 30, "https://t.me/x", api=yk)
+        url1 = await payments.create_link(s, 71, 30, "https://t.me/x", api=yk)
+        assert await payments.create_link(s, 71, 30, "https://t.me/x", api=yk) == url1  # повторное нажатие — та же ссылка
+        (await s.get(PendingLink, 1)).created_at = now() - timedelta(minutes=31)
+        await s.commit()
+        await payments.create_link(s, 71, 30, "https://t.me/x", api=yk)  # через полчаса — новая
     yk.payments["yk-1"]["status"] = "canceled"
     assert await ph.process_links(yk) == 0
     async with maker() as s:

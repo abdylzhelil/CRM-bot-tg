@@ -119,3 +119,22 @@ async def test_erase_removes_credits(maker):
 
         assert await s.scalar(select(func.count()).select_from(CreditTx)) == 0
         assert await s.scalar(select(func.count()).select_from(ModCode)) == 0
+
+
+async def test_waiting_code_reminder_and_selfcheck(maker, tgbot):
+    from datetime import timedelta
+
+    from app.bot.handlers import credits as h
+    from app.services import selfcheck
+
+    async with maker() as s:
+        u = await _user(s, amount=300)
+        mc = await credits.buy_mod(s, u, "monthly")
+        mc.sold_at = now() - timedelta(hours=13)
+        await s.commit()
+    assert await h.remind_waiting()
+    assert not await h.remind_waiting()  # не чаще раза в 12 ч
+    assert any("Ждут код" in t for _, t in tgbot.sent)
+    async with maker() as s:
+        rows = await selfcheck.run(s)
+    assert any(name == "Коды бота модерации" and "12 ч" in note for _, name, note in rows)

@@ -1,4 +1,5 @@
 """Рефералы: приглашённому и пригласившему по N дней 💎, плюс процент от бонусных дней приглашённого."""
+import re
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -23,7 +24,7 @@ def parse_source(payload: str | None) -> str:
     if payload and payload.startswith("src_"):
         tag = payload[4:]
         if tag and len(tag) <= 24 and all(ch.isascii() and (ch.isalnum() or ch == "_") for ch in tag):
-            return tag.lower()
+            return re.sub(r"^(g\d+)_c\d+$", r"\1", tag.lower())  # ниша из закрепа — источник всё равно группа
     return ""
 
 

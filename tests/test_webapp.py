@@ -649,3 +649,33 @@ async def test_cabinet_mute(client, maker):
     r = await client.post("/api/mute", json={"on": True}, headers=tma(64))
     assert (await r.json())["on"] is False
     assert (await client.post("/api/mute", json={"on": True})).status == 401
+
+
+async def test_credits_in_cabinet(client, maker, tgbot):
+    """💰 Кредиты в кабинете: баланс, обмен на дни 💎 и код бота модерации, отмена ждущей заявки."""
+    from app.models import User
+    from app.services import credits, settings
+
+    await make_user(maker, 70, credits=800)
+    async with maker() as s:
+        await settings.put(s, "price_30", "490")
+        await credits.add_codes(s, "monthly", "AAAA-BBBB-CCCC")
+        await s.commit()
+    assert (await client.get("/api/credits")).status == 401
+    data = await (await client.get("/api/credits", headers=tma(70))).json()
+    assert data["balance"] == 800 and data["days"] == [{"days": 30, "price": 490}] and data["mods"][0]["stock"] == 1
+    r = await (await client.post("/api/credits", json={"mod": "monthly"}, headers=tma(70))).json()
+    assert r["code"] == "AAAA-BBBB-CCCC" and r["balance"] == 550
+    r = await client.post("/api/credits", json={"days": 30}, headers=tma(70))
+    assert r.status == 200 and (await r.json())["balance"] == 60
+    r = await client.post("/api/credits", json={"days": 30}, headers=tma(70))
+    assert r.status == 422 and "Не хватает" in (await r.json())["message"]
+    async with maker() as s:
+        u = await s.get(User, 70)
+        u.credits = 300
+        await s.commit()
+    r = await (await client.post("/api/credits", json={"mod": "monthly"}, headers=tma(70))).json()
+    assert r["code"] == "" and r["balance"] == 50  # запас пуст — заявка ждёт
+    wid = (await (await client.get("/api/credits", headers=tma(70))).json())["waiting"][0]["id"]
+    r = await (await client.post("/api/credits", json={"cancel": wid}, headers=tma(70))).json()
+    assert r["balance"] == 300

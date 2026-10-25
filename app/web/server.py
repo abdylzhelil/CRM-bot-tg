@@ -186,6 +186,8 @@ def make_app() -> web.Application:
     app.router.add_get("/api/plans", api.plans_get)
     app.router.add_post("/api/pay", api.pay_create)
     app.router.add_post("/api/renew/off", api.renew_off)
+    app.router.add_get("/api/credits", api.credits_get)
+    app.router.add_post("/api/credits", api.credits_buy)
     app.router.add_post("/api/mute", api.mute_set)
     app.router.add_get("/api/stats", api.stats_get)
     app.router.add_get("/api/admin/status", admin_api.status_get)

@@ -21,6 +21,7 @@ from app.services import geo, settings
 
 TOP = 10
 _SOURCE = re.compile(r"^g(\d+)$")
+ENTRY = re.compile(r"src_g(\d+)(?:_c(\d+))?")  # кнопки закрепа: вся группа или её ниша
 
 
 def source_tag(group_id: int) -> str:
@@ -29,6 +30,11 @@ def source_tag(group_id: int) -> str:
 
 def join_link(bot_username: str, group_id: int) -> str:
     return f"https://t.me/{bot_username}?start=src_{source_tag(group_id)}"
+
+
+def niche_link(bot_username: str, group_id: int, cat_id: int) -> str:
+    """Кнопка ниши в закрепе: человек сразу получает эту нишу и город группы."""
+    return f"https://t.me/{bot_username}?start=src_{source_tag(group_id)}_c{cat_id}"
 
 
 def place_of(g: Group | None) -> tuple[str, str, str]:
@@ -90,7 +96,8 @@ async def text(s: AsyncSession, city: str, region: str, label: str, footer: str 
 async def group_text(s: AsyncSession, g: Group) -> str:
     city, region, label = place_of(g)
     return await text(s, city, region, label,
-                      "Заказчики ищут исполнителей прямо сейчас. Получайте такие заявки себе в личные сообщения 👇\n"
+                      "Заказчики ищут исполнителей прямо сейчас. Нажмите свою нишу — такие заявки будут приходить "
+                      "вам в личные сообщения, первые дни бесплатно 👇\n"
                       f"<i>обновлено {(now() + timedelta(hours=3)):%d.%m %H:%M} МСК</i>")
 
 

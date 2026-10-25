@@ -130,7 +130,8 @@
         el("button", { class: "btn ghost", text: "💎 Тариф", onclick: renderPlans }),
         el("button", { class: "btn ghost", text: "📊 Статистика", onclick: renderStats }),
         el("button", { class: "btn ghost", text: "🤝 Друзья (+дни)", onclick: renderFriends }),
-        el("button", { class: "btn ghost", text: "🔕 Не беспокоить", onclick: renderMute })
+        el("button", { class: "btn ghost", text: "🔕 Не беспокоить", onclick: renderMute }),
+        el("button", { class: "btn ghost", text: "💰 Кредиты", onclick: renderCredits })
       ]),
       el("button", { class: "btn ghost", text: "Вернуться в чат", onclick: closeApp })
     );
@@ -572,6 +573,62 @@
         el("p", { text: "💰 Сумма выполненных сделок: " + r.done_sum.toLocaleString("ru-RU") + " ₽" }),
         backHome()
       );
+    }).catch(function (e) { toast(e.message, true); go("home"); });
+  }
+
+  // ---------- 💰 Кредиты: баланс, история, обмен на дни 💎 и коды бота модерации ----------
+  function creditsBuy(body, what) {
+    confirmAsk(what, function () {
+      api("POST", "/api/credits", body).then(function (r) {
+        toast(r.message); if (r.code) copyText(r.code); renderCredits();
+      }).catch(function (e) { toast(e.message, true); });
+    });
+  }
+
+  function renderCredits() {
+    setBack(function () { go("home"); });
+    show(el("p", { class: "muted center-block", text: "Загрузка…" }));
+    api("GET", "/api/credits").then(function (r) {
+      var nodes = [
+        el("h1", { text: "💰 Кредиты: " + r.balance }),
+        el("div", { class: "card" }, [
+          el("p", { text: "1 кредит = 1 ₽ внутри бота: обмен на дни 💎 и бота модерации для вашей группы." }),
+          el("p", { class: "muted", text: "Как получить: поставьте КлиентРадар в свою группу админом. Кто придёт по кнопке из закрепа и оплатит 💎 — вам " + r.percent + "% суммы." })
+        ]),
+        el("h2", { text: "💎 Дни за кредиты" })
+      ];
+      if (!r.days.length) nodes.push(el("p", { class: "muted", text: "Сейчас не продаются." }));
+      r.days.forEach(function (d) {
+        nodes.push(el("button", { class: "btn" + (r.balance >= d.price ? "" : " ghost"), text: d.days + " дн. 💎 — " + d.price + " кр.", onclick: function () {
+          creditsBuy({ days: d.days }, "Обменять " + d.price + " кредитов на " + d.days + " дн. 💎?");
+        } }));
+      });
+      nodes.push(el("h2", { text: "🛡 Бот модерации" + (r.mod_bot ? " @" + r.mod_bot : "") }));
+      if (!r.mods.length) nodes.push(el("p", { class: "muted", text: "Сейчас не продаётся." }));
+      r.mods.forEach(function (m) {
+        nodes.push(el("button", { class: "btn" + (r.balance >= m.price ? "" : " ghost"), text: m.title + " — " + m.price + " кр.", onclick: function () {
+          creditsBuy({ mod: m.kind }, "Обменять " + m.price + " кредитов на код «" + m.title + "»?" + (m.stock ? "" : " Код придёт, когда владелец его добавит."));
+        } }));
+      });
+      if (r.waiting.length) {
+        nodes.push(el("h2", { text: "⏳ Ждут кода" }));
+        r.waiting.forEach(function (w) {
+          nodes.push(el("div", { class: "card" }, [el("div", { text: w.title }),
+            el("button", { class: "btn small ghost", text: "↩️ Отменить и вернуть " + w.price, onclick: function () { creditsBuy({ cancel: w.id }, "Отменить заявку и вернуть кредиты?"); } })]));
+        });
+      }
+      if (r.codes.length) {
+        nodes.push(el("h2", { text: "🔑 Мои коды" }));
+        r.codes.forEach(function (c) {
+          nodes.push(el("div", { class: "card" }, [el("div", { text: c.title }), el("pre", { class: "replytext", text: c.code }),
+            el("button", { class: "btn small ghost", text: "📋 Скопировать", onclick: function () { copyText(c.code); } })]));
+        });
+        nodes.push(el("p", { class: "muted", text: "Включить: бот модерации → ваша группа → «🔑 Ввести код активации»." }));
+      }
+      nodes.push(el("h2", { text: "📜 История" }));
+      nodes.push(el("div", { class: "card" }, r.history.length ? r.history.map(function (h) { return el("div", { text: h.line }); }) : [el("div", { class: "muted", text: "пока пусто" })]));
+      nodes.push(el("button", { class: "btn ghost", text: "◀️ Назад", onclick: function () { go("home"); } }));
+      show.apply(null, nodes);
     }).catch(function (e) { toast(e.message, true); go("home"); });
   }
 

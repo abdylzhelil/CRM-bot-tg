@@ -41,14 +41,15 @@ async def update_one(bot: Bot, gid: int) -> str:
         if g is None or not g.bot_member or not g.board_on or await settings.get(s, "board_enabled") != "1":
             return "рейтинг выключен"
         body = await boards.group_text(s, g)
+        city, region, _ = boards.place_of(g)
+        top = (await boards.counts(s, city, region))[0][:NICHE_BUTTONS]
         chat_id, msg_id = g.tg_id, g.board_msg_id
         await s.commit()  # не держим базу, пока ждём Telegram
     ok, note = await _can_pin(bot, chat_id)
     new_id = msg_id
     if ok:
         me = await bot.me()
-        markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text="📥 Получать заявки", url=boards.join_link(me.username, gid))]])
+        markup = pin_markup(me.username, gid, top)
         sent = False
         if msg_id:
             try:
@@ -76,6 +77,18 @@ async def update_one(bot: Bot, gid: int) -> str:
     return note
 
 
+NICHE_BUTTONS = 4  # кнопок-ниш в закрепе (самые частые за неделю)
+
+
+def pin_markup(bot_username: str, gid: int, top: list) -> InlineKeyboardMarkup:
+    """Кнопка на каждую частую нишу (одно нажатие — ниша и город уже выбраны) + «все ниши»."""
+    btns = [InlineKeyboardButton(text=f"{name} · {w}"[:40], url=boards.niche_link(bot_username, gid, cid))
+            for cid, name, w, _ in top]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([InlineKeyboardButton(text="📥 Другая ниша — получать заявки", url=boards.join_link(bot_username, gid))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def board_loop(bot: Bot) -> None:
     """Раз в 10 минут: обновить рейтинг там, где подошёл срок; раз в день — готовые предложения админам."""
     from app.services import botoffer
@@ -88,6 +101,9 @@ async def board_loop(bot: Bot) -> None:
                 await update_one(bot, gid)
                 await asyncio.sleep(2)
             await botoffer.daily(bot)
+            from app.bot.handlers import credits as credits_h
+
+            await credits_h.remind_waiting()
         except Exception:
             log.exception("board_loop")
         await asyncio.sleep(600)
@@ -133,11 +149,42 @@ async def add_link() -> str:
 
 
 def group_of(payload: str | None) -> int:
-    """`src_g12` (кнопка «📥 Получать заявки» в закрепе группы) → 12, иначе 0."""
-    import re
-
-    m = re.fullmatch(r"src_g(\d+)", payload or "")
+    """`src_g12` / `src_g12_c5` (кнопки в закрепе группы) → 12, иначе 0."""
+    m = boards.ENTRY.fullmatch(payload or "")
     return int(m.group(1)) if m else 0
+
+
+def niche_of(payload: str | None) -> int:
+    """`src_g12_c5` (кнопка ниши в закрепе) → 5, иначе 0."""
+    m = boards.ENTRY.fullmatch(payload or "")
+    return int(m.group(2)) if m and m.group(2) else 0
+
+
+async def quick_join(msg: Message, user: User, payload: str | None) -> bool:
+    """Новичок нажал нишу в закрепе группы: ниша и город группы ставятся сами, регистрация закончена
+    (пробные дни 💎 и заявки за сутки — как обычно в finish_onboarding). False — не тот случай."""
+    from app.bot.handlers import profile
+    from app.models import Category, UserCategory
+
+    gid, cid = group_of(payload), niche_of(payload)
+    if user.onboarded or not gid or not cid:
+        return False
+    async with Session() as s:
+        cat, g = await s.get(Category, cid), await s.get(Group, gid)
+        if cat is None or cat.pending or cat.parent_id:
+            return False
+        city, region, label = boards.place_of(g)
+        row = await s.get(User, user.tg_id)
+        if await s.get(UserCategory, (user.tg_id, cid)) is None:
+            s.add(UserCategory(user_id=user.tg_id, category_id=cid))
+        row.city, row.onboarded = city or region, True
+        await s.commit()
+        name = f"{cat.emoji} {cat.name}".strip()
+    user.city, user.onboarded = city or region, True
+    await msg.answer(f"⚡ Всё настроил за вас: ниша «{esc(name)}», место — {esc(label)}.\n"
+                     "Поменять или добавить ниши: 👤 Профиль → 🎯 Ниши, город — 📍 Город.")
+    await profile.finish_onboarding(msg, user)
+    return True
 
 
 def _user_place(user: User) -> tuple[str, str, str]:

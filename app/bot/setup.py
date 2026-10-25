@@ -158,6 +158,8 @@ async def start(m: Message, state: FSMContext, user: User, command: CommandObjec
             if referrer:
                 await referrals.attach(s, user, referrer)
             await referrals.attach_source(s, user, command.args)
+    if user.verified and await board.quick_join(m, user, command.args):  # нажал нишу в закрепе — всё готово
+        return
     group_id = board.group_of(command.args)  # пришёл по кнопке из закрепа группы — сразу её рейтинг
     if command.args == "rating" or group_id:
         if user.verified:

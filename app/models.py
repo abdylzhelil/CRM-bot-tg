@@ -470,6 +470,7 @@ class PendingLink(Base):
     done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auto: Mapped[bool] = mapped_column(Boolean, default=False)  # человек согласился на автопродление
     order_id: Mapped[int] = mapped_column(Integer, default=0)  # не 0 — это оплата заказа рекламы, а не тарифа
+    url: Mapped[str] = mapped_column(String(512), default="")  # ссылка на оплату — повторное нажатие отдаёт её же
 
 
 class AiCall(Base):

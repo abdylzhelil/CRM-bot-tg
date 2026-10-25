@@ -232,6 +232,18 @@ async def _api(method: str, path: str, body: dict | None = None, key: str = "") 
             return data
 
 
+REUSE_LINK = timedelta(minutes=30)  # повторное «Оплатить» в эти минуты — та же ссылка, а не второй платёж
+
+
+async def _fresh_link(s: AsyncSession, user_id: int, amount_kop: int, days: int = 0, order_id: int = 0,
+                      auto: bool = False) -> str:
+    row = await s.scalar(select(PendingLink).where(
+        PendingLink.user_id == user_id, ~PendingLink.done, PendingLink.url != "", PendingLink.days == days,
+        PendingLink.order_id == order_id, PendingLink.amount == amount_kop, PendingLink.auto == auto,
+        PendingLink.created_at > now() - REUSE_LINK).order_by(PendingLink.id.desc()).limit(1))
+    return row.url if row is not None else ""
+
+
 async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str, api=None, auto: bool = False) -> str:
     """Создать платёж ЮKassa и вернуть ссылку на оплату. Способ оплаты не задаём — выбор (СБП, карта…) на странице ЮKassa."""
     import uuid
@@ -239,6 +251,9 @@ async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str,
     price = await price_of(s, days)
     if not price:
         raise RefundError("Этот пакет сейчас недоступен.")
+    old = await _fresh_link(s, user_id, price * 100, days=days, auto=auto)
+    if old:
+        return old
     body = {
         "amount": {"value": f"{price:.2f}", "currency": config.PAYMENT_CURRENCY},
         "capture": True,  # одностадийная оплата — иначе СБП не покажется
@@ -255,7 +270,7 @@ async def create_link(s: AsyncSession, user_id: int, days: int, return_url: str,
     url = (data.get("confirmation") or {}).get("confirmation_url")
     if not url or not data.get("id"):
         raise RefundError(f"ЮKassa отказала: {data.get('description') or data.get('_http')}")
-    s.add(PendingLink(yk_id=data["id"], user_id=user_id, days=days, amount=price * 100, auto=auto))
+    s.add(PendingLink(yk_id=data["id"], user_id=user_id, days=days, amount=price * 100, auto=auto, url=url[:512]))
     await s.commit()
     return url
 
@@ -266,6 +281,9 @@ async def create_ad_link(s: AsyncSession, order, return_url: str, api=None) -> s
 
     if order.price <= 0:
         raise RefundError("Этот заказ бесплатный.")
+    old = await _fresh_link(s, order.user_id, order.price * 100, order_id=order.id)
+    if old:
+        return old
     body = {
         "amount": {"value": f"{order.price:.2f}", "currency": config.PAYMENT_CURRENCY},
         "capture": True,
@@ -280,7 +298,8 @@ async def create_ad_link(s: AsyncSession, order, return_url: str, api=None) -> s
     url = (data.get("confirmation") or {}).get("confirmation_url")
     if not url or not data.get("id"):
         raise RefundError(f"ЮKassa отказала: {data.get('description') or data.get('_http')}")
-    s.add(PendingLink(yk_id=data["id"], user_id=order.user_id, days=0, amount=order.price * 100, order_id=order.id))
+    s.add(PendingLink(yk_id=data["id"], user_id=order.user_id, days=0, amount=order.price * 100, order_id=order.id,
+                      url=url[:512]))
     await s.commit()
     return url
 

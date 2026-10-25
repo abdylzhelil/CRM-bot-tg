@@ -363,3 +363,30 @@ async def on_adjust(s, m: Message, d, text: str):
                                            + f". На счёте: {user.credits}.", reply_markup=kb([[("💰 Мои кредиты", "cr:menu")]]))
         except Exception:
             pass
+
+
+async def remind_waiting() -> bool:
+    """Из board_loop: кто-то ждёт код дольше 3 ч — напомнить владельцу (не чаще раза в 12 ч)."""
+    from datetime import timedelta
+
+    from app.models import Setting, now
+
+    async with Session() as s:
+        waiting = [w for w in await credits.waiting_of(s) if w.sold_at and w.sold_at < now() - timedelta(hours=3)]
+        if not waiting:
+            return False
+        row = await s.get(Setting, "codes_reminded_at")
+        stamp = now().isoformat()
+        if row is not None and row.value and row.value > (now() - timedelta(hours=12)).isoformat():
+            return False
+        if row is None:
+            s.add(Setting(key="codes_reminded_at", value=stamp))
+        else:
+            row.value = stamp
+        await s.commit()
+    kinds = sorted({w.kind for w in waiting})
+    await notify._send(f"🔑 Ждут код бота модерации: {len(waiting)} чел. (кредиты уже списаны). Создайте коды в боте "
+                       "модерации (/newcode) и добавьте — уйдут сами.",
+                       kb([[(f"➕ {credits.MOD_KINDS[k][0].replace('🛡 Бот модерации — ', 'Коды: ')}", f"cra:add:{k}")
+                                         for k in kinds], [("⏳ Кто ждёт", "cra:wait")]]))
+    return True
