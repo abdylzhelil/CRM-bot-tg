@@ -68,6 +68,12 @@ async def _quality(client: TelegramClient, entity, g: Group, s=None) -> tuple[st
         res = groupcheck.by_rules(g.title, "", texts)
     else:
         res = await groupcheck.assess(s, g.title, "", texts)
+        if res["verdict"] == "good" and "вернул админ" != g.skip_reason:
+            from app.services import geo
+
+            places = geo.parse_places(await settings.get(s, "scout_places"))
+            if places and geo.place_state(res.get("city") or g.city, res.get("region") or g.region, g.title, places) is False:
+                return "место не в списке (" + ", ".join(places[:3]) + ("…" if len(places) > 3 else "") + ")", res
     return ("" if res["verdict"] == "good" else res["reason"] or "не подходит"), res
 
 
@@ -75,6 +81,9 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
     """Вступить в одну одобренную группу. True — если попытка была (нужна пауза)."""
     from app.scout.client import ensure_connected
 
+    async with Session() as s:
+        if await settings.get(s, "scout_grow") != "1":
+            return False  # вступление остановлено владельцем (⚙️ «Новые группы»)
     if not await ensure_connected(client):
         return False  # без связи не пытаемся: иначе группа зря ушла бы в «повторить через N дней»
     joined_entity, flood_wait = None, 0.0

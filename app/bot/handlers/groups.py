@@ -63,6 +63,7 @@ def _sections(c: dict) -> dict[str, tuple[str, list]]:
         "quality": ("🧹 Качество групп", [
             [("🧹 Проверка групп", "gr:audit"), ("📋 Правила групп", "gr:rules")],
             [("🗺 Города и регионы", "gr:geo"), (f"🙈 Без заявок (реклама/флуд) {c['junk']}", "gr:junk")],
+            [("🧹 Навести порядок", "gt:menu"), ("📍 Места разведчика", "gp:menu")],
         ]),
         "bot": ("🤖 Наш бот в группах", [
             [("➕ Добавить бота в группу", f"url:https://t.me/{c['me'].username}?startgroup=rating&admin=pin_messages")],
@@ -928,3 +929,172 @@ async def offer_set(cb: CallbackQuery) -> None:
         await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except Exception:
         pass
+
+
+# ---------- 📍 Места разведчика и 🧹 Навести порядок (владелец 25.10) ----------
+def _place_buttons(allowed: list[str], page: str) -> list:
+    from app.services import geo
+
+    names = geo.REGIONS if page == "r" else list(geo.CITIES)
+    btns = [(("✅ " if n in allowed else "⬜ ") + n, f"gp:t:{geo.KNOWN_PLACES.index(n) + 1}:{page}") for n in names if n in geo.KNOWN_PLACES]
+    return [btns[i:i + 2] for i in range(0, len(btns), 2)]
+
+
+async def places_view(target, page: str = "r") -> None:
+    from app.services import geo, tidy
+
+    async with Session() as s:
+        allowed = geo.parse_places(await settings.get(s, "scout_places"))
+        users = await tidy.user_places(s)
+        home = await settings.get(s, "home_region")
+    mine = ", ".join(f"{p} — {n}" for p, n in users[:8]) or "никто ещё не указал город"
+    text = ("📍 <b>Места разведчика</b>\nРазведчик ищет и берёт только группы из выбранных мест. Группы, где место "
+            "не определить, он пока берёт и после вступления проверяет.\n\n"
+            f"Сейчас: <b>{esc(', '.join(allowed)) if allowed else 'любые (ограничения нет)'}</b>\n"
+            f"👥 Места ваших пользователей: {esc(mine)}\nСвой регион: {esc(home or '—')}\n\n"
+            "Отметьте нужные (регион включает его города):")
+    rows = [[("📥 Взять места пользователей", "gp:users"), ("🌐 Любые места", "gp:any")]]
+    rows += _place_buttons(allowed, page)
+    rows.append([("🏙 Города" if page == "r" else "🗺 Регионы", f"gp:pg:{'c' if page == 'r' else 'r'}"), ("◀️ Назад", "gr:sub:quality")])
+    await reply(target, text, kb(rows))
+
+
+@router.callback_query(F.data == "gp:menu")
+async def gp_menu(cb: CallbackQuery) -> None:
+    await places_view(cb)
+
+
+@router.callback_query(F.data.regexp(r"^gp:pg:[rc]$"))
+async def gp_page(cb: CallbackQuery) -> None:
+    await places_view(cb, cb.data.split(":")[2])
+
+
+@router.callback_query(F.data.regexp(r"^gp:t:\d+:[rc]$"))
+async def gp_toggle(cb: CallbackQuery) -> None:
+    from app.services import geo
+
+    _, _, idx, page = cb.data.split(":")
+    i = int(idx) - 1
+    if not 0 <= i < len(geo.KNOWN_PLACES):
+        return await cb.answer("Нет такого места", show_alert=True)
+    name = geo.KNOWN_PLACES[i]
+    async with Session() as s:
+        allowed = geo.parse_places(await settings.get(s, "scout_places"))
+        allowed = [p for p in allowed if p != name] if name in allowed else allowed + [name]
+        await settings.put(s, "scout_places", ", ".join(allowed))
+    await places_view(cb, page)
+
+
+@router.callback_query(F.data == "gp:users")
+async def gp_users(cb: CallbackQuery) -> None:
+    from app.services import tidy
+
+    async with Session() as s:
+        users = await tidy.user_places(s)
+        allowed = tidy.allowed_default(users, await settings.get(s, "home_region"))
+        await settings.put(s, "scout_places", ", ".join(allowed))
+    await cb.answer(f"Выбрано мест: {len(allowed)}" if allowed else "Пользователи пока не указали города", show_alert=not allowed)
+    await places_view(cb)
+
+
+@router.callback_query(F.data == "gp:any")
+async def gp_any(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        await settings.put(s, "scout_places", "")
+    await cb.answer("Ограничение по местам снято")
+    await places_view(cb)
+
+
+async def tidy_view(target) -> None:
+    from app.services import tidy
+
+    async with Session() as s:
+        c = await tidy.classify(s)
+        users = await tidy.user_places(s)
+        grow = await settings.get(s, "scout_grow") == "1"
+    allowed = c["allowed"]
+    mine = ", ".join(f"{p} — {n}" for p, n in users[:6]) or "никто ещё не указал город"
+    lines = ["🧹 <b>Навести порядок в группах</b>",
+             f"Разведчик состоит в {c['total']} группах. Остаются: {c['keep']} подходящих + {c['protected']} защищённых "
+             "(каталог, реклама, просьбы пользователей).",
+             f"📍 Места: <b>{esc(', '.join(allowed)) if allowed else 'не выбраны — сначала «📍 Места разведчика»'}</b>",
+             f"👥 Города пользователей: {esc(mine)}", ""]
+    rows = []
+    for kind, (title, why) in tidy.KINDS.items():
+        n = len(c[kind])
+        lines.append(f"{title}: <b>{n}</b> — {why}")
+        for g in c[kind][:3]:
+            lines.append(f"   • {esc(g.title[:40])}")
+        if n:
+            rows.append([(f"👀 {title.split(' ', 1)[1]} · {n}", f"gt:v:{kind}")])
+    lines += ["", f"🔎 Поиск и вступление в новые группы: {'▶️ идёт' if grow else '⏹ остановлен'}"]
+    rows.append([("⏹ Остановить поиск и вступление" if grow else "▶️ Включить поиск и вступление", "gt:grow")])
+    rows.append([("📍 Места разведчика", "gp:menu"), ("◀️ Назад", "gr:sub:quality")])
+    await reply(target, "\n".join(lines), kb(rows))
+
+
+@router.callback_query(F.data == "gt:menu")
+async def gt_menu(cb: CallbackQuery) -> None:
+    await tidy_view(cb)
+
+
+@router.callback_query(F.data == "gt:grow")
+async def gt_grow(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        on = await settings.get(s, "scout_grow") == "1"
+        await settings.put(s, "scout_grow", "0" if on else "1")
+    await cb.answer("Поиск и вступление остановлены" if on else "Поиск и вступление включены", show_alert=True)
+    await tidy_view(cb)
+
+
+@router.callback_query(F.data.regexp(r"^gt:v:(spam|place|quiet)$"))
+async def gt_view(cb: CallbackQuery) -> None:
+    from app.services import tidy
+
+    kind = cb.data.split(":")[2]
+    async with Session() as s:
+        c = await tidy.classify(s)
+    groups_ = c[kind]
+    title, why = tidy.KINDS[kind]
+    if not groups_:
+        return await reply(cb, f"{title}: пусто ✅", kb([[("◀️ Назад", "gt:menu")]]))
+    lines = [f"<b>{title}</b> — {len(groups_)} групп\n{why}\n"]
+    for g in groups_[:25]:
+        where = g.city or g.region or "место не определено"
+        lines.append(f"• {esc(g.title[:45])} · {esc(where)} · заявок {g.leads_count or 0}")
+    if len(groups_) > 25:
+        lines.append(f"…и ещё {len(groups_) - 25}")
+    lines.append("\nВыйти можно только отсюда; вернуть группу — 🔍 Группы → 🔍 Поиск и вступление → 👋 Вышли → ↩️.")
+    await reply(cb, "\n".join(lines), kb([[(f"👋 Выйти из {len(groups_)} групп", f"gt:go:{kind}")], [("◀️ Назад", "gt:menu")]]))
+
+
+@router.callback_query(F.data.regexp(r"^gt:go:(spam|place|quiet)$"))
+async def gt_go(cb: CallbackQuery) -> None:
+    import asyncio
+
+    from app.bot import notify
+    from app.scout import publisher
+    from app.services import tidy
+
+    kind = cb.data.split(":")[2]
+    if manager is None:
+        return await cb.answer("Разведчик сейчас не запущен", show_alert=True)
+    if publisher._leaving.locked():
+        return await cb.answer("Выход из групп уже идёт — дождитесь итога", show_alert=True)
+    async with Session() as s:
+        c = await tidy.classify(s)
+    ids = [g.id for g in c[kind]]
+    if not ids:
+        return await cb.answer("Таких групп нет", show_alert=True)
+    title = tidy.KINDS[kind][0]
+
+    async def run():
+        res = await publisher.leave_groups(manager, ids, f"порядок: {title.split(' ', 1)[1].lower()}")
+        await notify._send(f"🧹 {title}: вышел из {res['left']} групп"
+                           + (f", не вышло {res['failed']}" if res["failed"] else "")
+                           + (f", пропущено {res['skipped']}" if res["skipped"] else "")
+                           + ". Вернуть: 🔍 Группы → 🔍 Поиск и вступление → 👋 Вышли.")
+
+    asyncio.create_task(run())
+    await cb.answer(f"Выхожу из {len(ids)} групп — это займёт несколько минут, пришлю итог", show_alert=True)
+    await tidy_view(cb)

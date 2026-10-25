@@ -153,7 +153,15 @@ async def _options(s) -> dict:
         "min_msgs": await settings.get_int(s, "min_msgs_per_day"),
         "auto": await settings.get(s, "mode") == "auto",
         "check": await settings.get(s, "join_check") == "1",
+        "places": geo_places(await settings.get(s, "scout_places")),
+        "grow": await settings.get(s, "scout_grow") == "1",
     }
+
+
+def geo_places(raw: str) -> list[str]:
+    from app.services import geo
+
+    return geo.parse_places(raw)
 
 
 async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> dict | None:
@@ -203,6 +211,11 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
         about = getattr(full.full_chat, "about", "") or ""
         res = groupcheck.by_rules(chat.title or "", about, texts)
         reason = res["reason"] if opt["check"] else ""
+        from app.services import geo
+
+        if not reason and opt.get("places") and geo.place_state(res.get("city", ""), res.get("region", ""),
+                                                                chat.title or "", opt["places"]) is False:
+            reason = "место не в списке (" + ", ".join(opt["places"][:3]) + ("…" if len(opt["places"]) > 3 else "") + ")"
         ok = not reason and members >= opt["min_members"] and (msgs_day < 0 or msgs_day >= opt["min_msgs"])
         async with Session() as s:
             g = Group(
@@ -231,6 +244,9 @@ async def user_pass(client: TelegramClient) -> int:
     Каждому — сообщение с итогом. Возвращает число новых групп. ConnectionError — связь потеряна."""
     global _stop_requested
     _stop_requested = False  # прошлое «⏹ Остановить поиск» не должно навсегда выключать поиск для пользователей
+    async with Session() as s:
+        if await settings.get(s, "scout_grow") != "1":
+            return 0  # владелец остановил поиск и вступление (⚙️ «Новые группы»)
     from app.models import UserSearch
     from app.scout.client import ensure_connected
     from app.services import mysearch
@@ -272,6 +288,13 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
     """
     global _stop_requested
     _stop_requested = False
+    async with Session() as s:
+        if await settings.get(s, "scout_grow") != "1":
+            await save_last("поиск новых групп выключен (⚙️ → «Новые группы»)")
+            if report:
+                await notify._send("🔍 Поиск новых групп сейчас выключен — разведчик только читает группы, где уже состоит. "
+                                   "Включить: ⚙️ Настройки → 🧹 Проверка групп и капча → «Новые группы».")
+            return 0
     from app.scout.client import ensure_connected
 
     if not await ensure_connected(client):  # нет связи — запросы не тратим, повторим позже

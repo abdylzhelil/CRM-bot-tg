@@ -19,6 +19,8 @@ DEFAULTS: dict[str, str] = {
     "join_retry_max": "4",
     "join_check": "1",
     "home_region": "Дагестан",
+    "scout_grow": "1",
+    "scout_places": "",
     "user_search_free": "3",
     "adpost_auto_allow": "0",
     "group_rules_check": "1",
@@ -107,6 +109,8 @@ LABELS: dict[str, str] = {
     "join_retry_days": "Повторять заявку на вступление через N дней",
     "join_check": "Проверять группу перед вступлением (название и сообщения)",
     "home_region": "Свой регион: искать и вступать с него",
+    "scout_grow": "Искать и вступать в новые группы",
+    "scout_places": "Места разведчика (пусто — любые)",
     "user_search_free": "«Найти группы для меня»: запросов у бесплатного тарифа",
     "adpost_auto_allow": "Сам открывать новые группы для рекламы (после проверки)",
     "group_rules_check": "Читать правила всех групп и присылать сводку (📋 Правила групп)",
@@ -210,7 +214,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🔍", "Разведчик", ["home_region", "mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
                         "user_search_free", "user_search_full", "user_search_days"]),
-    ("🧹", "Проверка групп и капча", ["join_check", "group_audit", "group_audit_leave", "group_rules_check",
+    ("🧹", "Проверка групп и капча", ["scout_grow", "scout_places", "join_check", "group_audit", "group_audit_leave", "group_rules_check",
                                      "captcha_skip", "captcha_leave_days", "mod_bot_username"]),
     ("📣", "Реклама в группах", ["adpost_enabled", "adpost_auto_allow", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("📊", "Рейтинг в группах", ["board_enabled", "board_hours", "board_percent", "offer_daily"]),
@@ -222,6 +226,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
 
 # Короткие подписи для кнопок (полные — в LABELS, их видно при редактировании)
 SHORT: dict[str, str] = {
+    "scout_grow": "Новые группы", "scout_places": "Места разведчика",
     "home_region": "Свой регион",
     "trial_days": "Пробный 💎, дн", "guarantee_min": "Гарантия: мин. заявок/нед", "guarantee_days": "Гарантия: +дней",
     "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽", "refund_days": "Срок возврата, дн", "autorenew": "Автопродление (1/0)",
@@ -268,6 +273,8 @@ SHORT: dict[str, str] = {
 
 # Подсказка к каждой настройке: что это и на что влияет (показывается при редактировании)
 HINTS: dict[str, str] = {
+    "scout_grow": "1 — разведчик ищет и вступает в новые группы. 0 — поиск и вступление остановлены: он только читает группы, где уже состоит (заявки идут, реклама работает). Удобно, когда групп достаточно или пора сокращать память. Кнопка: 🔍 Группы → 🧹 Качество групп → 🧹 Навести порядок.",
+    "scout_places": "Какие города и регионы нужны. Пусто — любые. Если заполнено, разведчик не берёт группы, чьё место известно и не входит в список (например, Паттайя при списке «Дагестан»); группы без понятного места пока берёт, а после вступления проверяет. Выбор кнопками: 🔍 Группы → 🧹 Качество групп → 📍 Места.",
     "home_region": "Регион, с которого разведчик начинает: в каждом поиске 5 запросов из 20 — про его города, и вступает он сначала в группы этого региона, потом соседних, потом остальной России; заграничные барахолки — в самом конце. Напишите название как в списке городов бота (например: Дагестан, Чечня, Москва). Пусто — без приоритета.",
     "mode": "semi — разведчик спрашивает вас о вступлении, auto — вступает сам.",
     "min_members": "Группы меньше этого размера разведчик пропускает.",
@@ -407,7 +414,7 @@ class SettingError(ValueError):
 
 
 # Переключатели: только 0 или 1 (иначе «2» молча считалось бы «выключено»)
-FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave", "ai_check_leads", "captcha_skip", "board_enabled", "credits_enabled"}
+FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave", "ai_check_leads", "captcha_skip", "board_enabled", "credits_enabled", "scout_grow"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
     "max_recipients": (1, 50),
@@ -437,6 +444,15 @@ def validate(key: str, text: str) -> str:
     elif key in ("report_hour", "channel_hour"):
         if not text.isdigit() or int(text) > 23:
             raise SettingError("Нужен час от 0 до 23")
+    elif key == "scout_places":
+        from app.services import geo
+
+        if text in ("", "-"):
+            return ""
+        bad = [p.strip() for p in text.split(",") if p.strip() and p.strip() not in geo.KNOWN_PLACES]
+        if bad:
+            raise SettingError("Не знаю: " + ", ".join(bad) + ". Выбирайте кнопками: 🔍 Группы → 🧹 Качество групп → 📍 Места")
+        return ", ".join(geo.parse_places(text))
     elif key == "home_region":
         from app.services import geo
 

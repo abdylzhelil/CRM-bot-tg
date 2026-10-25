@@ -162,6 +162,13 @@ async def run(s: AsyncSession, bot=None, manager=None, yk_api=None) -> list[tupl
         add(OK, "Автопродление", f"включено, привязанных карт: {cards}")
     else:
         add("⚪️", "Автопродление", f"выключено (⚙️ → «Автопродление» = 1, когда ЮKassa разрешит), привязанных карт: {cards}")
+    # поиск и вступление в новые группы (⚙️ «Новые группы») и выбранные места
+    from app.services import geo as geo_
+
+    grow = await settings.get(s, "scout_grow") == "1"
+    places = geo_.parse_places(await settings.get(s, "scout_places"))
+    add("⚪️" if not grow else OK, "Поиск новых групп",
+        ("идёт" if grow else "остановлен (читаю только текущие группы)") + "; места: " + (", ".join(places) if places else "любые"))
     # кредиты: кто ждёт код бота модерации
     from app.services import credits
 

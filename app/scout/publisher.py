@@ -498,6 +498,43 @@ async def audit_one(manager, gid: int) -> str:
         return "left"
 
 
+_leaving = asyncio.Lock()
+
+
+async def leave_groups(manager, gids: list[int], reason: str) -> dict[str, int]:
+    """Выйти из выбранных групп (по кнопке владельца «🧹 Навести порядок»). Не спеша: пауза между выходами.
+    Защищённые группы (каталог, реклама, просьба пользователя) пропускаем. → {left, failed, skipped}."""
+    from app.services import groupcheck
+
+    res = {"left": 0, "failed": 0, "skipped": 0}
+    async with _leaving:  # одна чистка за раз
+        for gid in gids:
+            async with Session() as s:
+                g = await s.get(Group, gid)
+                client = manager.clients.get(g.account_id) if g is not None else None
+                if g is None or g.status != "joined" or groupcheck.protected(g) or client is None:
+                    res["skipped"] += 1
+                    continue
+                await s.commit()  # не держим базу, пока ждём Telegram
+                try:
+                    entity = await resolve(client, g)
+                    await client(functions.channels.LeaveChannelRequest(entity))
+                except FloodWaitError as e:
+                    log.warning("выход из групп: FloodWait %ss", e.seconds)
+                    await asyncio.sleep(min(e.seconds + 5, 600))
+                    res["failed"] += 1
+                    continue
+                except Exception:
+                    log.info("не вышел из группы %s", g.title, exc_info=True)
+                    res["failed"] += 1
+                    continue
+                g.status, g.skip_reason = "left", reason[:120]
+                await s.commit()
+                res["left"] += 1
+            await asyncio.sleep(random.uniform(3, 7))
+    return res
+
+
 async def audit_round(manager) -> dict[str, int]:
     """🧹 Проверка групп: перепроверить следующие вступившие группы (по groupcheck.PER_ROUND за заход)."""
     from app.services import groupcheck

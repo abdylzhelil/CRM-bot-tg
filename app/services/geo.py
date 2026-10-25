@@ -108,6 +108,37 @@ def priority(city: str, region: str, title: str, home: str) -> int:
     return 2
 
 
+def parse_places(raw: str) -> list[str]:
+    """Настройка `scout_places`: «Дагестан, Москва» → ["Дагестан", "Москва"] (только известные боту места)."""
+    out = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part in KNOWN_PLACES and part not in out:
+            out.append(part)
+    return out
+
+
+def place_state(city: str, region: str, title: str, allowed: list[str]) -> bool | None:
+    """Подходит ли группа под выбранные места: True — да, False — нет, None — место группы не определено.
+    Пустой список мест — без ограничений. Разрешён регион — подходят и его города; разрешён город — и группы
+    всего его региона без города."""
+    if not allowed:
+        return True
+    region = region or region_of(city)
+    if not city and not region:
+        city, region = find(title or "")
+        region = region or region_of(city)
+    if not city and not region:
+        return False if is_foreign(title) else None
+    if city and city in allowed:
+        return True
+    if region and region in allowed:
+        return True
+    if not city and region and any(region_of(a) == region for a in allowed):
+        return True
+    return False
+
+
 def region_of(place: str) -> str:
     return CITIES.get(place, place if place in REGIONS else "")
 
