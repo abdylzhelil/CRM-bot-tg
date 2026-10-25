@@ -847,6 +847,7 @@
         el("div", { text: "Заявок: сегодня " + u.today + ", всего " + u.total + " · клиентов: " + u.clients }),
         el("div", { class: "muted", text: "С нами с " + new Date(u.since).toLocaleDateString("ru-RU") + (u.blocked ? " · ⛔ заблокировал бота" : "") + (u.source ? " · пришёл: " + u.source : "") })
       ]),
+      el("button", { class: "btn small", text: "👤 Открыть профиль", onclick: function () { openContact(u.username ? "https://t.me/" + u.username : "tg://user?id=" + u.id); } }),
       el("h2", { text: "Тариф" }),
       el("div", { class: "row" }, [
         el("button", { class: "btn small", text: "💎 +30 дней", onclick: function () { plan("30", "Добавить 30 дней 💎."); } }),

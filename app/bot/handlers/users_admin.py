@@ -57,9 +57,14 @@ async def user_card(target, tg_id: int) -> None:
         f"Тариф: {plan}{until}\n💰 Кредиты: {u.credits or 0}\nГород: {esc(u.city or 'вся Россия')}\nНиши: {esc(', '.join(niches)) or '—'}\n"
         f"Заявок: сегодня {today}, всего {total} · клиентов в CRM: {clients}\n"
         f"С нами с {u.created_at:%d.%m.%Y}, был(а) {u.last_seen:%d.%m %H:%M} UTC"
+        f"{(chr(10) + 'Пришёл: ' + esc(u.source)) if u.source else ''}"
         f"{chr(10) + '⛔ Бот заблокирован пользователем' if u.blocked else ''}"
     )
+    profile = [("👤 Открыть профиль", f"url:tg://user?id={tg_id}")]
+    if u.username:
+        profile.append(("✍️ Написать", f"url:https://t.me/{u.username}"))
     await reply(target, text, kb([
+        profile,
         [("💎 +30 дней", f"us:plan:{tg_id}:30"), ("💎 +365 дней", f"us:plan:{tg_id}:365")],
         [("💎 Бессрочно", f"us:plan:{tg_id}:0"), ("🆓 Бесплатный", f"us:plan:{tg_id}:free")],
         [("◀️ К списку", "us:menu")],

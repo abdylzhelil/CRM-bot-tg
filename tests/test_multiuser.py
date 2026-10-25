@@ -378,3 +378,24 @@ async def test_leads_by_place_home_region_first(maker, tgbot):
     await leads.leads_view(c, user)
     text = c.answer.call_args.args[0]
     assert "📍 Дагестан" in text and "из 2" in text
+
+
+async def test_admin_user_card_profile_buttons(maker, monkeypatch):
+    from app.bot.handlers import users_admin
+
+    await make_user(maker, 4242, username="ali_master")
+    await make_user(maker, 4343)
+    sent = {}
+
+    async def fake_reply(target, text, markup=None, **kw):
+        sent["text"], sent["markup"] = text, markup
+
+    monkeypatch.setattr(users_admin, "reply", fake_reply)
+
+    def urls():
+        return [b.url for row in sent["markup"].inline_keyboard for b in row if b.url]
+
+    await users_admin.user_card(None, 4242)
+    assert "tg://user?id=4242" in urls() and "https://t.me/ali_master" in urls()
+    await users_admin.user_card(None, 4343)
+    assert urls() == ["tg://user?id=4343"]
