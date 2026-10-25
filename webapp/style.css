@@ -78,3 +78,15 @@ nav button[aria-current="true"] div:first-child { animation: pop .3s ease-out; }
 
 .warn { color: #b45309; background: rgba(245, 158, 11, .12); border-radius: 10px; padding: 8px 10px; font-size: 14px; }
 @media (prefers-color-scheme: dark) { .warn { color: #fbbf24; } }
+
+/* Состояние бота: список «название — значение» */
+.grid + .card, .grid + h2 { margin-top: 10px; }
+.kv-list { padding: 4px 14px; }
+.kv { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid color-mix(in srgb, var(--hint) 18%, transparent); }
+.kv:last-child { border-bottom: 0; }
+.kv-i { flex: none; width: 22px; text-align: center; }
+.kv-l { flex: 1; min-width: 0; }
+.kv-v { color: var(--hint); text-align: right; font-size: 14px; max-width: 55%; overflow-wrap: anywhere; }
+.kv-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.badge.warn { background: color-mix(in srgb, #f5a524 20%, transparent); color: #f5a524; }
+.muted.small { font-size: 13px; }

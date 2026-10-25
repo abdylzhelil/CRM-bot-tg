@@ -708,6 +708,14 @@
   }
 
   function flag(ok) { return ok ? "✅" : "⬜"; }
+  var AI_NAMES = { gigachat: "GigaChat", yandex: "YandexGPT", local: "своя модель", anthropic: "Claude" };
+  // строка «значок · название … значение»; ok: true/false или уровень ok/warn/bad
+  function kv(ok, label, value) {
+    var icon = ok === "warn" ? "⚠️" : ok === "bad" ? "🔴" : (ok === "ok" || ok === true) ? "✅" : "⬜";
+    return el("div", { class: "kv" }, [el("span", { class: "kv-i", text: icon }), el("span", { class: "kv-l", text: label }),
+      el("span", { class: "kv-v", text: value || (ok === true ? "вкл" : ok ? "" : "выкл") })]);
+  }
+  function kvCard(rows) { return el("div", { class: "card kv-list" }, rows.filter(Boolean)); }
 
   function adminStatus(body) {
     body.appendChild(el("p", { class: "muted center-block", text: "Загрузка…" }));
@@ -717,26 +725,41 @@
       var accs = Object.keys(d.accounts).map(function (k) { return (ST[k] || k) + ": " + d.accounts[k]; }).join(", ") || "нет";
       var nodes = [
         el("div", { class: "grid" }, [stat(d.users, "зарегистрировано"), stat(d.paid, "на 💎"), stat(d.leads_day, "заявок за сутки"), stat(d.sent_day, "рассылок за сутки")]),
-        el("div", { class: "card" }, [
-          el("b", { text: "🔍 Разведчик: " + (d.scout_paused ? "⏸ на паузе" : "▶️ работает") }),
-          el("div", { class: "muted", text: "вступает " + (d.mode === "auto" ? "сам" : "после вашего одобрения") + "; аккаунты — " + accs }),
+        el("div", { class: "card scout" }, [
+          el("div", { class: "kv-head" }, [
+            el("b", { text: "🔍 Разведчик" }),
+            el("span", { class: "badge " + (d.scout_paused ? "warn" : "paid"), text: d.scout_paused ? "⏸ на паузе" : "▶️ работает" })
+          ]),
+          el("div", { class: "muted small", text: "Вступает " + (d.mode === "auto" ? "сам" : "после вашего одобрения") + " · аккаунты: " + accs }),
           el("button", { class: "btn small", text: d.scout_paused ? "▶️ Возобновить" : "⏸ Поставить на паузу", onclick: function () {
             confirmAsk(d.scout_paused ? "Возобновить разведчика?" : "Поставить разведчика на паузу?", function () {
               api("PUT", "/api/admin/scout", { paused: !d.scout_paused }).then(function () { toast("Готово"); renderAdmin(); }).catch(function (e) { toast(e.message, true); });
             });
           } })
         ]),
-        el("div", { class: "card" }, [
-          el("div", { text: flag(d.selling) + " Продажа 💎: " + (d.selling ? d.prices.join(" / ") + " ₽" : "не продаётся (цены 0)") }),
-          el("div", { text: flag(d.pay_ready) + " Ключи оплаты: " + (d.pay_ready ? "есть" : "нет") }),
-          el("div", { text: flag(d.refund_days !== "0") + " Возврат: " + (d.refund_days !== "0" ? d.refund_days + " дн." : "выключен") }),
-          el("div", { text: flag(d.autorenew) + " Автопродление  " + flag(d.credits) + " Кредиты  " + flag(d.license) + " Лицензия" }),
-          el("div", { text: flag(d.ads) + " Продвижение групп (за заявки)  " + flag(d.adposts) + " Реклама в группах" }),
-          el("div", { text: flag(d.ai_helper) + " ИИ-помощник (фильтр заявок, правила групп)" + (d.ai_helper ? ": " + ({ gigachat: "GigaChat", yandex: "YandexGPT", local: "своя модель", anthropic: "Claude" }[d.ai_provider] || d.ai_provider) : "") }),
-          el("div", { text: flag(d.ai) + " ИИ-черновики ответа" + (d.ai && d.ai_key ? ": " + ({ gigachat: "GigaChat", yandex: "YandexGPT", local: "своя модель", anthropic: "Claude, " + d.ai_model }[d.ai_provider] || d.ai_provider) : "") + (d.ai && !d.ai_key ? " — ⚠️ нет ключа ИИ" : "") }),
-          el("div", { text: flag(!!d.stats_channel) + " Канал статистики: " + (d.stats_channel || "не подключён") }),
-          d.memory ? el("div", { text: ({ ok: "✅", warn: "⚠️", bad: "🔴" })[d.memory.level] + " Память: свободно " + d.memory.available_mb + " из " + d.memory.total_mb + " МБ, подкачка " + d.memory.swap_used_mb + " МБ" + (d.memory.bot_mb !== null ? ", бот " + d.memory.bot_mb + " МБ" : "") }) : null
-        ])
+        el("h2", { text: "Оплата" }),
+        kvCard([
+          kv(d.selling, "Продажа 💎", d.selling ? d.prices.join(" / ") + " ₽" : "цены 0"),
+          kv(d.pay_ready, "Ключи оплаты", d.pay_ready ? "есть" : "нет"),
+          kv(d.refund_days !== "0", "Возврат", d.refund_days !== "0" ? d.refund_days + " дн." : "выключен"),
+          kv(d.autorenew, "Автопродление"),
+          kv(d.credits, "Кредиты"),
+          kv(d.license, "Лицензия")
+        ]),
+        el("h2", { text: "Реклама и ИИ" }),
+        kvCard([
+          kv(d.ads, "Продвижение групп", "за заявки"),
+          kv(d.adposts, "Реклама в группах"),
+          kv(d.ai_helper, "ИИ-помощник", d.ai_helper ? AI_NAMES[d.ai_provider] || d.ai_provider : ""),
+          kv(d.ai && d.ai_key, "ИИ-черновики", d.ai ? (d.ai_key ? (d.ai_provider === "anthropic" ? "Claude, " + d.ai_model : AI_NAMES[d.ai_provider] || d.ai_provider) : "⚠️ нет ключа") : ""),
+          kv(!!d.stats_channel, "Канал статистики", d.stats_channel || "не подключён")
+        ]),
+        d.memory ? el("h2", { text: "Сервер" }) : null,
+        d.memory ? kvCard([
+          kv(d.memory.level, "Свободная память", d.memory.available_mb + " из " + d.memory.total_mb + " МБ"),
+          kv(d.memory.level, "Подкачка", d.memory.swap_used_mb + " МБ"),
+          d.memory.bot_mb !== null ? kv(true, "Бот занимает", d.memory.bot_mb + " МБ") : null
+        ]) : null
       ];
       if (r.bad.length) nodes.push(el("h2", { text: "Исправить" }), el("div", { class: "card" }, r.bad.map(function (x) { return el("div", { text: "⚠️ " + x }); })));
       nodes.push(el("h2", { text: "В порядке" }), el("div", { class: "card" }, r.ok.map(function (x) { return el("div", { class: "muted", text: "✅ " + x }); })));
