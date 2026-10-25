@@ -215,8 +215,27 @@ async def city_other(s, m, d, text):
     from app.bot.handlers.profile import set_city
     from app.models import User
 
+    import difflib
+
+    from app.bot.common import esc, kb
+    from app.bot.handlers import profile as profile_h
+    from app.services import geo
+
     u = await s.get(User, m.from_user.id)
-    await set_city(m, u, text.strip()[:64])
+    raw = text.strip()[:64]
+    city, region = geo.find(raw)
+    if city or region:  # «мхк», «в Махачкале», «Дагестан» → как в меню
+        return await set_city(m, u, city or region)
+    # незнакомый город или опечатка: молча сохранить — значит почти не получать заявок
+    known = geo.KNOWN_PLACES
+    close = difflib.get_close_matches(raw.lower(), [k.lower() for k in known], n=3, cutoff=0.7)
+    idx = [next(i for i, k in enumerate(known) if k.lower() == c) for c in close]
+    profile_h.PENDING_CITY[m.from_user.id] = raw
+    rows = [[(f"📍 {known[i]}", f"ob:cityx:{i}")] for i in idx]
+    rows += [[("🇷🇺 Вся Россия", "ob:city:all")], [(f"Оставить «{raw[:30]}»", "ob:citykeep")], [("✍️ Написать иначе", "ob:city:other")]]
+    await m.answer((f"🤔 Может, вы имели в виду {', '.join(known[i] for i in idx)}?\n\n" if idx else "")
+                   + f"Город «{esc(raw)}» бот пока не знает: заявки привязываются к знакомым городам, поэтому с ним "
+                   "будут приходить только заявки без указанного места. Выберите вариант:", reply_markup=kb(rows))
 
 
 async def us_find(s, m, d, text):

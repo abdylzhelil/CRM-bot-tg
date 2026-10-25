@@ -122,16 +122,16 @@ async def delete_cat(cb: CallbackQuery) -> None:
             await cb.answer("Категория уже удалена", show_alert=True)
             return await categories_menu(cb)
         ids = [cid] + list((await s.scalars(select(Category.id).where(Category.parent_id == cid))).all())
-        await s.execute(delete(UserCategory).where(UserCategory.category_id.in_(ids)))
-        await s.execute(delete(Keyword).where(Keyword.category_id.in_(ids)))
+        from app.services import niches
+
+        await niches.detach(s, ids)  # группы, заявки и клиенты остаются — просто без этой ниши
         await s.execute(delete(Category).where(Category.parent_id == cid))
         await s.delete(c)
         await s.commit()
         parent = c.parent_id
     rules.invalidate()
     if parent:
-        cb.data = f"cat:open:{parent}"
-        return await open_cat(cb)
+        return await open_cat(cb.model_copy(update={"data": f"cat:open:{parent}"}))  # объекты Telegram менять нельзя
     await categories_menu(cb)
 
 

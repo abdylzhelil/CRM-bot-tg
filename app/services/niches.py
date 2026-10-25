@@ -64,8 +64,21 @@ async def approve(s: AsyncSession, cat: Category) -> None:
     rules.invalidate()
 
 
+async def detach(s: AsyncSession, ids: list[int]) -> None:
+    """Перед удалением ниш: отвязать от них группы, заявки и клиентов (они остаются, просто без ниши),
+    убрать слова и выбор пользователей. Иначе PostgreSQL не даст удалить (внешние ключи)."""
+    from sqlalchemy import update
+
+    from app.models import Client, Group, Lead
+
+    for model in (Group, Lead, Client):
+        await s.execute(update(model).where(model.category_id.in_(ids)).values(category_id=None))
+    await s.execute(delete(UserCategory).where(UserCategory.category_id.in_(ids)))
+    await s.execute(delete(Keyword).where(Keyword.category_id.in_(ids)))
+
+
 async def reject(s: AsyncSession, cat: Category) -> None:
-    await s.execute(delete(Keyword).where(Keyword.category_id == cat.id))
+    await detach(s, [cat.id])
     await s.delete(cat)
     await s.commit()
     rules.invalidate()

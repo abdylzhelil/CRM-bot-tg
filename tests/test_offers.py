@@ -41,6 +41,7 @@ async def test_offer_filtered_and_restorable(maker, tgbot):
     c = MagicMock()
     c.data, c.from_user.id = f"bl:fok:{f.id}", ADMIN_ID
     c.answer, c.message.edit_text, c.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    c.model_copy.side_effect = lambda update: (setattr(c, "data", update["data"]), c)[1]  # как у настоящего нажатия
     await blacklist.filtered_restore(c)
     async with maker() as s:
         assert await s.scalar(select(func.count()).select_from(Lead)) == 2

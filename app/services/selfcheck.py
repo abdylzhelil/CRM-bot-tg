@@ -219,4 +219,6 @@ def render(rows: list[tuple[str, str, str]]) -> str:
     bad = sum(1 for r in rows if r[0] == BAD)
     warn = sum(1 for r in rows if r[0] == WARN)
     head = "🧪 <b>Самопроверка</b>: " + ("всё в порядке ✅" if not bad and not warn else f"проблем {bad}, предупреждений {warn}")
-    return head + "\n\n" + "\n".join(f"{i} <b>{n}</b>: {note}" for i, n, note in rows)
+    from html import escape  # в пояснениях бывают «<2», названия групп и тексты ошибок
+
+    return head + "\n\n" + "\n".join(f"{i} <b>{escape(n)}</b>: {escape(note)}" for i, n, note in rows)

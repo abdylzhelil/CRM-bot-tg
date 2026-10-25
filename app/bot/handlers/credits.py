@@ -290,8 +290,7 @@ async def cra_del(cb: CallbackQuery) -> None:
         await s.delete(row)
         await s.commit()
     await cb.answer("Удалён из запаса")
-    cb.data = f"cra:codes:{kind}"
-    await cra_codes(cb)
+    await cra_codes(cb.model_copy(update={"data": f"cra:codes:{kind}"}))  # объекты Telegram менять нельзя
 
 
 @admin_router.callback_query(F.data == "cra:wait")

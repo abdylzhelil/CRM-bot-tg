@@ -121,3 +121,33 @@ async def test_cabinet_niches_have_sections(maker):
         assert p["niches"][0]["section"] == "💻 Онлайн и IT"
         assert {n["section"] for n in p["niches"]} >= {"🏠 Дом и ремонт", "💼 Бизнес-услуги"}
         assert await s.get(UserCategory, (54, p["niches"][0]["id"]))  # «Сайты» отмечены
+
+
+async def test_typed_city_typo_suggests_known(maker, tgbot):
+    """Город с опечаткой не сохраняется молча (иначе заявки почти не приходят): подсказка и выбор."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.bot.handlers import inputs, profile
+    from app.models import User
+    from app.services import geo
+
+    async with maker() as s:
+        s.add(User(tg_id=7070, name="X", onboarded=True))
+        await s.commit()
+    m = MagicMock()
+    m.from_user.id = 7070
+    m.answer = AsyncMock()
+    async with maker() as s:
+        await inputs.city_other(s, m, {}, "Махачкла")
+    text, markup = m.answer.call_args.args[0], m.answer.call_args.kwargs["reply_markup"]
+    assert "Махачкала" in text
+    data = [b.callback_data for row in markup.inline_keyboard for b in row]
+    i = geo.KNOWN_PLACES.index("Махачкала")
+    assert f"ob:cityx:{i}" in data and "ob:citykeep" in data
+    async with maker() as s:
+        assert (await s.get(User, 7070)).city == ""  # пока не выбрал — не сохранили
+        await inputs.city_other(s, m, {}, "в Махачкале")  # узнаваемый — сразу
+        await s.commit()
+    async with maker() as s:
+        assert (await s.get(User, 7070)).city == "Махачкала"
+    assert profile.PENDING_CITY.get(7070) == "Махачкла"

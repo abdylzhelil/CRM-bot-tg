@@ -190,6 +190,7 @@ async def my_groups(cb: CallbackQuery, user: User) -> None:
         groups = (await s.scalars(select(Group).where(Group.submitted_by == user.tg_id)
                                   .order_by(Group.submitted_at.desc()).limit(30))).all()
         per = await settings.get_int(s, "bonus_leads")
+        level = levels.level_of(*await levels.stats(s, user.tg_id))  # как в «🌐 Каталог», а не сохранённое
     if not groups:
         return await reply(cb, "Вы пока не добавляли группы.", kb([[("➕ Добавить", "cg:add")], [("◀️ Назад", "cg:menu")]]))
     lines = [f"{KIND[g.kind]} <b>{esc(g.title[:40])}</b> — {STATUS.get(g.status, g.status)}"
@@ -199,7 +200,7 @@ async def my_groups(cb: CallbackQuery, user: User) -> None:
     # не тупик: черновик можно дозаполнить, отклонённую — исправить и подать снова, лишнее — убрать
     fix_rows = [[(("✏️ Дозаполнить: " if g.status == "draft" else "🔄 Подать снова: ") + g.title[:20], f"cg:resume:{g.id}"),
                  ("🗑", f"cg:drop:{g.id}")] for g in groups if g.status in ("draft", "rejected")]
-    await reply(cb, "📂 <b>Мои группы</b>\n\n" + "\n".join(lines) + f"\n\n🎁 Получено бонусных дней: {days}\n🏆 Уровень: {levels.name(user.level)}",
+    await reply(cb, "📂 <b>Мои группы</b>\n\n" + "\n".join(lines) + f"\n\n🎁 Получено бонусных дней: {days}\n🏆 Уровень: {levels.name(level)}",
                 kb(fix_rows + ad_rows + [[("◀️ Назад", "cg:menu")]]))
 
 
@@ -269,6 +270,5 @@ async def top(cb: CallbackQuery, user: User) -> None:
     text = f"🏆 <b>Рейтинг авторов групп</b> {scope}\n\n" + ("\n".join(lines) or "Пока никого — станьте первым!")
     if place and place > 10:
         text += f"\n…\nВаше место: {place}"
-    toggle = ("🌍 Вся Россия", "cg:top:all") if not everything else (
-        ("📍 Мой город", "cg:top:mine") if user.city else ("◀️ Назад", "cg:menu"))
-    await reply(cb, text, kb([[toggle, ("◀️ Каталог", "cg:menu")]]))
+    row = [("🌍 Вся Россия", "cg:top:all")] if not everything else ([("📍 Мой город", "cg:top:mine")] if user.city else [])
+    await reply(cb, text, kb([row + [("◀️ Каталог", "cg:menu")]]))

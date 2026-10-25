@@ -52,6 +52,19 @@ async def update_profile(s, user: User, data: dict) -> list[str]:
         changed.append("niches")
     if "city" in data:
         city = str(data["city"]).strip()[:64]
+        if city:
+            import difflib
+
+            from app.services import geo
+
+            found, region = geo.find(city)
+            if found or region:  # «мхк», «в Махачкале» → как в меню бота
+                city = found or region
+            elif city != user.city:  # опечатка в знакомом городе — иначе заявки почти перестанут приходить
+                close = difflib.get_close_matches(city.lower(), [k.lower() for k in geo.KNOWN_PLACES], n=1, cutoff=0.7)
+                if close:
+                    name = next(k for k in geo.KNOWN_PLACES if k.lower() == close[0])
+                    raise ValidationError(f"Город: может, «{name}»? «{city}» бот не знает — исправьте написание")
         row.city = city
         if not city:
             row.only_city = False

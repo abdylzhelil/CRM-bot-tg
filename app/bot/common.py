@@ -69,7 +69,10 @@ async def reply(target: Message | CallbackQuery, text: str, markup: InlineKeyboa
             await target.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
         except Exception:  # «message is not modified» и т.п.
             await target.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
-        await target.answer()
+        try:
+            await target.answer()
+        except Exception:  # на это нажатие уже ответили (например, «Убрано», затем обновлённый список)
+            pass
     else:
         await target.answer(text, reply_markup=markup, disable_web_page_preview=True)
 

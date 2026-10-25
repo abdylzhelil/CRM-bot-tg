@@ -226,6 +226,8 @@ async def test_left_and_covered_groups_have_buttons(maker, monkeypatch):
     target = MagicMock()
     target.bot.me = AsyncMock(return_value=MagicMock(can_read_all_group_messages=True, username="b"))
     await groups.groups_menu(target)
+    target.data = "gr:sub:scout"  # списки разведчика — в подразделе «🔍 Поиск и вступление»
+    await groups.groups_section(target)
     markup = sent.await_args.args[2]
     buttons = {b.callback_data: b.text for row in markup.inline_keyboard for b in row if b.callback_data}
     assert "Вышли 2" in buttons["gr:list:left"] and "С нашим ботом 1" in buttons["gr:list:covered"]

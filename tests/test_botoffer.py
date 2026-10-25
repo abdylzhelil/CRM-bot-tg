@@ -50,5 +50,5 @@ async def test_menu_shows_cards(maker):
     cb.data, cb.answer, cb.message.answer = "gr:bo", AsyncMock(), AsyncMock()
     await groups_h.offer_menu(cb)
     card = cb.message.answer.call_args
-    buttons = [b for row in card.args[1].inline_keyboard for b in row]
+    buttons = [b for row in card.kwargs["reply_markup"].inline_keyboard for b in row]
     assert any((b.url or "").startswith("https://t.me/boss?text=") for b in buttons)

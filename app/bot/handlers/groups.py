@@ -20,53 +20,96 @@ BACKABLE = {"skipped": "🚫 Пропущены", "left": "👋 Вышли (ро
 
 
 @router.message(F.text == "🔍 Группы")
-async def groups_menu(target: Message | CallbackQuery) -> None:
+async def _menu_counts(bot) -> dict:
     async with Session() as s:
         cnt = dict((await s.execute(select(Group.status, func.count()).group_by(Group.status))).all())
-        bot_groups = await s.scalar(select(func.count()).select_from(Group).where(
-            Group.status == "joined", Group.account_id.is_(None), Group.kind == "group"))
-        pending = await catalog.pending_count(s)
-        paused = await settings.get(s, "scout_paused") == "1"
-        junk_n = await s.scalar(select(func.count()).select_from(Group).where(Group.status == "joined", Group.no_leads))
+        c = {
+            "cnt": cnt,
+            "bot_groups": await s.scalar(select(func.count()).select_from(Group).where(
+                Group.status == "joined", Group.account_id.is_(None), Group.kind == "group")),
+            "pending": await catalog.pending_count(s),
+            "paused": await settings.get(s, "scout_paused") == "1",
+            "junk": await s.scalar(select(func.count()).select_from(Group).where(Group.status == "joined", Group.no_leads)),
+        }
         from app.scout import captchas
-
-        cap_n = await captchas.count(s)
         from app.services import botoffer
 
-        offer_n = (await botoffer.counts(s)).get("", 0)
+        c["cap"] = await captchas.count(s)
+        c["offer"] = (await botoffer.counts(s)).get("", 0)
+        _, c["diag"] = await scoutdiag.join_diagnosis(s, manager)
     from app.bot.handlers import adposts as adposts_h
 
-    ad_orders, ad_groups = await adposts_h.counts()
-    me = await target.bot.me()
-    privacy = "" if me.can_read_all_group_messages else (
+    c["ad_orders"], c["ad_groups"] = await adposts_h.counts()
+    c["me"] = await bot.me()
+    return c
+
+
+def _sections(c: dict) -> dict[str, tuple[str, list]]:
+    """Подразделы «🔍 Группы» (раньше — 27 кнопок одним экраном): название и кнопки."""
+    cnt = c["cnt"]
+    return {
+        "scout": ("🔍 Поиск и вступление", [
+            [("▶️ Искать сейчас", "gr:search"), ("⏹ Остановить поиск", "gr:stop")],
+            [("▶️ Возобновить разведчика" if c["paused"] else "⏸ Пауза разведчика", "gr:pause"),
+             ("🔄 Ротация сейчас", "gr:rotate")],
+            [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"),
+             (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
+            [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"),
+             (f"🏆 Вступили {cnt.get('joined', 0)}", "gr:list:joined")],
+            [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли {cnt.get('left', 0)}", "gr:list:left")],
+            [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
+            [(f"🖐 Вступить вручную {cnt.get('manual', 0)}", "gr:man"), (f"🧩 Капча {c['cap']}", "gr:cap")],
+        ]),
+        "quality": ("🧹 Качество групп", [
+            [("🧹 Проверка групп", "gr:audit"), ("📋 Правила групп", "gr:rules")],
+            [("🗺 Города и регионы", "gr:geo"), (f"🙈 Без заявок (реклама/флуд) {c['junk']}", "gr:junk")],
+        ]),
+        "bot": ("🤖 Наш бот в группах", [
+            [("➕ Добавить бота в группу", f"url:https://t.me/{c['me'].username}?startgroup=rating&admin=pin_messages")],
+            [(f"🤖 Группы бота {c['bot_groups']}", "gr:bot"), ("📊 Рейтинг в группах", "gr:brd")],
+            [(f"🤝 Предложить бота админам {c['offer']}", "gr:bo"), ("🛡 Бот модерации", "fd:list")],
+            [(f"📝 От пользователей {c['pending']}", "up:list")],
+        ]),
+        "ads": ("📣 Реклама в группах", [
+            [(f"📣 Заказы рекламы {c['ad_orders']}", "apa:list"), (f"📢 Группы для рекламы {c['ad_groups']}", "apg:list")],
+        ]),
+    }
+
+
+async def groups_menu(target: Message | CallbackQuery) -> None:
+    c = await _menu_counts(target.bot)
+    cnt = c["cnt"]
+    privacy = "" if c["me"].can_read_all_group_messages else (
         "\n⚠️ Privacy mode включён — бот не видит сообщения в группах, где он не админ. "
         "@BotFather → /setprivacy → Disable."
     )
-    async with Session() as s:
-        _, diag = await scoutdiag.join_diagnosis(s, manager)
+    # что ждёт действий владельца — сверху, только если есть
+    todo = [(label, data) for n, label, data in (
+        (c["pending"], f"📝 Группы от пользователей · {c['pending']}", "up:list"),
+        (cnt.get("manual", 0), f"🖐 Вступить вручную · {cnt.get('manual', 0)}", "gr:man"),
+        (c["cap"], f"🧩 Капча · {c['cap']}", "gr:cap"),
+        (cnt.get("candidate", 0), f"❓ Кандидаты · {cnt.get('candidate', 0)}", "gr:list:candidate"),
+        (c["offer"], f"🤝 Предложить бота · {c['offer']}", "gr:bo"),
+        (c["ad_orders"], f"📣 Заказы рекламы · {c['ad_orders']}", "apa:list"),
+    ) if n]
     text = (
-        f"🤖 Бот в группах: {bot_groups}{privacy}\n"
-        f"🔍 Разведчик{' (⏸ на паузе)' if paused else ''}: "
-        + ", ".join(f"{v} {cnt.get(k, 0)}" for k, v in STATUS.items())
-        + "\n\n<b>Вступление в новые группы:</b>\n" + "\n".join(esc(x) for x in diag)
+        f"🔍 <b>Группы</b>{' · ⏸ разведчик на паузе' if c['paused'] else ''}\n"
+        f"Разведчик состоит в {cnt.get('joined', 0)}, в очереди {cnt.get('approved', 0)}; наш бот в группах: {c['bot_groups']}"
+        f"{privacy}\n\n<b>Вступление в новые группы:</b>\n" + "\n".join(esc(x) for x in c["diag"])
+        + ("\n\n⚡ <b>Ждут ваших действий</b> — кнопки сверху." if todo else "\n\n✅ Срочных дел нет.")
     )
-    await reply(target, text, kb([
-        [("➕ Добавить бота в группу", f"url:https://t.me/{me.username}?startgroup=rating&admin=pin_messages")],
-        [("🤖 Группы бота", "gr:bot"), ("❓ Как это работает", "gr:help")],
-        [("🛡 Бот модерации", "fd:list"), (f"📝 От пользователей {pending}", "up:list")],
-        [("▶️ Искать сейчас", "gr:search"), ("⏹ Остановить поиск", "gr:stop")],
-        [("▶️ Возобновить разведчика" if paused else "⏸ Пауза разведчика", "gr:pause"),
-         ("🔄 Ротация сейчас", "gr:rotate")],
-        [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"), (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
-        [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"), ("🏆 Рейтинг вступивших", "gr:list:joined")],
-        [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли {cnt.get('left', 0)}", "gr:list:left")],
-        [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
-        [(f"🙈 Без заявок (реклама/флуд) {junk_n}", "gr:junk"), ("📋 Правила групп", "gr:rules")],
-        [("🗺 Города и регионы", "gr:geo"), ("🧹 Проверка групп", "gr:audit")],
-        [(f"🧩 Капча {cap_n}", "gr:cap"), (f"🖐 Вступить вручную {cnt.get('manual', 0)}", "gr:man")],
-        [(f"🤝 Предложить бота админам {offer_n}", "gr:bo"), ("📊 Рейтинг в группах", "gr:brd")],
-        [(f"📣 Заказы рекламы {ad_orders}", "apa:list"), (f"📢 Группы для рекламы {ad_groups}", "apg:list")],
-    ]))
+    rows = [todo[i:i + 2] for i in range(0, len(todo), 2)]
+    rows += [[("🔍 Поиск и вступление", "gr:sub:scout"), ("🧹 Качество групп", "gr:sub:quality")],
+             [("🤖 Наш бот в группах", "gr:sub:bot"), ("📣 Реклама", "gr:sub:ads")],
+             [("❓ Как это работает", "gr:help")]]
+    await reply(target, text, kb(rows))
+
+
+@router.callback_query(F.data.regexp(r"^gr:sub:(scout|quality|bot|ads)$"))
+async def groups_section(cb: CallbackQuery) -> None:
+    c = await _menu_counts(cb.bot)
+    title, rows = _sections(c)[cb.data.split(":")[2]]
+    await reply(cb, f"<b>{title}</b>", kb(rows + [[("◀️ Группы", "gr:menu")]]))
 
 
 @router.callback_query(F.data == "gr:bot")
@@ -88,7 +131,8 @@ async def bot_help(cb: CallbackQuery) -> None:
         "1. @BotFather → /setprivacy → выберите бота → <b>Disable</b> (один раз).\n"
         "2. Добавьте бота в группу кнопкой «➕ Добавить бота в группу» — нужны права админа группы, "
         "или попросите админа добавить его.\n"
-        "3. Бот молча читает сообщения и присылает вам заявки. В группе он ничего не пишет.\n\n"
+        "3. Бот молча читает сообщения и присылает вам заявки. В группе он пишет только одно — рейтинг заявок "
+        "в закрепе, и то если админ дал ему право закреплять (выключить: /rating off в группе).\n\n"
         "Где взять группы: ваши группы, группы знакомых, а также админы, которым нужен бот-антиспам."
     ), kb([[("◀️ Назад", "gr:menu")]]))
 
@@ -637,7 +681,8 @@ async def captcha_list(cb: CallbackQuery) -> None:
     for g in groups_:
         async with Session() as s:
             note = await captchas.admin_text(s, g)
-        await cb.message.answer(*_captcha_card(g, days, note), disable_web_page_preview=True)
+        text, markup = _captcha_card(g, days, note)
+        await cb.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
 
 
 def _captcha_card(g: Group, days: int, admin_text: str = ""):
@@ -822,7 +867,8 @@ async def offer_menu(cb: CallbackQuery) -> None:
     rows.append([("◀️ Назад", "gr:menu")])
     await reply(cb, head, kb(rows))
     for g in groups_:
-        await cb.message.answer(*_offer_card(g, texts[g.id]), disable_web_page_preview=True)
+        text, markup = _offer_card(g, texts[g.id])
+        await cb.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
 
 
 def _offer_card(g: Group, message: str):
@@ -857,7 +903,8 @@ async def offer_list(cb: CallbackQuery) -> None:
     await cb.answer()
     await cb.message.answer(f"{botoffer.STATUSES[code]} (последние, до 15):")
     for g in groups_:
-        await cb.message.answer(*_offer_card(g, texts[g.id]), disable_web_page_preview=True)
+        text, markup = _offer_card(g, texts[g.id])
+        await cb.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
 
 
 @router.callback_query(F.data.regexp(r"^gr:bos:\d+:(sent|bot|ads|no|skip)?$"))

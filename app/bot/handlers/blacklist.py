@@ -91,8 +91,7 @@ async def remove(cb: CallbackQuery) -> None:
         await s.execute(delete(SpamVote).where(SpamVote.author_id == uid))
         await s.commit()
     await cb.answer("Убрано из списка")
-    cb.data = f"bl:ls:{status}:0"
-    await show_list(cb)
+    await show_list(cb.model_copy(update={"data": f"bl:ls:{status}:0"}))  # объекты Telegram менять нельзя
 
 
 @router.callback_query(F.data == "bl:add")
@@ -159,8 +158,7 @@ async def sample_delete(cb: CallbackQuery) -> None:
             await s.commit()
     spamtexts.invalidate()
     await cb.answer("Удалён — похожие тексты снова могут быть заявками")
-    cb.data = "bl:sp:0"
-    await samples_list(cb)
+    await samples_list(cb.model_copy(update={"data": "bl:sp:0"}))  # объекты Telegram менять нельзя
 
 
 @router.callback_query(F.data == "bl:spadd")
@@ -232,8 +230,7 @@ async def filtered_restore(cb: CallbackQuery) -> None:
         await s.commit()
     lead = await intake.handle(msg, force=True)
     await cb.answer("Заявка разослана" if lead else "Не стала заявкой (дубль или спам)", show_alert=True)
-    cb.data = "bl:fl:0"
-    await filtered_list(cb)
+    await filtered_list(cb.model_copy(update={"data": "bl:fl:0"}))  # объекты Telegram менять нельзя
 
 
 @router.callback_query(F.data.regexp(r"^bl:fdel:\d{1,9}$"))
@@ -244,8 +241,7 @@ async def filtered_delete(cb: CallbackQuery) -> None:
             await s.delete(x)
             await s.commit()
     await cb.answer("Убрано")
-    cb.data = "bl:fl:0"
-    await filtered_list(cb)
+    await filtered_list(cb.model_copy(update={"data": "bl:fl:0"}))  # объекты Telegram менять нельзя
 
 
 # ---------- обучение фильтра «заказчик или исполнитель» ----------
@@ -287,5 +283,4 @@ async def labeled_delete(cb: CallbackQuery) -> None:
             await s.delete(x)
             await s.commit()
     await cb.answer("Удалено — фильтр больше не опирается на этот пример")
-    cb.data = "bl:lb:0"
-    await labeled_list(cb)
+    await labeled_list(cb.model_copy(update={"data": "bl:lb:0"}))  # объекты Telegram менять нельзя

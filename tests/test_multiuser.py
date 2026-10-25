@@ -119,7 +119,7 @@ async def test_isolation_and_take(maker, tgbot):
         assert client.user_id == 70 and (await s.get(Delivery, d.id)).status == "taken"
     view = cb("cl:list:all", 71)
     await clients.show_list(view, "all")
-    assert "Пусто" in view.answer.call_args.args[0]
+    assert "пусто" in view.answer.call_args.args[0].lower()
 
 
 async def test_spam_votes(maker, tgbot):
@@ -291,6 +291,7 @@ async def test_blacklist_remove_clears_votes_and_crm_delete(maker, tgbot):
     c = MagicMock()
     c.data, c.from_user.id = "bl:rm:900", ADMIN_ID
     c.answer, c.message.edit_text, c.message.answer = AsyncMock(), AsyncMock(), AsyncMock()
+    c.model_copy.side_effect = lambda update: (setattr(c, "data", update["data"]), c)[1]  # как у настоящего нажатия
     await blacklist.remove(c)
     async with maker() as s:
         assert await s.get(BlacklistEntry, 900) is None

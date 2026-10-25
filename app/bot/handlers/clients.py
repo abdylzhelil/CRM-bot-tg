@@ -37,9 +37,11 @@ async def show_list(target, stage: str, query: str = "") -> None:
     rows.append([(f"Все {sum(counts.values())}", "cl:list:all"), ("🔎 Поиск", "cl:find"), ("➕ Добавить", "cl:add")])
     for c in clients:
         who = crm.display_name(c)
-        rows.append([(f"{STAGE_NAMES[c.stage][:2]} {who}"[:60], f"cl:open:{c.id}")])
+        rows.append([(f"{STAGE_NAMES[c.stage].split()[0]} {who}"[:60], f"cl:open:{c.id}")])
     title = "👥 Клиенты" + (f" · {STAGE_NAMES[stage]}" if stage != "all" else "") + (f" · «{esc(query)}»" if query else "")
-    await reply(target, title if clients else title + "\nПусто.", kb(rows))
+    empty = ("\nПока пусто. Клиенты появляются, когда вы жмёте «✅ В работу» под заявкой, или добавьте вручную — «➕ Добавить»."
+             if not counts and not query else "\nПусто.")
+    await reply(target, title if clients else title + empty, kb(rows))
 
 
 @router.callback_query(F.data.startswith("cl:list:"))

@@ -219,6 +219,26 @@ async def choose_city(cb: CallbackQuery, user: User, state: FSMContext) -> None:
     await set_city(cb, user, city)
 
 
+PENDING_CITY: dict[int, str] = {}  # город, который человек написал сам и бот его не знает
+
+
+@router.callback_query(F.data.regexp(r"^ob:cityx:\d+$"))
+async def choose_suggested_city(cb: CallbackQuery, user: User) -> None:
+    i = int(cb.data.split(":")[2])
+    if i >= len(geo.KNOWN_PLACES):
+        return await cb.answer("Нет такого варианта", show_alert=True)
+    PENDING_CITY.pop(user.tg_id, None)
+    await set_city(cb, user, geo.KNOWN_PLACES[i])
+
+
+@router.callback_query(F.data == "ob:citykeep")
+async def keep_typed_city(cb: CallbackQuery, user: User) -> None:
+    raw = PENDING_CITY.pop(user.tg_id, "")
+    if not raw:
+        return await cb.answer("Напишите город ещё раз: 📍 Мой город → ✍️ Другой город", show_alert=True)
+    await set_city(cb, user, raw)
+
+
 @router.callback_query(F.data == "ob:only")
 async def toggle_only_city(cb: CallbackQuery, user: User) -> None:
     async with Session() as s:
@@ -477,7 +497,7 @@ async def pf_plan(cb: CallbackQuery, user: User) -> None:
         from app.services import upsell
 
         total, got = await upsell.week_stats(s, user)
-    numbers = (f"📈 За 7 дней по вашим нишам{' в ' + esc(user.city) if user.city else ''}: <b>{total}</b> заявок, "
+    numbers = (f"📈 За 7 дней по вашим нишам{' (' + esc(user.city) + ')' if user.city else ''}: <b>{total}</b> заявок, "
                f"вам пришло <b>{got}</b>.\n\n" if total else "")
     await reply(cb, (
         f"💎 <b>Тариф</b>\nСейчас: {line}\n\n{numbers}"

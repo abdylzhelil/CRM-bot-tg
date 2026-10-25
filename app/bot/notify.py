@@ -87,7 +87,7 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
     rows.append([InlineKeyboardButton(text="✨ Черновик ответа", callback_data=f"lead:ai:{d}"),
                  InlineKeyboardButton(text="🔕 Не беспокоить", callback_data="mt:menu")])
     # все учат фильтр: «это реклама услуг» (у админа — сразу, у остальных — после нескольких голосов)
-    extra = [InlineKeyboardButton(text="🙅 Исполнитель", callback_data=f"lead:offer:{d}")]
+    extra = [InlineKeyboardButton(text="🙅 Исполнитель, не клиент", callback_data=f"lead:offer:{d}")]
     if admin and lead.suspicious:
         extra.insert(0, InlineKeyboardButton(text="👍 Это клиент", callback_data=f"lead:client:{d}"))
     rows.append(extra)
