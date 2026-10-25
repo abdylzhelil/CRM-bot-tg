@@ -707,7 +707,6 @@
     else adminUsers(body);
   }
 
-  function flag(ok) { return ok ? "✅" : "⬜"; }
   var AI_NAMES = { gigachat: "GigaChat", yandex: "YandexGPT", local: "своя модель", anthropic: "Claude" };
   // строка «значок · название … значение»; ok: true/false или уровень ok/warn/bad
   function kv(ok, label, value) {
@@ -748,16 +747,16 @@
         ]),
         el("h2", { text: "Реклама и ИИ" }),
         kvCard([
-          kv(d.ads, "Продвижение групп", "за заявки"),
+          kv(d.ads, "Продвижение групп", d.ads ? "за заявки" : ""),
           kv(d.adposts, "Реклама в группах"),
           kv(d.ai_helper, "ИИ-помощник", d.ai_helper ? AI_NAMES[d.ai_provider] || d.ai_provider : ""),
-          kv(d.ai && d.ai_key, "ИИ-черновики", d.ai ? (d.ai_key ? (d.ai_provider === "anthropic" ? "Claude, " + d.ai_model : AI_NAMES[d.ai_provider] || d.ai_provider) : "⚠️ нет ключа") : ""),
+          kv(d.ai ? (d.ai_key ? true : "warn") : false, "ИИ-черновики", d.ai ? (d.ai_key ? (d.ai_provider === "anthropic" ? "Claude, " + d.ai_model : AI_NAMES[d.ai_provider] || d.ai_provider) : "⚠️ нет ключа") : ""),
           kv(!!d.stats_channel, "Канал статистики", d.stats_channel || "не подключён")
         ]),
         d.memory ? el("h2", { text: "Сервер" }) : null,
         d.memory ? kvCard([
-          kv(d.memory.level, "Свободная память", d.memory.available_mb + " из " + d.memory.total_mb + " МБ"),
-          kv(d.memory.level, "Подкачка", d.memory.swap_used_mb + " МБ"),
+          kv(d.memory.available_mb < 150 ? "bad" : d.memory.available_mb < 200 ? "warn" : "ok", "Свободная память", d.memory.available_mb + " из " + d.memory.total_mb + " МБ"),
+          kv(d.memory.swap_used_mb > 1024 ? "bad" : "ok", "Подкачка", d.memory.swap_used_mb + " МБ"),
           d.memory.bot_mb !== null ? kv(true, "Бот занимает", d.memory.bot_mb + " МБ") : null
         ]) : null
       ];
