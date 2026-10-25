@@ -228,7 +228,7 @@
     if (state.leadsStatus === "new" || state.leadsStatus === "postponed") {
       var row = [act("take", "✅ В работу")];
       if (state.leadsStatus === "new") row.push(act("later", "⏰ Отложить"));
-      row.push(act("reject", "🙈 Не моё"), act("spam", "🚫 Спам"));
+      row.push(act("reject", "🙈 Не моё"), act("spam", "🚫 Спам / схема"));
       card.appendChild(el("div", { class: "row" }, row));
       card.appendChild(el("div", { class: "row" }, [act("offer", "🙅 Исполнитель (предлагает услуги)")]));
       if (it.suspicious && state.me.role === "admin") card.appendChild(el("div", { class: "row" }, [act("client", "👍 Это клиент")]));

@@ -68,9 +68,18 @@ async def fb_write(cb: CallbackQuery, state: FSMContext) -> None:
     await ask(cb, state, "feedback", "💬 Напишите сообщение владельцу бота: вопрос, идею, что неудобно. Ответ придёт сюда же.")
 
 
+@router.callback_query(F.data == "fb:bug")
+async def fb_bug(cb: CallbackQuery, state: FSMContext) -> None:
+    await ask(cb, state, "feedback", "🆘 <b>Что не так?</b> Опишите в одном сообщении: что нажали, что ожидали и что получилось "
+              "(например: «нажал 💎 Тариф — ничего не открылось»). Владелец бота получит это сразу и ответит сюда же.",
+              problem=True)
+
+
 async def on_input(s, m: Message, d, text: str):
-    """Ввод после «💬 Написать владельцу» (inputs.HANDLERS["feedback"])."""
+    """Ввод после «💬 Написать владельцу» или «🆘 Сообщить о проблеме» (inputs.HANDLERS["feedback"])."""
     user = await s.get(User, m.from_user.id)
+    if (d or {}).get("problem"):
+        text = "🆘 Проблема в боте: " + text
     if not await receive(m, user, text):
         return await m.answer("Сегодня вы уже написали много сообщений — продолжим завтра 🙏")
     await m.answer("✉️ Отправлено владельцу бота. Ответ придёт сюда же.")

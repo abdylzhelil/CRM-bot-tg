@@ -81,7 +81,7 @@ def lead_keyboard(lead: Lead, delivery_id: int, admin: bool = False) -> InlineKe
         [
             InlineKeyboardButton(text="⏰ Отложить", callback_data=f"lead:later:{d}"),
             InlineKeyboardButton(text="🙈 Не моё", callback_data=f"lead:reject:{d}"),
-            InlineKeyboardButton(text="🚫 Спам", callback_data=f"lead:spam:{d}"),
+            InlineKeyboardButton(text="🚫 Спам / схема", callback_data=f"lead:spam:{d}"),
         ],
     ]
     rows.append([InlineKeyboardButton(text="✨ Черновик ответа", callback_data=f"lead:ai:{d}"),
@@ -112,9 +112,12 @@ def lead_text(lead: Lead, category: str) -> str:
         link = "\n🗑 Сообщение уже удалено в группе — отвечайте автору в личку"
     place = f"\nГде: {html.escape(lead.city or lead.region)}" if (lead.city or lead.region) else ""
     spam = f"\nСпам-скор: {lead.spam_score}" if lead.suspicious else ""
+    from app.services import scam
+
+    warn = scam.warning(lead.text)  # «реальное или схема?» — честно пишем, что насторожило
     return (
         f"{head} | {html.escape(category)}\nКто: {who}\nГруппа: {html.escape(lead.group_title)}\n"
-        f"Суть: {text}{place}{link}{spam}"
+        f"Суть: {text}{place}{link}{spam}" + (f"\n\n{warn}" if warn else "")
     )
 
 

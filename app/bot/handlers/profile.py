@@ -353,7 +353,7 @@ async def profile(target, user: User) -> None:
         [("⚡ Автонастройка", "pf:auto"), ("🤝 Пригласить друзей", "pf:ref")],
         [("🔔 Уведомления: выкл — включить" if mute.is_muted(user) else "🔕 Выключить уведомления на время", "mt:menu")],
         [(f"💰 Мои кредиты: {user.credits or 0}", "cr:menu")] if show_credits else [],
-        [("💬 Написать владельцу бота", "fb:write")],
+        [("💬 Написать владельцу", "fb:write"), ("🆘 Сообщить о проблеме", "fb:bug")],
     ] if r]))
 
 
