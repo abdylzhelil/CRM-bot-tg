@@ -62,53 +62,89 @@ LAST_KEY = "search_last"  # итог последнего поиска — ви�
 _PLACES = ("{c}", "объявления {c}", "барахолка {c}", "услуги {c}", "работа {c}", "бизнес {c}", "мастера {c}")
 
 
-async def build_queries(s) -> list[str]:
-    """Свои запросы админа + автоматические: города × «объявления/барахолка/услуги…» и главное слово каждой ниши.
-    Раньше были только ~10 ручных запросов — Telegram на них отдаёт одни и те же группы, и через пару дней
-    поиск переставал находить новые."""
+HOME_PER_PASS = 5  # из каждых PER_PASS запросов — столько про свой регион (владелец: «от Дагестана дальше»)
+HOME_KEY = "search_offset_home"
+
+
+async def split_queries(s) -> tuple[list[str], list[str]]:
+    """(запросы про свой регион, остальные). Свои запросы админа + автоматические: города × «объявления/барахолка/…»
+    и главное слово каждой ниши. Раньше были только ~10 ручных запросов — Telegram на них отдаёт одни и те же группы."""
     from app.models import Category, Keyword, User
     from app.services import geo
 
+    home = await settings.get(s, "home_region")
     manual = [q.text for q in (await s.scalars(select(SearchQuery).where(SearchQuery.enabled))).all()]
-    cities = list(geo.MENU_CITIES)
-    for c in (await s.scalars(select(User.city).where(User.city != "").distinct().limit(20))).all():
-        if c not in cities:
+    home_places = (geo.home_cities(home) + [home]) if home else []
+    near = [c for c, r in geo.CITIES.items() if r in geo.NEIGHBORS.get(home, ())]
+    cities = []
+    for c in home_places + list(geo.MENU_CITIES) + near + list(
+            (await s.scalars(select(User.city).where(User.city != "").distinct().limit(20))).all()):
+        if c and c not in cities:
             cities.append(c)
-    auto = [p.format(c=c) for c in cities[:15] for p in _PLACES]
     roots = (await s.scalars(select(Category).where(Category.parent_id.is_(None), Category.enabled,
                                                     ~Category.pending).order_by(Category.id))).all()
+    words = []
     for cat in roots:
         word = await s.scalar(select(Keyword.word).where(Keyword.category_id == cat.id, Keyword.kind == "category")
                               .order_by(Keyword.id))
         if word:
-            auto.append(word)
-            auto.append(f"{word} {cities[0]}")
-    out, seen = [], set()
-    for q in manual + auto:
-        k = q.strip().casefold()
-        if k and k not in seen:
-            seen.add(k)
-            out.append(q.strip())
-    return out
+            words.append(word)
+    home_q = [p.format(c=c) for c in home_places for p in _PLACES]
+    if home_places:
+        home_q += [f"{w} {home_places[0]}" for w in words] + [f"{w} {home}" for w in words]
+    rest = manual + [p.format(c=c) for c in cities[:20] if c not in home_places for p in _PLACES] + words
+    if not home_places:
+        rest += [f"{w} {cities[0]}" for w in words]
+
+    def dedup(items, seen):
+        out = []
+        for q in items:
+            k = q.strip().casefold()
+            if k and k not in seen:
+                seen.add(k)
+                out.append(q.strip())
+        return out
+
+    seen: set[str] = set()
+    home_q = dedup(home_q, seen)
+    return home_q, dedup(rest, seen)
 
 
-async def next_batch(s) -> tuple[list[str], int, int]:
-    """Следующие PER_PASS запросов по кругу: (запросы, с какого номера, всего)."""
+async def build_queries(s) -> list[str]:
+    home_q, rest = await split_queries(s)
+    return home_q + rest
+
+
+async def _take(s, key: str, items: list[str], n: int) -> tuple[list[str], int]:
     from app.models import Setting
 
-    queries = await build_queries(s)
-    if not queries:
-        return [], 0, 0
-    row = await s.get(Setting, OFFSET_KEY)
-    start = int(row.value) % len(queries) if row and row.value.isdigit() else 0
-    batch = [queries[(start + i) % len(queries)] for i in range(min(PER_PASS, len(queries)))]
-    value = str((start + len(batch)) % len(queries))
+    if not items or n <= 0:
+        return [], 0
+    row = await s.get(Setting, key)
+    start = int(row.value) % len(items) if row and row.value.isdigit() else 0
+    batch = [items[(start + i) % len(items)] for i in range(min(n, len(items)))]
+    value = str((start + len(batch)) % len(items))
     if row:
         row.value = value
     else:
-        s.add(Setting(key=OFFSET_KEY, value=value))
+        s.add(Setting(key=key, value=value))
+    return batch, start
+
+
+async def next_batch(s) -> tuple[list[str], int, int]:
+    """Следующие PER_PASS запросов: HOME_PER_PASS про свой регион (по своему кругу) + остальные по кругу.
+    → (запросы, с какого номера в общем круге, сколько в общем круге)."""
+    home_q, rest = await split_queries(s)
+    home_part, _ = await _take(s, HOME_KEY, home_q, HOME_PER_PASS if rest else PER_PASS)
+    rest_part, start = await _take(s, OFFSET_KEY, rest, PER_PASS - len(home_part))
     await s.commit()
-    return batch, start, len(queries)
+    if not home_part and not rest_part:
+        return [], 0, 0
+    _last_home[0] = len(home_part)
+    return home_part + rest_part, start, len(rest)
+
+
+_last_home = [0]  # сколько запросов «своего региона» в начале последней пачки (для отката при обрыве связи)
 
 
 async def _options(s) -> dict:
@@ -266,7 +302,8 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         errors += c["errors"]
         await asyncio.sleep(random.uniform(10, 30))
     if lost:  # недоделанные запросы вернём в очередь: следующий проход начнёт с них
-        await rewind(start + done - 1, total)
+        await rewind(start + max(0, done - 1 - _last_home[0]), total)
+        await rewind_home(_last_home[0] - min(done - 1, _last_home[0]))
     summary = (f"запросов {done - lost} (с {start + 1}-го из {total}), новых {found}, уже знали {known}, "
                f"мелких или тихих {small}" + (f", реклама/флуд {junked}" if junked else "")
                + (f", ошибок {errors}" if errors else "")
@@ -293,6 +330,20 @@ async def rewind(position: int, total: int) -> None:
         row = await s.get(Setting, OFFSET_KEY)
         if row:
             row.value = str(position % total)
+            await s.commit()
+
+
+async def rewind_home(undone: int) -> None:
+    """Обрыв связи на запросах «своего региона» — недоделанные вернуть в их круг."""
+    from app.models import Setting
+
+    if undone <= 0:
+        return
+    async with Session() as s:
+        home_q, _ = await split_queries(s)
+        row = await s.get(Setting, HOME_KEY)
+        if row and home_q and row.value.isdigit():
+            row.value = str((int(row.value) - undone) % len(home_q))
             await s.commit()
 
 

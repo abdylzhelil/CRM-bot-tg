@@ -91,9 +91,15 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
             return False
         # IN (NULL, …) в SQL не находит NULL — поэтому явно: ничья группа или уже назначенная этому аккаунту
         mine = or_(Group.account_id.is_(None), Group.account_id == acc_id)
-        # сначала группы, найденные по просьбе пользователя («🔎 Найти группы для меня»), потом самые большие
-        g = await s.scalar(select(Group).where(Group.status == "approved", Group.kind == "group", mine)
-                           .order_by(Group.wanted_by == 0, Group.members.desc()))
+        # сначала группы, найденные по просьбе пользователя («🔎 Найти группы для меня»), потом «от своего региона
+        # дальше» (владелец 25.10: Дагестан → соседи → Россия → заграница), внутри — самые большие
+        from app.services import geo
+
+        home = await settings.get(s, "home_region")
+        queue = (await s.scalars(select(Group).where(Group.status == "approved", Group.kind == "group", mine)
+                                 .order_by(Group.wanted_by == 0, Group.members.desc()).limit(300))).all()
+        g = min(queue, key=lambda x: (x.wanted_by == 0, geo.priority(x.city, x.region, x.title, home), -(x.members or 0)),
+                default=None)
         if not g:  # новых нет — повторяем заявки, которые админы групп ещё не одобрили (срок повтора подошёл)
             g = await s.scalar(select(Group).where(Group.status == "requested", Group.kind == "group", mine,
                                                    Group.join_retry_at <= now()).order_by(Group.join_retry_at))

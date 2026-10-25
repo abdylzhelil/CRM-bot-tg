@@ -15,10 +15,15 @@ async def test_queries_from_niches_and_cities_rotate(maker):
         assert len(all_q) > 100  # не 11 ручных, а сотни
         assert "барахолка Махачкала" in all_q and any(q.startswith("сантехник") or q == "сайт" for q in all_q)
         assert len({q.casefold() for q in all_q}) == len(all_q)  # без повторов
+        home_q, rest = await search.split_queries(s)
         b1, start1, total = await search.next_batch(s)
         b2, start2, _ = await search.next_batch(s)
-        assert len(b1) == search.PER_PASS and start1 == 0 and start2 == search.PER_PASS and set(b1).isdisjoint(b2)
-        assert total == len(all_q)
+        rest_n = search.PER_PASS - search.HOME_PER_PASS
+        assert len(b1) == search.PER_PASS and start1 == 0 and start2 == rest_n and set(b1).isdisjoint(b2)
+        assert total == len(rest) and len(home_q) + len(rest) == len(all_q)
+        # «от Дагестана дальше»: в каждой пачке 5 запросов про Дагестан, и список начинается с них
+        assert all(q in home_q for q in b1[:search.HOME_PER_PASS]) and all_q[0] == "Махачкала"
+        assert any("Дербент" in q for q in home_q) and not any("Москва" in q for q in home_q)
 
 
 async def test_discover_reports_even_when_nothing_new(maker, tgbot, monkeypatch):
@@ -86,10 +91,12 @@ async def test_search_without_connection_does_not_waste_queries(maker, tgbot, mo
     async with maker() as s:
         assert await s.get(Setting, "search_offset") is None  # очередь запросов не сдвинулась
     # связь оборвалась после 3 запросов и не вернулась — следующий проход начнётся с 4-го
+    # (первые 5 в пачке — про свой регион: их круг откатился к 4-му, общий круг не тронут)
     with pytest.raises(ConnectionError):
         await search.discover(FakeClient(drop_after=3), report=True)
     async with maker() as s:
-        assert (await s.get(Setting, "search_offset")).value == "3"
+        assert (await s.get(Setting, "search_offset")).value == "0"
+        assert (await s.get(Setting, search.HOME_KEY)).value == "3"
     assert "прервался" in sent.call_args.args[0]
 
 
@@ -116,3 +123,15 @@ async def test_join_without_connection_does_not_touch_groups(maker):
 
 async def _chats(chat):
     return SimpleNamespace(chats=[chat])
+
+
+def test_priority_from_home_region():
+    """«От Дагестана дальше»: свой регион → соседи → Россия → заграница."""
+    from app.services import geo
+
+    home = "Дагестан"
+    assert geo.priority("", "", "Барахолка Каспийск", home) == 0
+    assert geo.priority("Махачкала", "", "x", home) == 0
+    assert geo.priority("", "", "Объявления Грозный", home) == 1
+    assert geo.priority("", "", "Барахолка Москва", home) == 2
+    assert geo.priority("", "", "Паттайя Барахолка №1 🇹🇭", home) == 3

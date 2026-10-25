@@ -74,6 +74,40 @@ def detect(text: str, group_title: str = "", group_city: str = "", group_region:
     return "", ""
 
 
+# «от Дагестана дальше» (владелец 25.10): порядок поиска и вступления — свой регион, соседи, Россия, заграница
+NEIGHBORS: dict[str, tuple[str, ...]] = {
+    "Дагестан": ("Чечня", "Кабардино-Балкария", "Северная Осетия", "Ставропольский край", "Астраханская область"),
+}
+_FOREIGN = ("паттай", "таиланд", "тайланд", "пхукет", "бали", "дубай", "оаэ", "турци", "анталь", "алани", "стамбул",
+            "грузи", "тбилиси", "батуми", "казахстан", "алмат", "астан", "бишкек", "ташкент", "ереван", "армени",
+            "минск", "беларус", "кипр", "израил", "египет", "хургад", "шарм", "вьетнам", "нячанг", "сша", "америк",
+            "европ", "германи", "польш", "черногор", "серби", "белград", "испани", "итали", "франци", "лондон",
+            "чехи", "праг", "финлянд", "эстони", "латви", "литв", "китай", "корея", "япони", "абхази", "сочи-адлер")
+
+
+def home_cities(home: str) -> list[str]:
+    return [c for c, r in CITIES.items() if r == home]
+
+
+def is_foreign(title: str) -> bool:
+    low = (title or "").lower()
+    return any(w in low for w in _FOREIGN)
+
+
+def priority(city: str, region: str, title: str, home: str) -> int:
+    """0 — свой регион, 1 — соседи, 2 — Россия (в т. ч. без города), 3 — заграница. Меньше — раньше."""
+    region = region or region_of(city)
+    if not region and not city:
+        city, region = find(title or "")
+    if home and (region == home or city in home_cities(home)):
+        return 0
+    if region and region in NEIGHBORS.get(home, ()):
+        return 1
+    if is_foreign(title) and not region:
+        return 3
+    return 2
+
+
 def region_of(place: str) -> str:
     return CITIES.get(place, place if place in REGIONS else "")
 

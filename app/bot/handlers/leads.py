@@ -132,25 +132,89 @@ async def leads_list(cb: CallbackQuery, user: User) -> None:
     if not total:
         return await reply(cb, f"{label}: пусто.", kb([[("◀️ Списки", "ll:menu")]]))
     if len(niches) == 1:
-        return await show_one(cb, user, status, 0, 0, "c")
-    rows = [[(f"📂 Все ниши · {total}", f"lv:{status}:0:0:c")]]
-    rows += [[(f"{name} · {n}"[:60], f"lv:{status}:{cid}:0:c")] for cid, name, n in niches]
+        return await choose_place(cb, user, status, 0)
+    rows = [[(f"📂 Все ниши · {total}", f"lp:{status}:0")]]
+    rows += [[(f"{name} · {n}"[:60], f"lp:{status}:{cid}")] for cid, name, n in niches]
     await reply(cb, f"{label}: {total}. Какую нишу смотреть?", kb(rows + [[("◀️ Списки", "ll:menu")]]))
 
 
-@router.callback_query(F.data.regexp(r"^lv:(new|postponed|taken|rejected|spam|muted):\d{1,18}:\d{1,18}:[cnp]$"))
+def _place_name(code: int) -> str:
+    from app.services import geo
+
+    return geo.KNOWN_PLACES[code - 1] if 0 < code <= len(geo.KNOWN_PLACES) else ""
+
+
+def _place_cond(place: str):
+    """Заявки этого места: регион — сам регион и его города; город — только он."""
+    from app.services import geo
+
+    if place in geo.REGIONS and place not in geo.CITIES:
+        return (Lead.region == place) | Lead.city.in_(geo.home_cities(place))
+    return Lead.city == place
+
+
+async def _places(s, user_id: int, status: str, cat: int) -> list[tuple[int, str, int]]:
+    """[(код места, название, сколько)]: регионы (с их городами) и города; свой регион и его города — первыми."""
+    from app.services import geo
+
+    q = _filter(select(Lead.city, Lead.region, func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id),
+                user_id, status)
+    if cat:
+        q = q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
+    region_n: dict[str, int] = {}
+    city_n: dict[str, int] = {}
+    for city, region, n in (await s.execute(q.group_by(Lead.city, Lead.region))).all():
+        region = region or geo.region_of(city or "")
+        if region:
+            region_n[region] = region_n.get(region, 0) + n
+        if city and city != region:
+            city_n[city] = city_n.get(city, 0) + n
+    home = await settings.get(s, "home_region")
+    out = []
+    for name, n in list(region_n.items()) + list(city_n.items()):
+        if name in geo.KNOWN_PLACES:
+            out.append((geo.KNOWN_PLACES.index(name) + 1, name, n))
+    return sorted(out, key=lambda x: (geo.priority(x[1] if x[1] in geo.CITIES else "", geo.region_of(x[1]), "", home),
+                                      x[1] not in geo.REGIONS, -x[2]))
+
+
+@router.callback_query(F.data.regexp(r"^lp:(new|postponed|taken|rejected|spam|muted):\d{1,18}$"))
+async def place_menu(cb: CallbackQuery, user: User) -> None:
+    _, status, cat = cb.data.split(":")
+    await choose_place(cb, user, status, int(cat))
+
+
+async def choose_place(cb: CallbackQuery, user: User, status: str, cat: int) -> None:
+    """Где смотреть заявки (владелец 25.10: «чтобы можно было выбрать где смотреть»). Одно место — сразу к заявкам."""
+    async with Session() as s:
+        places = await _places(s, user.tg_id, status, cat)
+        q = _filter(select(func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id), user.tg_id, status)
+        if cat:
+            q = q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
+        total = await s.scalar(q) or 0
+    if len(places) <= 1 or not total:
+        return await show_one(cb, user, status, cat, 0, "c")
+    rows = [[(f"🌍 Все места · {total}", f"lv:{status}:{cat}:0:0:c")]]
+    rows += [[(f"📍 {name} · {n}"[:60], f"lv:{status}:{cat}:{code}:0:c")] for code, name, n in places[:12]]
+    await reply(cb, f"{LABELS[status]}: где смотреть заявки?", kb(rows + [[("📂 Ниши", f"ll:{status}:0"), ("◀️ Списки", "ll:menu")]]))
+
+
+@router.callback_query(F.data.regexp(r"^lv:(new|postponed|taken|rejected|spam|muted):\d{1,18}:\d{1,4}:\d{1,18}:[cnp]$"))
 async def leads_view(cb: CallbackQuery, user: User) -> None:
-    _, status, cat, did, way = cb.data.split(":")
-    await show_one(cb, user, status, int(cat), int(did), way)
+    _, status, cat, place, did, way = cb.data.split(":")
+    await show_one(cb, user, status, int(cat), int(did), way, int(place))
 
 
-async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: int, way: str) -> None:
+async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: int, way: str, place: int = 0) -> None:
     """Одна заявка. way: c — эта (или следующая, если её уже убрали из списка), n — следующая (старше), p — предыдущая.
     Листаем по номеру доставки, а не по позиции: после «Не моё»/«В работу» «▶️» ведёт к следующей, а не перескакивает."""
     async with Session() as s:
         q = _filter(select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id), user.tg_id, status)
         if cat:
             q = q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
+        where = _place_name(place)
+        if where:
+            q = q.where(_place_cond(where))
         if way == "p":
             row = (await s.execute(q.where(Delivery.id > did).order_by(Delivery.id).limit(1))).first()
         else:
@@ -165,8 +229,11 @@ async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: in
         count_q = _filter(count_q, user.tg_id, status)
         if cat:
             count_q = count_q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
+        if where:
+            count_q = count_q.where(_place_cond(where))
         total = await s.scalar(count_q) or 0
-        label = LABELS[status] + (f" · {(await s.get(Category, cat)).name}" if cat and await s.get(Category, cat) else "")
+        label = (LABELS[status] + (f" · {(await s.get(Category, cat)).name}" if cat and await s.get(Category, cat) else "")
+                 + (f" · 📍 {where}" if where else ""))
         if row is None:
             return await reply(cb, f"{label}: пусто.", kb([[("◀️ Списки", "ll:menu")]]))
         d, lead = row
@@ -176,13 +243,14 @@ async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: in
             client_id = await s.scalar(select(Client.id).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
         text = f"<b>{esc(label)}</b> — {pos} из {total}\n\n" + notify.lead_text(lead, await category_name(s, lead.category_id))
     card = card_keyboard(lead, d, user, client_id)
-    await reply(cb, text, with_nav(card, nav_rows(status, cat, d.id, pos, total)))
+    await reply(cb, text, with_nav(card, nav_rows(status, cat, d.id, pos, total, place)))
 
 
-def nav_rows(status: str, cat: int, did: int, pos: int, total: int) -> list:
-    base = f"lv:{status}:{cat}:{did}"
+def nav_rows(status: str, cat: int, did: int, pos: int, total: int, place: int = 0) -> list:
+    base = f"lv:{status}:{cat}:{place}:{did}"
     row = ([("◀️ Предыдущая", f"{base}:p")] if pos > 1 else []) + ([("Следующая ▶️", f"{base}:n")] if pos < total else [])
-    return kb(([row] if row else []) + [[("📋 Списки", "ll:menu"), ("📂 Ниши", f"ll:{status}:0")]]).inline_keyboard
+    return kb(([row] if row else []) + [[("📋 Списки", "ll:menu"), ("📂 Ниши", f"ll:{status}:0"),
+                                          ("📍 Место", f"lp:{status}:{cat}")]]).inline_keyboard
 
 
 def with_nav(card, nav: list):
@@ -195,7 +263,7 @@ def _nav_of(cb: CallbackQuery) -> list:
     """Строки «◀️ / ▶️ / Списки» из сообщения, где нажали кнопку (заявка открыта в просмотре по одной)."""
     markup = getattr(cb.message, "reply_markup", None) if cb.message else None
     rows = getattr(markup, "inline_keyboard", None) or []
-    return [r for r in rows if r and all((b.callback_data or "").startswith(("lv:", "ll:")) for b in r)]
+    return [r for r in rows if r and all((b.callback_data or "").startswith(("lv:", "ll:", "lp:")) for b in r)]
 
 
 async def edit_markup(cb: CallbackQuery, markup) -> None:

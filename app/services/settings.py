@@ -18,6 +18,7 @@ DEFAULTS: dict[str, str] = {
     "join_retry_days": "3",
     "join_retry_max": "4",
     "join_check": "1",
+    "home_region": "Дагестан",
     "user_search_free": "3",
     "adpost_auto_allow": "0",
     "group_rules_check": "1",
@@ -105,6 +106,7 @@ LABELS: dict[str, str] = {
     "rotation_days": "Выходить из групп без заявок за N дней",
     "join_retry_days": "Повторять заявку на вступление через N дней",
     "join_check": "Проверять группу перед вступлением (название и сообщения)",
+    "home_region": "Свой регион: искать и вступать с него",
     "user_search_free": "«Найти группы для меня»: запросов у бесплатного тарифа",
     "adpost_auto_allow": "Сам открывать новые группы для рекламы (после проверки)",
     "group_rules_check": "Читать правила всех групп и присылать сводку (📋 Правила групп)",
@@ -205,7 +207,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🎁", "Бонусы", ["bonus_leads", "bonus_max_days", "ref_days", "ref_percent", "ref_limit"]),
     ("🌐", "Каталог и каналы", ["submit_daily_limit", "catalog_min_members", "niche_daily_limit",
                                "channel_poll_min", "channel_hour", "ad_leads", "ad_days", "license_enabled", "license_leads", "license_days"]),
-    ("🔍", "Разведчик", ["mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
+    ("🔍", "Разведчик", ["home_region", "mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
                         "user_search_free", "user_search_full", "user_search_days"]),
     ("🧹", "Проверка групп и капча", ["join_check", "group_audit", "group_audit_leave", "group_rules_check",
@@ -220,6 +222,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
 
 # Короткие подписи для кнопок (полные — в LABELS, их видно при редактировании)
 SHORT: dict[str, str] = {
+    "home_region": "Свой регион",
     "trial_days": "Пробный 💎, дн", "guarantee_min": "Гарантия: мин. заявок/нед", "guarantee_days": "Гарантия: +дней",
     "price_30": "30 дней, ₽", "price_90": "90 дней, ₽", "price_365": "365 дней, ₽", "refund_days": "Срок возврата, дн", "autorenew": "Автопродление (1/0)",
     "free_daily_limit": "Бесплатный: заявок/день", "free_delay_min": "Бесплатный: задержка, мин",
@@ -265,6 +268,7 @@ SHORT: dict[str, str] = {
 
 # Подсказка к каждой настройке: что это и на что влияет (показывается при редактировании)
 HINTS: dict[str, str] = {
+    "home_region": "Регион, с которого разведчик начинает: в каждом поиске 5 запросов из 20 — про его города, и вступает он сначала в группы этого региона, потом соседних, потом остальной России; заграничные барахолки — в самом конце. Напишите название как в списке городов бота (например: Дагестан, Чечня, Москва). Пусто — без приоритета.",
     "mode": "semi — разведчик спрашивает вас о вступлении, auto — вступает сам.",
     "min_members": "Группы меньше этого размера разведчик пропускает.",
     "min_msgs_per_day": "Тихие группы (меньше сообщений в сутки) не берём — заявок там не будет.",
@@ -433,6 +437,15 @@ def validate(key: str, text: str) -> str:
     elif key in ("report_hour", "channel_hour"):
         if not text.isdigit() or int(text) > 23:
             raise SettingError("Нужен час от 0 до 23")
+    elif key == "home_region":
+        from app.services import geo
+
+        if text in ("", "-"):
+            return ""
+        city, region = geo.find(text)
+        if not (region or city):
+            raise SettingError("Не знаю такого региона. Например: Дагестан, Чечня, Москва, Краснодарский край")
+        return region or geo.region_of(city)
     elif key == "ai_provider":
         if text not in ("auto", "gigachat", "yandex", "local", "anthropic"):
             raise SettingError("Допустимо: auto, gigachat, yandex, local, anthropic")

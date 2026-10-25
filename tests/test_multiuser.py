@@ -333,12 +333,12 @@ async def test_leads_one_by_one_with_niches_and_nav(maker, tgbot):
     await leads.leads_list(c, user)
     text, markup = c.answer.call_args.args[0], c.answer.call_args.kwargs["reply_markup"]
     data = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert "Какую нишу" in text and f"lv:new:{cats['Сайты']}:0:c" in data and "lv:new:0:0:c" in data
-    c = cb_(f"lv:new:{cats['Сайты']}:0:c")
+    assert "Какую нишу" in text and f"lp:new:{cats['Сайты']}" in data and "lp:new:0" in data
+    c = cb_(f"lv:new:{cats['Сайты']}:0:0:c")
     await leads.leads_view(c, user)
     text, markup = c.answer.call_args.args[0], c.answer.call_args.kwargs["reply_markup"]
     data = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert "1 из 2" in text and "Сайты 1" in text and f"lv:new:{cats['Сайты']}:{ids[1]}:n" in data
+    assert "1 из 2" in text and "Сайты 1" in text and f"lv:new:{cats['Сайты']}:0:{ids[1]}:n" in data
     assert f"lead:reject:{ids[1]}" in data
     # «Не моё» в просмотре: кнопки сменились, а «Следующая ▶️» осталась
     c2 = cb_(f"lead:reject:{ids[1]}")
@@ -346,8 +346,35 @@ async def test_leads_one_by_one_with_niches_and_nav(maker, tgbot):
     c2.message.edit_reply_markup = AsyncMock()
     await leads.lead_action(c2, user)
     new = c2.message.edit_reply_markup.call_args.kwargs["reply_markup"]
-    assert f"lv:new:{cats['Сайты']}:{ids[1]}:n" in [b.callback_data for row in new.inline_keyboard for b in row]
-    c = cb_(f"lv:new:{cats['Сайты']}:{ids[1]}:n")
+    assert f"lv:new:{cats['Сайты']}:0:{ids[1]}:n" in [b.callback_data for row in new.inline_keyboard for b in row]
+    c = cb_(f"lv:new:{cats['Сайты']}:0:{ids[1]}:n")
     await leads.leads_view(c, user)
     text = c.answer.call_args.args[0]
     assert "Сайты 0" in text and "1 из 1" in text  # убранная из «Новых» не мешает листать
+
+
+async def test_leads_by_place_home_region_first(maker, tgbot):
+    """Владелец 25.10: в «📥 Заявки» выбрать, где смотреть; свой регион (Дагестан) — первым."""
+    from app.services import geo
+
+    await make_user(maker, 48)
+    async with maker() as s:
+        for i, (city, region) in enumerate([("Москва", "Москва"), ("Махачкала", "Дагестан"), ("Дербент", "Дагестан"),
+                                            ("Москва", "Москва"), ("Москва", "Москва")]):
+            lead = Lead(author_id=700 + i, text=f"Нужен сайт {i}", text_hash=f"pl{i}", city=city, region=region)
+            s.add(lead)
+            await s.flush()
+            s.add(Delivery(lead_id=lead.id, user_id=48, deliver_after=now(), sent=True, status="new"))
+        await s.commit()
+        user = await s.get(User, 48)
+    c = MagicMock()
+    c.data, c.from_user.id, c.answer = "lp:new:0", 48, AsyncMock()
+    await leads.place_menu(c, user)
+    markup = c.answer.call_args.kwargs["reply_markup"]
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert labels[0].startswith("🌍 Все места · 5") and labels[1] == "📍 Дагестан · 2"  # Москвы больше, но свой регион первым
+    dag = geo.KNOWN_PLACES.index("Дагестан") + 1
+    c.data = f"lv:new:0:{dag}:0:c"
+    await leads.leads_view(c, user)
+    text = c.answer.call_args.args[0]
+    assert "📍 Дагестан" in text and "из 2" in text
