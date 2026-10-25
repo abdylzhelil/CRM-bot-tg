@@ -679,3 +679,50 @@ async def test_credits_in_cabinet(client, maker, tgbot):
     wid = (await (await client.get("/api/credits", headers=tma(70))).json())["waiting"][0]["id"]
     r = await (await client.post("/api/credits", json={"cancel": wid}, headers=tma(70))).json()
     assert r["balance"] == 300
+
+
+async def test_cabinet_leads_filters_warning_and_problem_report(client, maker, tgbot):
+    """Кабинет как в боте: фильтры «ниша / место», предупреждение о схеме, удалённое сообщение, «🆘 Сообщить о проблеме»."""
+    from sqlalchemy import select
+
+    from app.models import Category, Delivery, Lead, now
+
+    await make_user(maker, 80, niches=("Сайты",))
+    async with maker() as s:
+        cat = await s.scalar(select(Category).where(Category.name == "Сайты"))
+        rows = [("Нужен сайт, оплата в USDT, пишите https://bit.ly/x", "Москва", "Москва", None),
+                ("Нужен сайт для салона", "Махачкала", "Дагестан", now()),
+                ("Нужен сайт для кафе", "Дербент", "Дагестан", None)]
+        for i, (text, city, region, gone) in enumerate(rows):
+            lead = Lead(author_id=900 + i, text=text, text_hash=f"cl{i}", category_id=cat.id, city=city, region=region,
+                        link=f"https://t.me/g/{i}", gone_at=gone)
+            s.add(lead)
+            await s.flush()
+            s.add(Delivery(lead_id=lead.id, user_id=80, deliver_after=now(), sent=True, status="new"))
+        await s.commit()
+    data = await (await client.get("/api/leads?status=new", headers=tma(80))).json()
+    by_text = {i["text"]: i for i in data["items"]}
+    assert "Осторожно, возможна схема" in by_text["Нужен сайт, оплата в USDT, пишите https://bit.ly/x"]["warning"]
+    gone = by_text["Нужен сайт для салона"]
+    assert gone["gone"] and gone["link"] == "" and not gone["warning"]
+    assert {p["name"] for p in data["places"]} >= {"Дагестан", "Москва", "Махачкала"}
+    assert data["places"][0]["name"] == "Дагестан"  # свой регион первым
+    only = await (await client.get("/api/leads?status=new&place=Дагестан", headers=tma(80))).json()
+    assert len(only["items"]) == 2 and all(i["place"] in ("Махачкала", "Дербент") for i in only["items"])
+    cid = data["niches"][0]["id"]
+    assert len((await (await client.get(f"/api/leads?status=new&cat={cid}", headers=tma(80))).json())["items"]) == 3
+    # «🆘 Сообщить о проблеме» из кабинета
+    assert (await client.post("/api/feedback", json={"text": "я"}, headers=tma(80))).status == 422
+    r = await client.post("/api/feedback", json={"text": "не открывается тариф", "problem": True}, headers=tma(80))
+    assert r.status == 200
+    assert any("🆘 Проблема в боте" in t for _, t in tgbot.sent)
+
+
+async def test_admin_status_not_misleading(client, maker):
+    """Скриншот владельца 25.10: «Реклама ✅» при выключенной рекламе и «ИИ ⬜» при работающем ИИ-помощнике."""
+    from app.services import settings
+
+    async with maker() as s:
+        await settings.put(s, "adpost_enabled", "0")
+    d = (await (await client.get("/api/admin/status", headers=tma(1))).json())["status"]
+    assert d["adposts"] is False and "ads" in d and "ai_helper" in d and "credits" in d

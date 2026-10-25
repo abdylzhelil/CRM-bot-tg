@@ -27,7 +27,11 @@ async def collect(s) -> dict:
         "pay_ready": bool(config.PAYMENT_PROVIDER_TOKEN or (config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY)),
         "refund_days": await get("refund_days"),
         "autorenew": await get("autorenew") == "1", "license": await get("license_enabled") == "1",
-        "ads": await get("ad_leads") != "0", "ai": await get("ai_enabled") == "1", "ai_model": await get("ai_model"),
+        "ads": await get("ad_leads") != "0",  # продвижение групп каталога за заявки (старое «Реклама»)
+        "adposts": await get("adpost_enabled") == "1",  # реклама чужих постов в группах через разведчиков
+        "ai": await get("ai_enabled") == "1", "ai_model": await get("ai_model"),
+        "ai_helper": bool(llm.available()) and "1" in [await get(k) for k in ("ai_classify", "ai_decide", "ai_check_leads")],
+        "credits": await settings.get(s, "credits_enabled") == "1",
         "ai_key": bool(llm.available()), "ai_provider": llm.pick(await get("ai_provider")),
         "stats_channel": config.STATS_CHANNEL, "memory": sysmem.read(),
     }

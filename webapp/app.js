@@ -18,7 +18,7 @@
   var nav = document.getElementById("nav");
   var toastEl = document.getElementById("toast");
   var ICONS = { home: "🏠", leads: "📥", clients: "👥", profile: "👤", admin: "🛠" };
-  var state = { me: null, tab: "home", leadsStatus: "new" };
+  var state = { me: null, tab: "home", leadsStatus: "new", leadsCat: 0, leadsPlace: "" };
 
   // ---------- утилиты ----------
   function el(tag, attrs, children) {
@@ -131,7 +131,8 @@
         el("button", { class: "btn ghost", text: "📊 Статистика", onclick: renderStats }),
         el("button", { class: "btn ghost", text: "🤝 Друзья (+дни)", onclick: renderFriends }),
         el("button", { class: "btn ghost", text: "🔕 Не беспокоить", onclick: renderMute }),
-        el("button", { class: "btn ghost", text: "💰 Кредиты", onclick: renderCredits })
+        el("button", { class: "btn ghost", text: "💰 Кредиты", onclick: renderCredits }),
+        el("button", { class: "btn ghost", text: "🆘 Сообщить о проблеме", onclick: renderProblem })
       ]),
       el("button", { class: "btn ghost", text: "Вернуться в чат", onclick: closeApp })
     );
@@ -166,14 +167,17 @@
     var list = el("div", { id: "leadlist" });
     var more = el("button", { class: "btn ghost", text: "Показать ещё", hidden: "" });
     var tabs = el("div", { class: "tabs" }, TABS.map(function (t) {
-      return el("button", { class: "chip" + (t[0] === state.leadsStatus ? " on" : ""), text: t[1], onclick: function () { state.leadsStatus = t[0]; renderLeads(); } });
+      return el("button", { class: "chip" + (t[0] === state.leadsStatus ? " on" : ""), text: t[1], onclick: function () { state.leadsStatus = t[0]; state.leadsCat = 0; state.leadsPlace = ""; renderLeads(); } });
     }));
-    show(el("h1", { text: "Заявки" }), tabs, list, more);
+    var filters = el("div", {});
+    show(el("h1", { text: "Заявки" }), tabs, filters, list, more);
     var lastId = 0;
     function fetchPage() {
-      var q = "/api/leads?status=" + state.leadsStatus + (lastId ? "&before=" + lastId : "");
+      var q = "/api/leads?status=" + state.leadsStatus + (lastId ? "&before=" + lastId : "")
+        + (state.leadsCat ? "&cat=" + state.leadsCat : "") + (state.leadsPlace ? "&place=" + encodeURIComponent(state.leadsPlace) : "");
       more.disabled = true;
       api("GET", q).then(function (res) {
+        if (!lastId) drawFilters(filters, res);
         if (!lastId && !res.items.length) list.appendChild(el("p", { class: "muted center-block", text: "Здесь пока пусто." }));
         res.items.forEach(function (it) { list.appendChild(leadCard(it)); lastId = it.id; });
         more.hidden = !res.has_more; more.disabled = false;
@@ -181,6 +185,24 @@
     }
     more.onclick = fetchPage;
     fetchPage();
+  }
+
+  // ниша и место — как в боте («📥 Заявки» → ниша → где смотреть); свой регион в списке первым
+  function drawFilters(box, res) {
+    function chips(title, items, current, pick) {
+      if (items.length < 2 && !current) return null;
+      var row = [el("button", { class: "chip" + (!current ? " on" : ""), text: "Все", onclick: function () { pick(null); } })];
+      items.forEach(function (x) {
+        row.push(el("button", { class: "chip" + (current === x.key ? " on" : ""), text: x.name + " · " + x.n, onclick: function () { pick(x.key); } }));
+      });
+      return el("div", { class: "tabs" }, [el("span", { class: "muted", text: title })].concat(row));
+    }
+    box.replaceChildren.apply(box, [
+      chips("Ниша:", (res.niches || []).map(function (x) { return { key: x.id, name: x.name, n: x.n }; }), state.leadsCat,
+        function (v) { state.leadsCat = v || 0; state.leadsPlace = ""; renderLeads(); }),
+      chips("Место:", (res.places || []).map(function (x) { return { key: x.name, name: "📍 " + x.name, n: x.n }; }), state.leadsPlace,
+        function (v) { state.leadsPlace = v || ""; renderLeads(); })
+    ].filter(Boolean));
   }
 
   function leadCard(it) {
@@ -218,6 +240,8 @@
     card.appendChild(el("div", { class: "muted", text: "Кто: " + who }));
     card.appendChild(el("div", { class: "muted", text: "Группа: " + it.group + (it.place ? " · " + it.place : "") }));
     card.appendChild(el("p", { class: "lead-text", text: it.text }));
+    if (it.warning) card.appendChild(el("p", { class: "warn", text: it.warning }));
+    if (it.gone) card.appendChild(el("p", { class: "muted", text: "🗑 Сообщение уже удалено в группе — пишите автору в личку" }));
     if (it.from_colleague) card.appendChild(el("div", { class: "muted", text: "📨 Передано коллегой" }));
     card.appendChild(el("div", { class: "row" }, [
       el("button", { class: "btn small", text: "✍️ Написать", onclick: function () { openContact(it.contact); } }),
@@ -576,6 +600,20 @@
     }).catch(function (e) { toast(e.message, true); go("home"); });
   }
 
+  // ---------- 🆘 Сообщить о проблеме (приходит владельцу, ответ — в чат с ботом) ----------
+  function renderProblem() {
+    setBack(function () { go("home"); });
+    var box = el("textarea", { rows: "6", maxlength: "2000", placeholder: "Что нажали, что ожидали и что получилось" });
+    var btn = el("button", { class: "btn", text: "📤 Отправить", onclick: function () {
+      btn.disabled = true;
+      api("POST", "/api/feedback", { text: box.value, problem: true }).then(function (r) { toast(r.message); go("home"); })
+        .catch(function (e) { toast(e.message, true); btn.disabled = false; });
+    } });
+    show(el("h1", { text: "🆘 Сообщить о проблеме" }),
+      el("p", { class: "muted", text: "Опишите, что не работает или непонятно. Владелец бота получит это сразу и ответит вам в чате с ботом." }),
+      box, btn, el("button", { class: "btn ghost", text: "◀️ Назад", onclick: function () { go("home"); } }));
+  }
+
   // ---------- 💰 Кредиты: баланс, история, обмен на дни 💎 и коды бота модерации ----------
   function creditsBuy(body, what) {
     confirmAsk(what, function () {
@@ -675,12 +713,13 @@
     body.appendChild(el("p", { class: "muted center-block", text: "Загрузка…" }));
     api("GET", "/api/admin/status").then(function (r) {
       var d = r.status;
-      var accs = Object.keys(d.accounts).map(function (k) { return k + " " + d.accounts[k]; }).join(", ") || "нет";
+      var ST = { ok: "работают", limited: "ограничены Telegram", banned: "заблокированы", disconnected: "не на связи", new: "новые", auth: "ждут входа" };
+      var accs = Object.keys(d.accounts).map(function (k) { return (ST[k] || k) + ": " + d.accounts[k]; }).join(", ") || "нет";
       var nodes = [
         el("div", { class: "grid" }, [stat(d.users, "зарегистрировано"), stat(d.paid, "на 💎"), stat(d.leads_day, "заявок за сутки"), stat(d.sent_day, "рассылок за сутки")]),
         el("div", { class: "card" }, [
           el("b", { text: "🔍 Разведчик: " + (d.scout_paused ? "⏸ на паузе" : "▶️ работает") }),
-          el("div", { class: "muted", text: "режим " + d.mode + "; аккаунты: " + accs }),
+          el("div", { class: "muted", text: "вступает " + (d.mode === "auto" ? "сам" : "после вашего одобрения") + "; аккаунты — " + accs }),
           el("button", { class: "btn small", text: d.scout_paused ? "▶️ Возобновить" : "⏸ Поставить на паузу", onclick: function () {
             confirmAsk(d.scout_paused ? "Возобновить разведчика?" : "Поставить разведчика на паузу?", function () {
               api("PUT", "/api/admin/scout", { paused: !d.scout_paused }).then(function () { toast("Готово"); renderAdmin(); }).catch(function (e) { toast(e.message, true); });
@@ -691,8 +730,10 @@
           el("div", { text: flag(d.selling) + " Продажа 💎: " + (d.selling ? d.prices.join(" / ") + " ₽" : "не продаётся (цены 0)") }),
           el("div", { text: flag(d.pay_ready) + " Ключи оплаты: " + (d.pay_ready ? "есть" : "нет") }),
           el("div", { text: flag(d.refund_days !== "0") + " Возврат: " + (d.refund_days !== "0" ? d.refund_days + " дн." : "выключен") }),
-          el("div", { text: flag(d.autorenew) + " Автопродление  " + flag(d.license) + " Лицензия  " + flag(d.ads) + " Реклама" }),
-          el("div", { text: flag(d.ai) + " ИИ-черновики" + (d.ai && d.ai_key ? ": " + ({ gigachat: "GigaChat", yandex: "YandexGPT", local: "своя модель", anthropic: "Claude, " + d.ai_model }[d.ai_provider] || d.ai_provider) : "") + (d.ai && !d.ai_key ? " — ⚠️ нет ключа ИИ" : "") }),
+          el("div", { text: flag(d.autorenew) + " Автопродление  " + flag(d.credits) + " Кредиты  " + flag(d.license) + " Лицензия" }),
+          el("div", { text: flag(d.ads) + " Продвижение групп (за заявки)  " + flag(d.adposts) + " Реклама в группах" }),
+          el("div", { text: flag(d.ai_helper) + " ИИ-помощник (фильтр заявок, правила групп)" + (d.ai_helper ? ": " + ({ gigachat: "GigaChat", yandex: "YandexGPT", local: "своя модель", anthropic: "Claude" }[d.ai_provider] || d.ai_provider) : "") }),
+          el("div", { text: flag(d.ai) + " ИИ-черновики ответа" + (d.ai && d.ai_key ? ": " + ({ gigachat: "GigaChat", yandex: "YandexGPT", local: "своя модель", anthropic: "Claude, " + d.ai_model }[d.ai_provider] || d.ai_provider) : "") + (d.ai && !d.ai_key ? " — ⚠️ нет ключа ИИ" : "") }),
           el("div", { text: flag(!!d.stats_channel) + " Канал статистики: " + (d.stats_channel || "не подключён") }),
           d.memory ? el("div", { text: ({ ok: "✅", warn: "⚠️", bad: "🔴" })[d.memory.level] + " Память: свободно " + d.memory.available_mb + " из " + d.memory.total_mb + " МБ, подкачка " + d.memory.swap_used_mb + " МБ" + (d.memory.bot_mb !== null ? ", бот " + d.memory.bot_mb + " МБ" : "") }) : null
         ])
@@ -799,10 +840,12 @@
       el("h1", { text: u.name || String(u.id) }),
       el("div", { class: "muted", text: [u.username ? "@" + u.username : "", "ID " + u.id, u.admin ? "администратор" : ""].filter(Boolean).join(" · ") }),
       el("div", { class: "card" }, [
-        el("div", { text: "Тариф: " + tariff }), el("div", { text: "Город: " + (u.city || "вся Россия") }),
+        el("div", { text: "Тариф: " + tariff + (u.trial ? " (пробный)" : "") + (u.paused ? " · ⏸ на паузе" : "") }),
+        el("div", { text: "💰 Кредиты: " + u.credits + (u.credits_hold ? " (+" + u.credits_hold + " заморожено)" : "") }),
+        el("div", { text: "Город: " + (u.city || "вся Россия") }),
         el("div", { text: "Ниши: " + (u.niches.join(", ") || "—") }),
         el("div", { text: "Заявок: сегодня " + u.today + ", всего " + u.total + " · клиентов: " + u.clients }),
-        el("div", { class: "muted", text: "С нами с " + new Date(u.since).toLocaleDateString("ru-RU") + (u.blocked ? " · ⛔ заблокировал бота" : "") })
+        el("div", { class: "muted", text: "С нами с " + new Date(u.since).toLocaleDateString("ru-RU") + (u.blocked ? " · ⛔ заблокировал бота" : "") + (u.source ? " · пришёл: " + u.source : "") })
       ]),
       el("h2", { text: "Тариф" }),
       el("div", { class: "row" }, [

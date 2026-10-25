@@ -101,6 +101,8 @@ async def user_card(s, u: User) -> dict:
         "total": await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.user_id == u.tg_id)) or 0,
         "clients": await s.scalar(select(func.count()).select_from(Client).where(Client.user_id == u.tg_id)) or 0,
         "since": u.created_at.isoformat(), "last_seen": u.last_seen.isoformat(),
+        "credits": u.credits or 0, "credits_hold": u.credits_hold or 0, "trial": bool(u.on_trial),
+        "source": u.source or "", "paused": bool(u.paused),
     })
     return item
 

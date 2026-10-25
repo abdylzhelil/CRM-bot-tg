@@ -5,9 +5,10 @@ from sqlalchemy import select
 from app.db import Session
 from app.models import STAGE_NAMES, Delivery, Group, Lead, User, UserCategory
 from app.services import (
-    ads, autosetup, catalog, crm, lead_actions, levels, payments, profile_edit, quiet, referrals, settings,
+    ads, autosetup, catalog, crm, geo, lead_actions, levels, payments, profile_edit, quiet, referrals, scam, settings,
 )
 from app.services.distribute import is_paid
+from app.bot.handlers import leads as leads_h
 from app.bot.handlers.leads import category_name
 from app.web.keys import USER_KEY
 
@@ -27,6 +28,12 @@ async def read_json(request: web.Request) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _plain(html_text: str) -> str:
+    import re
+
+    return re.sub(r"<[^>]+>", "", html_text or "")
+
+
 async def lead_item(s, d: Delivery, lead: Lead) -> dict:
     return {
         "id": d.id,
@@ -37,9 +44,11 @@ async def lead_item(s, d: Delivery, lead: Lead) -> dict:
         "group": lead.group_title,
         "category": await category_name(s, lead.category_id),
         "place": lead.city or lead.region,
-        "link": lead.link,
+        "link": "" if getattr(lead, "gone_at", None) else lead.link,
         "hot": quiet.is_hot(lead.text),
         "suspicious": lead.suspicious,
+        "warning": _plain(scam.warning(lead.text)),  # «⚠️ Осторожно, возможна схема: …»
+        "gone": bool(getattr(lead, "gone_at", None)),  # автор или админ удалил сообщение — пишите в личку
         "contact": lead_actions.contact_url(lead),
         "from_colleague": bool(d.from_user),
         "created_at": lead.created_at.isoformat(),
@@ -59,11 +68,21 @@ async def leads_list(request: web.Request) -> web.Response:
         q = (select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
              .where(Delivery.user_id == user.tg_id, Delivery.sent))
         q = q.where(Delivery.muted, Delivery.status == "new") if status == "muted" else q.where(Delivery.status == status)
+        cat = _int(request.query.get("cat"), 0)
+        place = request.query.get("place", "")[:64]
+        if cat:
+            q = q.where(Lead.category_id.in_(await leads_h._niche_ids(s, cat)))
+        if place in geo.KNOWN_PLACES:
+            q = q.where(leads_h._place_cond(place))
         if before:
             q = q.where(Delivery.id < before)
         rows = (await s.execute(q.order_by(Delivery.id.desc()).limit(PAGE + 1))).all()
         items = [await lead_item(s, d, lead) for d, lead in rows[:PAGE]]
-    return web.json_response({"items": items, "has_more": len(rows) > PAGE})
+        out = {"items": items, "has_more": len(rows) > PAGE}
+        if not before:  # на первой странице — из чего можно выбрать: ниши и места с числом заявок (как в боте)
+            out["niches"] = [{"id": cid, "name": name, "n": n} for cid, name, n in await leads_h._niches(s, user.tg_id, status)]
+            out["places"] = [{"name": name, "n": n} for _, name, n in await leads_h._places(s, user.tg_id, status, cat)][:12]
+    return web.json_response(out)
 
 
 async def lead_act(request: web.Request) -> web.Response:
@@ -371,6 +390,22 @@ async def plans_get(request: web.Request) -> web.Response:
         "refund": refund_line(refund_days),
         "renew": {"card": row.renew_card or "Банковская карта", "days": row.renew_days} if row.renew_method else None,
     })
+
+
+async def feedback_send(request: web.Request) -> web.Response:
+    """«🆘 Сообщить о проблеме» / «💬 Написать владельцу» из кабинета — то же, что в боте: приходит админу карточкой."""
+    from app.bot.handlers import feedback as feedback_h
+
+    user: User = request[USER_KEY]
+    data = await read_json(request) or {}
+    text = str(data.get("text") or "").strip()
+    if len(text) < 2:
+        return err("invalid", "Напишите, что случилось (хотя бы пару слов)", 422)
+    if data.get("problem"):
+        text = "🆘 Проблема в боте (из кабинета): " + text
+    if not await feedback_h.receive(None, user, text):
+        return err("limit", "Сегодня вы уже написали много сообщений — продолжим завтра", 429)
+    return web.json_response({"ok": True, "message": "Отправлено владельцу. Ответ придёт в чат с ботом."})
 
 
 async def renew_off(request: web.Request) -> web.Response:
