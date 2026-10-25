@@ -75,9 +75,15 @@ async def _tell_board_admin(admin_id: int, amount: int, title: str) -> None:
         from app.bot import notify
         from app.bot.common import kb
 
+        from app.db import Session
+        from app.services import settings
+
+        async with Session() as s:
+            days = await settings.get_int(s, "refund_days")
+        when = f" Они станут доступны через {days} дн. (срок, когда покупатель может вернуть оплату)." if days > 0 else ""
         await notify._bot.send_message(admin_id, f"🎁 Человек из вашей группы «{title[:60]}» оплатил 💎 — вам начислено "
-                                                 f"{amount} кредитов 💰. Их можно обменять на дни 💎 или на бота модерации "
-                                                 "для вашей группы. Спасибо, что поставили КлиентРадар!",
+                                                 f"{amount} кредитов 💰.{when} Их можно обменять на дни 💎 или на бота "
+                                                 "модерации для вашей группы. Спасибо, что поставили КлиентРадар!",
                                        reply_markup=kb([[("💰 Мои кредиты", "cr:menu")]]))
     except Exception:
         pass

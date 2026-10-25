@@ -90,6 +90,24 @@ async def test_guarantee_adds_days(maker, tgbot):
     assert any("Добавили вам +7" in t for t in tgbot.texts(44))
 
 
+async def test_guarantee_not_forever(maker, tgbot):
+    """Один платёж не даёт 💎 навсегда: неделя, начатая после оплаченного срока (дни от гарантии), — без гарантии."""
+    import app.main as main
+
+    await make_user(maker, 46, plan="full", plan_until=now() + timedelta(days=10))
+    async with maker() as s:
+        s.add(Payment(user_id=46, days=30, amount=49000, currency="RUB", charge_id="g2", created_at=now() - timedelta(days=40)))
+        await s.commit()
+        u = await s.get(User, 46)
+        u.guarantee_at = now() - timedelta(days=8)  # неделя началась уже после конца оплаченных 30 дней
+        before = u.plan_until
+        await s.commit()
+    await main.expiry_once()
+    async with maker() as s:
+        u = await s.get(User, 46)
+    assert u.plan_until == before and not any("Добавили вам" in t for t in tgbot.texts(46))
+
+
 async def test_payment_sends_missed_leads(maker, tgbot):
     await make_user(maker, 45)
     for i in range(7):
@@ -101,3 +119,43 @@ async def test_payment_sends_missed_leads(maker, tgbot):
     async with maker() as s:
         n = len((await s.scalars(select(Delivery).where(Delivery.user_id == 45))).all())
     assert n >= 7
+
+
+async def test_missed_counts_only_what_would_come(maker, tgbot, monkeypatch):
+    """Честный «мимо прошло»: если заявку и с 💎 получили бы другие (делим поровну), бесплатному её не засчитываем."""
+    from app.models import Category, Lead
+    from app.services import distribute, settings
+
+    async with maker() as s:
+        await settings.put(s, "free_daily_limit", "0")  # все бесплатные «вне лимита»
+        await settings.put(s, "max_recipients", "1")
+        cat = await s.scalar(select(Category).where(Category.name == "Сайты"))
+        await s.commit()
+    for uid in (81, 82, 83):
+        await make_user(maker, uid)
+    async with maker() as s:
+        lead = Lead(author_id=5, text="Нужен сайт", text_hash="mc1", category_id=cat.id)
+        s.add(lead)
+        await s.flush()
+        await distribute.recipients(s, lead)
+        await s.commit()
+        counts = [(await s.get(User, uid)).missed_count for uid in (81, 82, 83)]
+    assert sum(counts) == 1  # одна заявка, одно место — «мимо» засчитано только одному
+
+
+async def test_payers_before_trial_users(maker, tgbot):
+    from app.models import Category, Lead
+    from app.services import distribute, settings
+
+    async with maker() as s:
+        await settings.put(s, "max_recipients", "1")
+        cat = await s.scalar(select(Category).where(Category.name == "Сайты"))
+        await s.commit()
+    await make_user(maker, 91, plan="full", plan_until=now() + timedelta(days=3), on_trial=True)
+    await make_user(maker, 92, plan="full", plan_until=now() + timedelta(days=30))
+    async with maker() as s:
+        lead = Lead(author_id=5, text="Нужен сайт", text_hash="pt1", category_id=cat.id)
+        s.add(lead)
+        await s.flush()
+        chosen = [u.tg_id for u, _, _ in await distribute.recipients(s, lead) if not u.is_admin]
+    assert chosen == [92]

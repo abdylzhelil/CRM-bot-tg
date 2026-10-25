@@ -5,8 +5,10 @@
 тарифа бота модерации (владелец создаёт их там командой /newcode и добавляет сюда — сам бот модерации не меняем).
 Вывода денег нет: выплаты живыми деньгами — позже и только самозанятым (с чеком), иначе владелец — налоговый агент.
 
-Каждое движение — строка `credit_tx` (видно в «💰 Мои кредиты» и у админа). Возврат оплаты — комиссию списываем
-обратно (сколько есть на балансе). Коммит — на вызывающем.
+Каждое движение — строка `credit_tx` (видно в «💰 Мои кредиты» и у админа). Комиссия заморожена на срок возврата
+(`refund_days`, `hold_until`, `users.credits_hold`); вернули оплату в этот срок — начисление просто отменяется,
+позже — списываем, сколько есть. Админ группы ещё не открывал бота — запись ждёт его (`applied`=False, `claim`).
+Коммит — на вызывающем.
 """
 import re
 from datetime import timedelta
@@ -59,7 +61,9 @@ async def history(s: AsyncSession, user_id: int, limit: int = 10) -> list[Credit
 def tx_line(tx: CreditTx) -> str:
     sign = "+" if tx.amount > 0 else "−"
     what = KIND_NAMES.get(tx.kind, tx.kind)
-    return f"{(tx.created_at + timedelta(hours=3)):%d.%m} {sign}{abs(tx.amount)} — {what}" + (f": {tx.note}" if tx.note else "")
+    frozen = f" (🧊 до {(tx.hold_until + timedelta(hours=3)):%d.%m})" if tx.hold_until and tx.hold_until > now() else ""
+    return (f"{(tx.created_at + timedelta(hours=3)):%d.%m} {sign}{abs(tx.amount)} — {what}" + (f": {tx.note}" if tx.note else "")
+            + frozen)
 
 
 # ---------- дни 💎 ----------
@@ -80,6 +84,7 @@ async def buy_days(s: AsyncSession, user: User, days: int) -> int:
         raise CreditError("Этот пакет сейчас не продаётся.")
     await add(s, user, -price, "days", f"{days} дн.")
     plans.extend(user, timedelta(days=days))
+    user.on_trial = False  # купил сам — это уже не «пробный» (иначе в конце написали бы «пробный закончился»)
     return price
 
 
@@ -183,35 +188,96 @@ async def unsold(s: AsyncSession, kind: str) -> list[ModCode]:
                                  .order_by(ModCode.id))).all())
 
 
-# ---------- комиссия и возврат ----------
+# ---------- комиссия: заморозка на срок возврата и человек, которого ещё нет в боте ----------
 def commission(amount_kop: int, percent: int) -> int:
     """Кредиты с оплаты: percent% суммы в рублях (вниз до целого)."""
     return max(0, amount_kop // 100 * percent // 100)
 
 
+async def accrue(s: AsyncSession, tg_id: int, amount: int, kind: str, note: str, ref: str) -> CreditTx | None:
+    """Начислить комиссию. Пока идёт срок возврата оплаты (refund_days) — заморожена (виден, но не тратится);
+    если человек ещё не открывал бота — запись ждёт его (applied=False) и зачислится при первом входе."""
+    if amount <= 0 or (ref and await s.scalar(select(CreditTx.id).where(CreditTx.ref == ref).limit(1))):
+        return None
+    days = await settings.get_int(s, "refund_days")
+    until = now() + timedelta(days=days) if days > 0 else None
+    user = await s.get(User, tg_id)
+    tx = CreditTx(user_id=tg_id, amount=amount, kind=kind, note=note[:200], ref=ref[:64], hold_until=until,
+                  applied=user is not None)
+    s.add(tx)
+    if user is not None:
+        if until:
+            user.credits_hold = (user.credits_hold or 0) + amount
+        else:
+            user.credits = (user.credits or 0) + amount
+    return tx
+
+
+async def release_due(s: AsyncSession) -> list[tuple[int, int]]:
+    """Срок возврата прошёл — замороженное становится доступным. → [(кому, сколько)] для сообщения."""
+    out: dict[int, int] = {}
+    for tx in (await s.scalars(select(CreditTx).where(CreditTx.hold_until.is_not(None), CreditTx.hold_until <= now()))).all():
+        tx.hold_until = None
+        if not tx.applied:
+            continue  # человека нет в боте — зачислим при входе (claim)
+        user = await s.get(User, tx.user_id)
+        if user is None:
+            continue
+        user.credits_hold = max(0, (user.credits_hold or 0) - tx.amount)
+        user.credits = (user.credits or 0) + tx.amount
+        out[user.tg_id] = out.get(user.tg_id, 0) + tx.amount
+    return list(out.items())
+
+
+async def claim(s: AsyncSession, user: User) -> int:
+    """Человек открыл бота: зачислить то, что ему начислили, пока его здесь не было. → сколько (с замороженным)."""
+    rows = (await s.scalars(select(CreditTx).where(CreditTx.user_id == user.tg_id, ~CreditTx.applied)
+                            .order_by(CreditTx.id))).all()
+    total = 0
+    for tx in rows:
+        tx.applied = True
+        if tx.hold_until is not None and tx.hold_until > now():
+            user.credits_hold = (user.credits_hold or 0) + tx.amount
+        else:
+            tx.hold_until = None
+            user.credits = (user.credits or 0) + tx.amount
+        total += tx.amount
+    return total
+
+
 async def reverse_payment(s: AsyncSession, charge_id: str) -> int:
-    """Оплату вернули — забрать начисленную с неё комиссию (сколько есть на балансе). → списано."""
+    """Оплату вернули — забрать комиссию с неё. Ещё заморожена — просто отменяется; уже доступна — списываем,
+    сколько есть на балансе (потраченное не возвращаем). → списано с доступного."""
     if not charge_id:
         return 0
     taken = 0
     for tx in (await s.scalars(select(CreditTx).where(CreditTx.ref == f"pay-{charge_id}"))).all():
         if await s.scalar(select(CreditTx.id).where(CreditTx.ref == f"rev-{tx.id}").limit(1)):
             continue
-        user = await s.get(User, tx.user_id)
-        if user is None:
-            continue
-        amount = min(tx.amount, user.credits or 0)
-        user.credits = (user.credits or 0) - amount
-        s.add(CreditTx(user_id=user.tg_id, amount=-amount, kind="reverse", note="оплату приглашённого вернули",
-                       ref=f"rev-{tx.id}"))
-        taken += amount
+        user = await s.get(User, tx.user_id) if tx.applied else None
+        held = tx.hold_until is not None and tx.hold_until > now()
+        if held or not tx.applied:
+            amount = tx.amount  # ещё не тратилось: отменяем целиком
+            if held and user is not None:
+                user.credits_hold = max(0, (user.credits_hold or 0) - tx.amount)
+                user.credits = (user.credits or 0) + tx.amount  # освобождаем и тут же списываем ниже
+        else:
+            if user is None:
+                continue
+            amount = min(tx.amount, user.credits or 0)
+        tx.hold_until = None
+        if user is not None:
+            user.credits = (user.credits or 0) - amount
+            taken += amount if not held else 0
+        s.add(CreditTx(user_id=tx.user_id, amount=-amount, kind="reverse", note="оплату приглашённого вернули",
+                       ref=f"rev-{tx.id}", applied=tx.applied))
     return taken
 
 
 async def totals(s: AsyncSession) -> tuple[int, int, int]:
     """(на счетах всего, у скольких людей, начислено за всё время)."""
-    total = await s.scalar(select(func.coalesce(func.sum(User.credits), 0))) or 0
-    holders = await s.scalar(select(func.count()).select_from(User).where(User.credits > 0)) or 0
+    total = await s.scalar(select(func.coalesce(func.sum(User.credits + User.credits_hold), 0))) or 0
+    holders = await s.scalar(select(func.count()).select_from(User).where((User.credits > 0) | (User.credits_hold > 0))) or 0
     earned = await s.scalar(select(func.coalesce(func.sum(CreditTx.amount), 0)).where(
         CreditTx.kind.in_(("board", "admin")))) or 0
     return int(total), holders, int(earned)

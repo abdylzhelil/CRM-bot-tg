@@ -159,6 +159,8 @@ class CreditTx(Base):
     kind: Mapped[str] = mapped_column(String(16), default="")  # board/admin/days/modcode/return/reverse
     note: Mapped[str] = mapped_column(String(200), default="")
     ref: Mapped[str] = mapped_column(String(64), default="", index=True)  # защита от повтора: pay-<charge_id> и т. п.
+    hold_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)  # заморожено до (срок возврата)
+    applied: Mapped[bool] = mapped_column(Boolean, default=True, index=True)  # False — человек ещё не открыл бота
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
 
 
@@ -403,6 +405,7 @@ class User(Base):
     on_trial: Mapped[bool] = mapped_column(Boolean, default=False)  # сейчас пробный 💎 (не оплачен)
     guarantee_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # начало текущей недели «гарантии заявок»
     credits: Mapped[int] = mapped_column(Integer, default=0)  # 💰 кредиты (1 кредит = 1 ₽ внутри бота), история — credit_tx
+    credits_hold: Mapped[int] = mapped_column(Integer, default=0)  # комиссия, замороженная на срок возврата оплаты
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=now)
 

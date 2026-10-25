@@ -401,7 +401,7 @@ async def credits_get(request: web.Request) -> web.Response:
         bot_name = (await settings.get(s, "mod_bot_username") or "").lstrip("@")
     name = lambda k: credits.MOD_KINDS.get(k, (k,))[0].replace("🛡 ", "")  # noqa: E731
     return web.json_response({
-        "balance": row.credits or 0, "percent": pct, "mod_bot": bot_name,
+        "balance": row.credits or 0, "hold": row.credits_hold or 0, "percent": pct, "mod_bot": bot_name,
         "history": [{"line": credits.tx_line(t)} for t in hist],
         "waiting": [{"id": w.id, "title": name(w.kind), "price": w.price} for w in waiting],
         "codes": [{"title": name(c.kind), "code": c.code} for c in codes],

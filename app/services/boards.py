@@ -122,14 +122,12 @@ async def reward(s: AsyncSession, user: User, amount_kop: int, ref: str) -> tupl
     g = await s.get(Group, int(m.group(1)))
     if g is None or not g.board_admin or g.board_admin == user.tg_id:
         return None
-    admin = await s.get(User, g.board_admin)
     amount = credits.commission(amount_kop, await settings.get_int(s, "board_percent"))
-    if admin is None or amount <= 0:
-        return None
-    if await credits.add(s, admin, amount, "board", g.title[:80], ref=f"pay-{ref}") is None:
+    # даже если админ ещё не открывал бота — запись ждёт его (зачислится при первом входе)
+    if await credits.accrue(s, g.board_admin, amount, "board", g.title[:80], ref=f"pay-{ref}") is None:
         return None
     g.board_credits = (g.board_credits or 0) + amount
-    return admin.tg_id, amount, g.title
+    return g.board_admin, amount, g.title
 
 
 async def my_groups(s: AsyncSession, tg_id: int) -> list[tuple[Group, int, int]]:

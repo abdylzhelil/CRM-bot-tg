@@ -151,6 +151,7 @@ base = Router()
 @base.message(Command("menu"))
 async def start(m: Message, state: FSMContext, user: User, command: CommandObject) -> None:
     await state.clear()
+    await credits.claim_on_start(user)  # админ группы впервые открыл бота — его кредиты ждали здесь
     if command.args == "ads" and user.verified:  # ссылка для рекламодателей: сразу к заказу рекламы
         return await adposts.link_entry(m, user)
     referrer = referrals.parse_payload(command.args)
@@ -224,6 +225,9 @@ async def deleteme(m: Message, user: User) -> None:
         return await m.answer("Администратора удалить нельзя.")
     paid = user.plan == "full" and user.plan_until is not None and user.plan_until > now()
     warn = "\n⚠️ У вас оплаченный 💎 тариф — он тоже пропадёт без возврата." if paid else ""
+    total = (getattr(user, "credits", 0) or 0) + (getattr(user, "credits_hold", 0) or 0)
+    if total:
+        warn += f"\n⚠️ На счёте {total} кредитов 💰 — они сгорят. Сначала можно обменять их: /credits"
     await m.answer(
         "🗑 <b>Удалить мои данные?</b>\nБудут удалены профиль, настройки, полученные заявки и ваши клиенты в CRM. "
         f"Вернуть их будет нельзя.{warn}\nПотом можно зарегистрироваться заново.",

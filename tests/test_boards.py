@@ -51,11 +51,12 @@ async def test_commission_to_group_admin(maker, tgbot):
     async with maker() as s:
         admin = await s.get(User, 777)
         g = await s.get(Group, gid)
-    assert admin.credits == 98 and g.board_credits == 98 and admin.plan != "full"  # 20% от 490 ₽ — кредитами, не днями
+    # 20% от 490 ₽ — кредитами, не днями; первые 3 дня (срок возврата) заморожены
+    assert admin.credits_hold == 98 and admin.credits == 0 and g.board_credits == 98 and admin.plan != "full"
     assert any("98 кредитов" in t for t in tgbot.texts(777))
     async with maker() as s:  # повтор того же платежа — второй раз не начисляем
         new, _ = await payments.apply(s, 888, 30, 49000, "RUB", "ch-1")
-        assert not new and (await s.get(User, 777)).credits == 98
+        assert not new and (await s.get(User, 777)).credits_hold == 98
 
 
 async def test_group_board_posts_and_pins(maker):

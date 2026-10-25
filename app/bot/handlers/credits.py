@@ -64,7 +64,9 @@ async def show(target, user: User) -> None:
         waiting = await credits.waiting_of(s, user.tg_id)
         codes = await credits.codes_of(s, user.tg_id)
         pct = await settings.get_int(s, "board_percent")
-    lines = [f"💰 <b>Мои кредиты: {row.credits or 0}</b>",
+    hold = row.credits_hold or 0
+    lines = [f"💰 <b>Мои кредиты: {row.credits or 0}</b>"
+             + (f"\n🧊 Заморожено: {hold} — станут доступны, когда пройдёт срок возврата оплаты" if hold else ""),
              "1 кредит = 1 ₽ внутри бота. Тратятся на дни 💎 и на бота модерации для вашей группы.", "",
              f"Как получить: поставьте КлиентРадар в свою группу админом — в закрепе появится рейтинг заявок. "
              f"Кто придёт по кнопке из закрепа и оплатит 💎, — вам {pct}% суммы кредитами."]
@@ -389,3 +391,34 @@ async def remind_waiting() -> bool:
                        kb([[(f"➕ {credits.MOD_KINDS[k][0].replace('🛡 Бот модерации — ', 'Коды: ')}", f"cra:add:{k}")
                                          for k in kinds], [("⏳ Кто ждёт", "cra:wait")]]))
     return True
+
+
+async def release_once() -> int:
+    """Разморозить комиссию, у которой прошёл срок возврата оплаты, и сказать людям."""
+    async with Session() as s:
+        done = await credits.release_due(s)
+        await s.commit()
+    for uid, amount in done:
+        try:
+            await notify._bot.send_message(uid, f"💰 {amount} кредитов стали доступны — можно обменять на дни 💎 "
+                                                "или бота модерации.", reply_markup=kb([[("💰 Мои кредиты", "cr:menu")]]))
+        except Exception:
+            pass
+    return len(done)
+
+
+async def claim_on_start(user: User) -> None:
+    """Первый вход админа группы: зачислить кредиты, начисленные, пока его не было в боте."""
+    async with Session() as s:
+        row = await s.get(User, user.tg_id)
+        if row is None:
+            return
+        got = await credits.claim(s, row)
+        await s.commit()
+        user.credits, user.credits_hold = row.credits, row.credits_hold
+    if got:
+        try:
+            await notify._bot.send_message(user.tg_id, f"🎁 Пока вас не было, за вашу группу с КлиентРадаром начислено "
+                                                       f"{got} кредитов 💰.", reply_markup=kb([[("💰 Мои кредиты", "cr:menu")]]))
+        except Exception:
+            pass

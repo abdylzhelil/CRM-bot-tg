@@ -104,6 +104,7 @@ async def board_loop(bot: Bot) -> None:
             from app.bot.handlers import credits as credits_h
 
             await credits_h.remind_waiting()
+            await credits_h.release_once()  # срок возврата прошёл — комиссия админам становится доступной
         except Exception:
             log.exception("board_loop")
         await asyncio.sleep(600)
@@ -127,11 +128,17 @@ async def rating_cmd(m: Message, bot: Bot) -> None:
             g.board_on = False
         elif arg and arg[0].lower() in ("on", "вкл"):
             g.board_on, g.board_at = True, None
-        on, gid = g.board_on, g.id
+        if not g.board_admin:  # бот попал в группу до комиссии — она достаётся админу, включившему рейтинг
+            g.board_admin = m.from_user.id
+        on, gid, mine = g.board_on, g.id, g.board_admin == m.from_user.id
+        pct = await settings.get_int(s, "board_percent")
         await s.commit()
     if on:
         note = await update_one(bot, gid)
-        await m.reply("📊 Рейтинг заявок включён" + (f" — но {note}" if note else "") + ". Выключить: /rating off")
+        me = await bot.me()
+        await m.reply("📊 Рейтинг заявок включён" + (f" — но {note}" if note else "") + ". Выключить: /rating off"
+                      + (f"\n💰 Вам — {pct}% с оплат тех, кто придёт по кнопкам из закрепа: откройте @{me.username} "
+                         "→ 👤 Профиль → 💰 Мои кредиты." if mine and pct else ""))
     else:
         await m.reply("📊 Рейтинг заявок выключен. Включить: /rating on")
 

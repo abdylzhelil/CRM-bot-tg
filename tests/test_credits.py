@@ -67,23 +67,87 @@ async def test_cancel_waiting_returns_credits(maker):
         assert u.credits == 300 and await credits.waiting_of(s) == []
 
 
-async def test_refund_takes_commission_back(maker, tgbot):
+async def _group_sale(maker, admin_exists=True, charge="ch-9"):
     async with maker() as s:
         g = Group(tg_id=-1, title="Группа", status="joined", board_admin=777)
         s.add(g)
         await s.flush()
-        s.add(User(tg_id=777, name="Админ", onboarded=True))
+        if admin_exists:
+            s.add(User(tg_id=777, name="Админ", onboarded=True))
         s.add(User(tg_id=888, name="Покупатель", onboarded=True, source=f"g{g.id}"))
         await s.commit()
     async with maker() as s:
-        await payments.apply(s, 888, 30, 100000, "RUB", "ch-9")
+        await payments.apply(s, 888, 30, 100000, "RUB", charge)
+
+
+async def _age_holds(maker):
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
     async with maker() as s:
-        assert (await s.get(User, 777)).credits == 200
-        p = await s.scalar(__import__("sqlalchemy").select(Payment).where(Payment.charge_id == "ch-9"))
+        for tx in (await s.scalars(select(CreditTx).where(CreditTx.hold_until.is_not(None)))).all():
+            tx.hold_until = now() - timedelta(minutes=1)
+        await s.commit()
+
+
+async def test_refund_while_frozen_cancels_commission(maker, tgbot):
+    """Вернули оплату в срок возврата — комиссия ещё заморожена и просто отменяется (админ её не потратил)."""
+    from sqlalchemy import select
+
+    await _group_sale(maker)
+    async with maker() as s:
+        u = await s.get(User, 777)
+        assert (u.credits, u.credits_hold) == (0, 200)
+        p = await s.scalar(select(Payment).where(Payment.charge_id == "ch-9"))
         await payments.take_back(s, p)
     async with maker() as s:
-        assert (await s.get(User, 777)).credits == 0
+        u = await s.get(User, 777)
+        assert (u.credits, u.credits_hold) == (0, 0)
         assert await credits.reverse_payment(s, "ch-9") == 0  # второй раз не списываем
+    await _age_holds(maker)
+    async with maker() as s:
+        assert await credits.release_due(s) == []  # отменённое не размораживается
+        await s.commit()
+        assert (await s.get(User, 777)).credits == 0
+
+
+async def test_release_after_refund_window_then_refund_takes_rest(maker, tgbot):
+    from sqlalchemy import select
+
+    from app.bot.handlers import credits as h
+
+    await _group_sale(maker)
+    await _age_holds(maker)
+    assert await h.release_once() == 1
+    async with maker() as s:
+        u = await s.get(User, 777)
+        assert (u.credits, u.credits_hold) == (200, 0)
+        await credits.add(s, u, -150, "days")  # потратил часть
+        await s.commit()
+        p = await s.scalar(select(Payment).where(Payment.charge_id == "ch-9"))
+        await payments.take_back(s, p)
+    async with maker() as s:
+        assert (await s.get(User, 777)).credits == 0  # списали, сколько было
+
+
+async def test_admin_not_in_bot_gets_credits_later(maker, tgbot):
+    """Админ добавил бота в группу, но сам бота не открывал: кредиты ждут и зачисляются при первом входе."""
+    from app.bot.handlers import credits as h
+    from app.services import cleanup
+
+    await _group_sale(maker, admin_exists=False)
+    await _age_holds(maker)
+    assert await h.release_once() == 0
+    async with maker() as s:
+        s.add(User(tg_id=777, name="Пришёл", onboarded=False))
+        await s.commit()
+        u = await s.get(User, 777)
+    await h.claim_on_start(u)
+    async with maker() as s:
+        u = await s.get(User, 777)
+        assert u.credits == 200
+        assert u not in await cleanup.empty_users(s, -1)  # человек с кредитами — не «пустой аккаунт»
 
 
 async def test_menu_and_admin_screens(maker, tgbot):

@@ -107,13 +107,19 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
             first = [(wanted, "late")]
     from app.services import upsell
 
-    upsell.record_missed([u for u in free if load[u.tg_id] >= limit])  # «лимит исчерпан — мимо прошло N»
+    over = [u for u in free if load[u.tg_id] >= limit]
     free = [u for u in free if load[u.tg_id] < limit]
     pool = len(paid) + len(free)
-    k = min(await settings.get_int(s, "max_recipients"), -(-pool // await niche_flow(s, root)))
-    # справедливо: меньше получивших сегодня — раньше; при равенстве — случайно
+    flow, max_k = await niche_flow(s, root), await settings.get_int(s, "max_recipients")
+    k = min(max_k, -(-pool // flow))
     order = lambda us: sorted(us, key=lambda u: (load[u.tg_id], random.random()))  # noqa: E731
-    picked = [(u, "now") for u in order(paid)[:k]]
+    if over:  # «лимит исчерпан — мимо прошло N»: честно — только тем, кому заявка досталась бы с 💎
+        k_all = min(max_k, -(-(pool + len(over)) // flow))
+        would = order(paid + over)[:k_all]
+        upsell.record_missed([u for u in would if u in over])
+    # справедливо: меньше получивших сегодня — раньше; при равенстве — случайно (order выше)
+    # платящие — раньше пробных: пробные дни не должны отбирать заявки у тех, кто заплатил
+    picked = [(u, "now") for u in sorted(paid, key=lambda u: (bool(u.on_trial), load[u.tg_id], random.random()))[:k]]
     picked += [(u, "late") for u in order(free)[: max(k - len(picked), 0)]]
     # очередь внутри заявки: автор группы первым, дальше — у кого уровень выше, при равенстве — у кого меньше заявок
     picked.sort(key=lambda p: (-p[0].level, load[p[0].tg_id]))

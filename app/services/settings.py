@@ -32,7 +32,7 @@ DEFAULTS: dict[str, str] = {
     "offer_daily": "5",
     "credits_enabled": "1",
     "mod_price_monthly": "250",
-    "mod_price_yearly": "2490",
+    "mod_price_yearly": "0",  # бот модерации на сервере (ветка ccr-a042…) годового тарифа пока не знает
     "mod_price_forever": "6990",
     "mod_bot_username": "",
     "user_search_full": "10",

@@ -5,6 +5,7 @@
 2. Цифры в «💎 Тариф»: сколько заявок было за неделю по нишам и городу человека и сколько пришло ему.
 3. Пробный 💎 (`trial_days`) — один раз новому пользователю после регистрации (`users.trial_used/on_trial`).
 4. Гарантия заявок (`guarantee_min`/`guarantee_days`): оплатившему, если за 7 дней пришло меньше N заявок, — дни 💎.
+   Только за недели внутри оплаченного деньгами срока (`paid_until_map`): дни от самой гарантии новую не дают.
 Деньги здесь не двигаются — только дни тарифа.
 """
 from datetime import timedelta
@@ -76,17 +77,31 @@ async def start_trial(s: AsyncSession, user: User) -> int:
     return days
 
 
+async def paid_until_map(s: AsyncSession) -> dict[int, object]:
+    """{человек: до какого момента покрыто ДЕНЬГАМИ} — платежи складываются подряд, возвращённые не считаются."""
+    rows = (await s.execute(select(Payment.user_id, Payment.created_at, Payment.days).where(
+        Payment.days > 0, ~Payment.refunded).order_by(Payment.created_at))).all()
+    out: dict[int, object] = {}
+    for uid, at, days in rows:
+        start = max(out.get(uid) or at, at)
+        out[uid] = start + timedelta(days=days)
+    return out
+
+
 async def guarantee_due(s: AsyncSession) -> list[tuple[User, int, int]]:
     """Оплатившие, у кого за прошедшую неделю пришло меньше guarantee_min заявок: [(человек, пришло, +дней)].
     Дни уже добавлены (коммит — на вызывающем). Неделя считается от `guarantee_at`; первая — с первого обхода."""
     need, add = await settings.get_int(s, "guarantee_min"), await settings.get_int(s, "guarantee_days")
     out: list[tuple[User, int, int]] = []
-    paid_ids = set((await s.scalars(select(Payment.user_id).where(Payment.days > 0, ~Payment.refunded))).all())
+    paid_end = await paid_until_map(s)
     users = (await s.scalars(select(User).where(User.plan == "full", ~User.is_admin, ~User.blocked))).all()
     for u in users:
         if u.plan_until is not None and u.plan_until <= now():
             continue
-        if u.on_trial or u.tg_id not in paid_ids or u.paused:
+        end = paid_end.get(u.tg_id)
+        if u.on_trial or end is None or u.paused or (u.guarantee_at is not None and u.guarantee_at >= end):
+            # пробный, бонусный, на паузе или неделя началась уже после оплаченного срока (дни от гарантии,
+            # приглашений, кредитов) — гарантия не считается, иначе один платёж давал бы 💎 навсегда
             u.guarantee_at = None  # пробный, бонусный или на паузе — гарантия не считается
             continue
         if u.guarantee_at is None:
