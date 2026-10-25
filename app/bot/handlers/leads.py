@@ -4,7 +4,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
 
 from app.bot import notify
-from app.bot.common import COPY_MAX, ask, esc, kb
+from app.bot.common import COPY_MAX, ask, esc, kb, reply
 from app.db import Session
 from app.models import Category, Client, Delivery, Group, Lead, User, now
 from app.services import ai, draft, lead_actions, mute, referrals, settings
@@ -62,58 +62,146 @@ async def send_card(msg: Message, s, d: Delivery, lead: Lead, user: User) -> Non
     )
 
 
-@router.message(F.text == "📥 Заявки")
-async def leads_menu(m: Message, user: User) -> None:
+# ---------- 📥 Заявки: список → ниша → по одной заявке с «◀️ / ▶️» (просьба владельца 25.10) ----------
+LABELS = dict(LISTS) | {"muted": "📥 Накопилось"}
+
+
+def _filter(q, user_id: int, status: str):
+    q = q.where(Delivery.user_id == user_id, Delivery.sent)
+    # «🔕 накопилось»: пришли без уведомления и ещё не разобраны (они же есть в «🆕 Новые»)
+    return q.where(Delivery.muted, Delivery.status == "new") if status == "muted" else q.where(Delivery.status == status)
+
+
+async def _niche_ids(s, cat: int) -> list[int]:
+    return [cat] + list((await s.scalars(select(Category.id).where(Category.parent_id == cat))).all())
+
+
+async def _niches(s, user_id: int, status: str) -> list[tuple[int, str, int]]:
+    """[(ниша верхнего уровня, название, сколько заявок)] в этом списке — для выбора ниши."""
+    q = select(Lead.category_id, func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id)
+    rows = (await s.execute(_filter(q, user_id, status).group_by(Lead.category_id))).all()
+    agg: dict[int, int] = {}
+    for cid, n in rows:
+        root = await root_category(s, cid) or 0
+        agg[root] = agg.get(root, 0) + n
+    out = []
+    for root, n in agg.items():
+        cat = await s.get(Category, root) if root else None
+        out.append((root, f"{cat.emoji} {cat.name}".strip() if cat else "Без ниши", n))
+    return sorted(out, key=lambda x: -x[2])
+
+
+async def menu_view(user: User) -> tuple[str, object]:
     async with Session() as s:
-        mine = Delivery.user_id == user.tg_id
         cnt = await status_counts(s, user.tg_id)
-        waiting = await s.scalar(select(func.count()).select_from(Delivery).where(mine, ~Delivery.sent))
-        rows = (await s.execute(
-            select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
-            .where(mine, Delivery.sent, Delivery.status.in_(["new", "postponed"]))
-            .order_by(Delivery.id.desc()).limit(PAGE)
-        )).all()
+        waiting = await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.user_id == user.tg_id, ~Delivery.sent))
         row = await s.get(User, user.tg_id)
         muted_n = await mute.accumulated(s, user.tg_id)
-        markup = lists_keyboard(cnt)
-        if muted_n:
-            markup.inline_keyboard.append(kb([[(f"📥 Накопилось без уведомлений · {muted_n}", "ll:muted:0")]]).inline_keyboard[0])
-        markup.inline_keyboard.append(kb([[(f"🔕 Уведомления выключены {mute.until_text(row)} — включить" if mute.is_muted(row)
-                                            else "🔕 Выключить уведомления на время", "mt:menu")]]).inline_keyboard[0])
-        await m.answer(
-            "📥 Заявки по спискам — нажмите, чтобы открыть:"
+    markup = lists_keyboard(cnt)
+    if muted_n:
+        markup.inline_keyboard.append(kb([[(f"📥 Накопилось без уведомлений · {muted_n}", "ll:muted:0")]]).inline_keyboard[0])
+    markup.inline_keyboard.append(kb([[(f"🔕 Уведомления выключены {mute.until_text(row)} — включить" if mute.is_muted(row)
+                                        else "🔕 Выключить уведомления на время", "mt:menu")]]).inline_keyboard[0])
+    text = ("📥 <b>Заявки</b> — выберите список, потом нишу; заявки откроются по одной, листайте «◀️ / ▶️»."
             + (f"\n⏳ Ещё придут: {waiting}" if waiting else "")
             + (f"\n🔕 Уведомления выключены {mute.until_text(row)} — заявки копятся без сообщений." if mute.is_muted(row) else "")
-            + ("\nПоследние новые и отложенные ниже." if rows else "\nНовых заявок пока нет — пришлю, как только появятся."),
-            reply_markup=markup,
-        )
-        for d, lead in rows:
-            await send_card(m, s, d, lead, user)
+            + ("" if cnt.get("new") or cnt.get("postponed") else "\nНовых заявок пока нет — пришлю, как только появятся."))
+    return text, markup
+
+
+@router.message(F.text == "📥 Заявки")
+async def leads_menu(m: Message, user: User) -> None:
+    text, markup = await menu_view(user)
+    await m.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data == "ll:menu")
+async def leads_menu_cb(cb: CallbackQuery, user: User) -> None:
+    text, markup = await menu_view(user)
+    await reply(cb, text, markup)
 
 
 @router.callback_query(F.data.regexp(r"^ll:(new|postponed|taken|rejected|spam|muted):\d{1,18}$"))
 async def leads_list(cb: CallbackQuery, user: User) -> None:
-    """Список заявок одного статуса, по 5, от новых к старым; «Ещё» — следующая страница."""
-    _, status, raw = cb.data.split(":")
-    before = int(raw)
+    """Список выбран: если ниш несколько — выбор ниши, иначе сразу первая заявка."""
+    status = cb.data.split(":")[1]
     async with Session() as s:
-        q = (select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
-             .where(Delivery.user_id == user.tg_id, Delivery.sent))
-        # «🔕 накопилось»: пришли без уведомления и ещё не разобраны (они же есть в «🆕 Новые»)
-        q = q.where(Delivery.muted, Delivery.status == "new") if status == "muted" else q.where(Delivery.status == status)
-        if before:
-            q = q.where(Delivery.id < before)
-        rows = (await s.execute(q.order_by(Delivery.id.desc()).limit(PAGE + 1))).all()
-        label = dict(LISTS).get(status, "📥 Накопилось без уведомлений")
-        if not rows:
-            await cb.answer()
-            return await cb.message.answer(f"{label}: пусто.")
-        await cb.message.answer(f"{label}:" if not before else f"{label} (дальше):")
-        for d, lead in rows[:PAGE]:
-            await send_card(cb.message, s, d, lead, user)
-    if len(rows) > PAGE:
-        await cb.message.answer("Есть ещё.", reply_markup=kb([[("⬇️ Показать ещё", f"ll:{status}:{rows[PAGE - 1][0].id}")]]))
-    await cb.answer()
+        niches = await _niches(s, user.tg_id, status)
+    total = sum(n for _, _, n in niches)
+    label = LABELS[status]
+    if not total:
+        return await reply(cb, f"{label}: пусто.", kb([[("◀️ Списки", "ll:menu")]]))
+    if len(niches) == 1:
+        return await show_one(cb, user, status, 0, 0, "c")
+    rows = [[(f"📂 Все ниши · {total}", f"lv:{status}:0:0:c")]]
+    rows += [[(f"{name} · {n}"[:60], f"lv:{status}:{cid}:0:c")] for cid, name, n in niches]
+    await reply(cb, f"{label}: {total}. Какую нишу смотреть?", kb(rows + [[("◀️ Списки", "ll:menu")]]))
+
+
+@router.callback_query(F.data.regexp(r"^lv:(new|postponed|taken|rejected|spam|muted):\d{1,18}:\d{1,18}:[cnp]$"))
+async def leads_view(cb: CallbackQuery, user: User) -> None:
+    _, status, cat, did, way = cb.data.split(":")
+    await show_one(cb, user, status, int(cat), int(did), way)
+
+
+async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: int, way: str) -> None:
+    """Одна заявка. way: c — эта (или следующая, если её уже убрали из списка), n — следующая (старше), p — предыдущая.
+    Листаем по номеру доставки, а не по позиции: после «Не моё»/«В работу» «▶️» ведёт к следующей, а не перескакивает."""
+    async with Session() as s:
+        q = _filter(select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id), user.tg_id, status)
+        if cat:
+            q = q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
+        if way == "p":
+            row = (await s.execute(q.where(Delivery.id > did).order_by(Delivery.id).limit(1))).first()
+        else:
+            if did:
+                q2 = q.where(Delivery.id < did) if way == "n" else q.where(Delivery.id <= did)
+            else:
+                q2 = q
+            row = (await s.execute(q2.order_by(Delivery.id.desc()).limit(1))).first()
+            if row is None and did:  # дошли до конца — показываем последнюю (самую старую)
+                row = (await s.execute(q.order_by(Delivery.id).limit(1))).first()
+        count_q = select(func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id)
+        count_q = _filter(count_q, user.tg_id, status)
+        if cat:
+            count_q = count_q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
+        total = await s.scalar(count_q) or 0
+        label = LABELS[status] + (f" · {(await s.get(Category, cat)).name}" if cat and await s.get(Category, cat) else "")
+        if row is None:
+            return await reply(cb, f"{label}: пусто.", kb([[("◀️ Списки", "ll:menu")]]))
+        d, lead = row
+        pos = (await s.scalar(count_q.where(Delivery.id > d.id)) or 0) + 1
+        client_id = None
+        if d.status == "taken":
+            client_id = await s.scalar(select(Client.id).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
+        text = f"<b>{esc(label)}</b> — {pos} из {total}\n\n" + notify.lead_text(lead, await category_name(s, lead.category_id))
+    card = card_keyboard(lead, d, user, client_id)
+    await reply(cb, text, with_nav(card, nav_rows(status, cat, d.id, pos, total)))
+
+
+def nav_rows(status: str, cat: int, did: int, pos: int, total: int) -> list:
+    base = f"lv:{status}:{cat}:{did}"
+    row = ([("◀️ Предыдущая", f"{base}:p")] if pos > 1 else []) + ([("Следующая ▶️", f"{base}:n")] if pos < total else [])
+    return kb(([row] if row else []) + [[("📋 Списки", "ll:menu"), ("📂 Ниши", f"ll:{status}:0")]]).inline_keyboard
+
+
+def with_nav(card, nav: list):
+    from aiogram.types import InlineKeyboardMarkup
+
+    return InlineKeyboardMarkup(inline_keyboard=list(card.inline_keyboard if card else []) + nav)
+
+
+def _nav_of(cb: CallbackQuery) -> list:
+    """Строки «◀️ / ▶️ / Списки» из сообщения, где нажали кнопку (заявка открыта в просмотре по одной)."""
+    markup = getattr(cb.message, "reply_markup", None) if cb.message else None
+    rows = getattr(markup, "inline_keyboard", None) or []
+    return [r for r in rows if r and all((b.callback_data or "").startswith(("lv:", "ll:")) for b in r)]
+
+
+async def edit_markup(cb: CallbackQuery, markup) -> None:
+    """Сменить кнопки под заявкой, сохранив навигацию просмотра (если она есть)."""
+    nav = _nav_of(cb)
+    await cb.message.edit_reply_markup(reply_markup=with_nav(markup, nav) if nav else markup)
 
 
 @router.callback_query(F.data.startswith("lead:"))
@@ -150,12 +238,12 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
             else:
                 markup = notify.lead_keyboard(lead, d.id, user.is_admin)
                 note = "Снова берём заявки из этой группы"
-            await cb.message.edit_reply_markup(reply_markup=markup)
+            await edit_markup(cb, markup)
             return await cb.answer(note, show_alert=g.no_leads)
         if action == "take":
             client = await lead_actions.take(s, user, d, lead)
             await s.commit()
-            await cb.message.edit_reply_markup(reply_markup=kb([[("👤 Открыть клиента", f"cl:open:{client.id}")]]))
+            await edit_markup(cb, kb([[("👤 Открыть клиента", f"cl:open:{client.id}")]]))
             return await cb.answer("Клиент в CRM")
         try:
             note = await lead_actions.apply_status(s, user, d, lead, action)
@@ -169,7 +257,7 @@ async def lead_action(cb: CallbackQuery, user: User, state: FSMContext = None) -
         if action in ("later", "reject"):  # «Не моё» по рекламе услуг — можно ещё научить фильтр
             rows.append([("🙅 Исполнитель (научить фильтр)", f"lead:offer:{d.id}")])
         markup = kb(rows)
-    await cb.message.edit_reply_markup(reply_markup=markup)
+    await edit_markup(cb, markup)
     await cb.answer(note)
 
 

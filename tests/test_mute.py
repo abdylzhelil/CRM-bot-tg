@@ -44,7 +44,8 @@ async def test_muted_user_gets_leads_into_list_without_messages(maker, tgbot):
     # список «накопилось» открывается
     c = cb("ll:muted:0")
     await leads_h.leads_list(c, user)
-    assert "Накопилось" in c.message.answer.call_args_list[0].args[0]
+    shown = [c_.args[0] for c_ in c.answer.call_args_list + c.message.answer.call_args_list if c_.args]
+    assert any("Накопилось" in x and "из 2" in x for x in shown)  # заявки по одной: «1 из 2»
     # включил сам — итог «накопилось 2»
     c = cb("mt:on")
     await mute_h.mt_on(c, user)

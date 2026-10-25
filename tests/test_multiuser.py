@@ -270,7 +270,7 @@ async def test_bot_lists_by_status_and_restore_button(maker, tgbot):
     c.data, c.from_user.id = "ll:rejected:0", 44
     c.answer, c.message.answer = AsyncMock(), AsyncMock()
     await leads.leads_list(c, user)
-    markup = c.message.answer.call_args.kwargs["reply_markup"]
+    markup = c.answer.call_args.kwargs["reply_markup"]  # одна заявка с навигацией
     assert any(b.callback_data == f"lead:restore:{d.id}" for row in markup.inline_keyboard for b in row)
     c.data = f"lead:restore:{d.id}"
     c.message.edit_reply_markup = AsyncMock()
@@ -302,3 +302,52 @@ async def test_blacklist_remove_clears_votes_and_crm_delete(maker, tgbot):
         assert await crm.cancel_reminders(s, cl) == 1
         await crm.delete_client(s, cl)
         assert await s.get(Client, cl.id) is None
+
+
+async def test_leads_one_by_one_with_niches_and_nav(maker, tgbot):
+    """Владелец 25.10: «📥 Заявки» — выбрать список и нишу, заявки по одной с «◀️ / ▶️»; после «Не моё» навигация остаётся."""
+    from app.models import Category
+
+    await make_user(maker, 47, niches=("Сайты", "Дизайн"))
+    async with maker() as s:
+        cats = {c.name: c.id for c in (await s.scalars(select(Category).where(Category.name.in_(["Сайты", "Дизайн"])))).all()}
+        ids = []
+        for i, name in enumerate(["Сайты", "Сайты", "Дизайн"]):
+            lead = Lead(author_id=600 + i, text=f"Нужен {name} {i}", text_hash=f"ob{i}", category_id=cats[name])
+            s.add(lead)
+            await s.flush()
+            d = Delivery(lead_id=lead.id, user_id=47, deliver_after=now(), sent=True, status="new")
+            s.add(d)
+            await s.flush()
+            ids.append(d.id)
+        await s.commit()
+        user = await s.get(User, 47)
+
+    def cb_(data):
+        c = MagicMock()
+        c.data, c.from_user.id = data, 47
+        c.answer = AsyncMock()
+        return c
+
+    c = cb_("ll:new:0")
+    await leads.leads_list(c, user)
+    text, markup = c.answer.call_args.args[0], c.answer.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "Какую нишу" in text and f"lv:new:{cats['Сайты']}:0:c" in data and "lv:new:0:0:c" in data
+    c = cb_(f"lv:new:{cats['Сайты']}:0:c")
+    await leads.leads_view(c, user)
+    text, markup = c.answer.call_args.args[0], c.answer.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "1 из 2" in text and "Сайты 1" in text and f"lv:new:{cats['Сайты']}:{ids[1]}:n" in data
+    assert f"lead:reject:{ids[1]}" in data
+    # «Не моё» в просмотре: кнопки сменились, а «Следующая ▶️» осталась
+    c2 = cb_(f"lead:reject:{ids[1]}")
+    c2.message.reply_markup = markup
+    c2.message.edit_reply_markup = AsyncMock()
+    await leads.lead_action(c2, user)
+    new = c2.message.edit_reply_markup.call_args.kwargs["reply_markup"]
+    assert f"lv:new:{cats['Сайты']}:{ids[1]}:n" in [b.callback_data for row in new.inline_keyboard for b in row]
+    c = cb_(f"lv:new:{cats['Сайты']}:{ids[1]}:n")
+    await leads.leads_view(c, user)
+    text = c.answer.call_args.args[0]
+    assert "Сайты 0" in text and "1 из 1" in text  # убранная из «Новых» не мешает листать
