@@ -202,6 +202,54 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
     return True
 
 
+# ⏱ Таймер для владельца (29.10: «чтобы я понимал, когда он по новой начнёт поиск и зайдёт в группы»)
+TIMER: dict = {"search_at": None, "searching": False, "join_at": None}
+
+
+def _later(seconds: float):
+    return now() + timedelta(seconds=seconds)
+
+
+def _until(moment) -> str:
+    from app.services import quiet
+
+    left = int((moment - now()).total_seconds())
+    if left <= 60:
+        return "вот-вот"
+    h, m = divmod(left // 60, 60)
+    return f"в {quiet.to_local(moment):%H:%M} (через {f'{h} ч ' if h else ''}{m} мин)"
+
+
+async def timer_lines(manager=None) -> list[str]:
+    """Когда разведчик снова ищет и когда вступит в следующую группу — по-человечески."""
+    from datetime import date
+
+    async with Session() as s:
+        if await settings.get(s, "scout_paused") == "1":
+            return ["⏱ Разведчик на паузе — не ищет и не вступает. Включить: «▶️ Снять с паузы»."]
+        if await settings.get(s, "scout_grow") != "1":
+            return ["⏱ Поиск и вступление выключены (🧹 Навести порядок → «▶️ Включить поиск и вступление»)."]
+        today = date.today().isoformat()
+        accs = (await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled))).all()
+        full = bool(accs) and all((a.joined_today if a.joined_date == today else 0) >= a.daily_join_limit for a in accs)
+        queue = await s.scalar(select(func.count()).select_from(Group).where(
+            Group.status == "approved", Group.kind == "group")) or 0
+    out = []
+    if TIMER["searching"]:
+        out.append("⏱ Поиск новых групп: идёт сейчас")
+    elif TIMER["search_at"] is not None:
+        out.append(f"⏱ Следующий поиск новых групп: {_until(TIMER['search_at'])}")
+    else:
+        out.append("⏱ Первый поиск — через несколько минут после запуска бота")
+    if full:
+        out.append("⏱ Вступление: на сегодня предел исчерпан — продолжит завтра")
+    elif not queue:
+        out.append("⏱ Вступление: очередь пуста — вступит, когда поиск найдёт группы (или отметьте «❓ Кандидаты»)")
+    elif TIMER["join_at"] is not None:
+        out.append(f"⏱ Следующее вступление: {_until(TIMER['join_at'])}")
+    return out
+
+
 async def join_loop(manager) -> None:
     """Раз в цикл — по одному вступлению на аккаунт, затем случайная пауза."""
     while True:
@@ -216,7 +264,9 @@ async def join_loop(manager) -> None:
                     log.exception("join_loop #%s", acc_id)
         except Exception:  # например, база занята — не останавливаем задачу навсегда
             log.exception("join_loop")
-        await asyncio.sleep(random.uniform(90, 420) if did else 60)
+        pause = random.uniform(90, 420) if did else 60
+        TIMER["join_at"] = _later(pause)
+        await asyncio.sleep(pause)
 
 
 async def rotate(client: TelegramClient, acc_id: int, limit: int = 10) -> int:
@@ -249,9 +299,11 @@ async def rotate(client: TelegramClient, acc_id: int, limit: int = 10) -> int:
 async def search_loop(manager) -> None:
     from app.scout.search import discover
 
+    TIMER["search_at"] = _later(180)
     await asyncio.sleep(180)  # после запуска даём разведчикам спокойно подключиться
     while True:
         hours, offline = 6, False
+        TIMER["searching"] = True
         try:
             for acc_id, client in list(manager.clients.items()):
                 if await paused():
@@ -267,6 +319,8 @@ async def search_loop(manager) -> None:
                 hours = await settings.get_int(s, "search_interval_h")
         except Exception:
             log.exception("search_loop")
+        TIMER["searching"] = False
+        TIMER["search_at"] = _later(600 if offline else max(hours, 1) * 3600)
         # оборвалась связь — не ждём 6 часов, пробуем снова через 10 минут
         await _wait_or_user_search(manager, 600 if offline else max(hours, 1) * 3600)
 

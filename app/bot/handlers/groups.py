@@ -17,6 +17,30 @@ STATUS = {
 }
 REVIEW_PAGE = 8
 BACKABLE = {"skipped": "🚫 Пропущены", "left": "👋 Вышли (ротация или вручную)"}
+# что владельцу делать с каждым списком (владелец 29.10: «что с ними нужно было мне делать, я не помню»)
+STATUS_HINT = {
+    "approved": "Ничего делать не нужно — разведчик сам вступает по одной группе (до дневного предела), "
+                "сначала дагестанские. Когда — видно в «⏱ Следующее вступление».",
+    "requested": "Ничего делать не нужно — разведчик попросился в закрытую группу, ждём админа. "
+                 "Бот сам повторит просьбу в указанный день.",
+    "joined": "Ничего делать не нужно — отсюда приходят заявки. Спамные разведчик покинет сам.",
+    "covered": "Ничего делать не нужно — там уже наш бот, разведчику туда незачем.",
+}
+WHAT_TO_DO = (
+    "❓ <b>Что делать со списками групп</b>\n\n"
+    "<b>❓ Кандидаты</b> — НУЖНО ВАШЕ РЕШЕНИЕ. Разведчик нашёл группы и спрашивает: вступать? "
+    "Нажмите ✅ у подходящих (или «✅ Вступить во все»), ❌ — у ненужных. "
+    "Чтобы не спрашивал, а вступал сам: ⚙️ Настройки → 🔍 Разведчик → Режим вступления = auto.\n\n"
+    "<b>⏳ Очередь</b> — ничего не делать. Это одобренные группы, разведчик сам вступает по одной, "
+    "сначала дагестанские. Когда — видно в «⏱ Следующее вступление».\n\n"
+    "<b>🕓 Ждут одобрения</b> — ничего не делать. Группа закрытая, разведчик попросился, ждём админа группы.\n\n"
+    "<b>🖐 Вступить вручную</b> и <b>🧩 Капча</b> — по желанию. В группе «проверка, что вы не бот» — "
+    "войдите в неё с телефона разведчика, пройдите проверку и нажмите «✅ Вступил». Не хотите — нажмите «Пропустить».\n\n"
+    "<b>🚫 Пропущены</b> и <b>👋 Вышли</b> — ничего не делать. Если какая-то группа нужна — нажмите на неё, "
+    "она вернётся в очередь.\n\n"
+    "<b>🤝 Предложить бота</b> — по желанию: готовое сообщение админу группы, отправляете сами одним нажатием.\n\n"
+    "Главное: если вверху «⚡ Ждут ваших действий» — нажмите эти кнопки. Остальное разведчик делает сам."
+)
 
 
 @router.message(F.text == "🔍 Группы")
@@ -49,6 +73,8 @@ def _pairs(items: list) -> list[list]:
 
 
 async def _scout_text(c: dict) -> str:
+    from app.scout import joiner
+
     """Шапка «🔍 Поиск и вступление»: что сейчас делает разведчик — коротко, без лишних цифр."""
     from app.scout import search as search_
 
@@ -59,6 +85,7 @@ async def _scout_text(c: dict) -> str:
     state = "⏸ на паузе" if c["paused"] else ("▶️ работает" if grow else "⏹ только читает (новые группы не ищет)")
     lines = [f"🔍 <b>Поиск и вступление</b> · разведчик {state}",
              f"🧭 Этап: {search_.STAGE_LABELS[st]}" + (f" ({esc(home)} → Кавказ → Россия)" if home else ""),
+             *(esc(x) for x in await joiner.timer_lines(manager)),
              "", *(esc(x) for x in c["diag"])]
     return "\n".join(lines)
 
@@ -80,6 +107,7 @@ def _sections(c: dict) -> dict[str, tuple[str, list]]:
                 ("covered", "🛡 С нашим ботом", "gr:list:covered"),
             ) if cnt.get(k, 0) for label, data in [(f"{label} · {cnt.get(k, 0)}", data)]]),
             [("🔎 Запросы", "gq:list"), ("📍 Места и порядок", "gp:menu")],
+            [("❓ Что делать со списками", "gr:what")],
         ]),
         "quality": ("🧹 Качество групп", [
             [("🧹 Проверка групп", "gr:audit"), ("📋 Правила групп", "gr:rules")],
@@ -99,6 +127,8 @@ def _sections(c: dict) -> dict[str, tuple[str, list]]:
 
 
 async def groups_menu(target: Message | CallbackQuery) -> None:
+    from app.scout import joiner
+
     c = await _menu_counts(target.bot)
     cnt = c["cnt"]
     privacy = "" if c["me"].can_read_all_group_messages else (
@@ -118,12 +148,13 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
         f"🔍 <b>Группы</b>{' · ⏸ разведчик на паузе' if c['paused'] else ''}\n"
         f"Разведчик состоит в {cnt.get('joined', 0)}, в очереди {cnt.get('approved', 0)}; наш бот в группах: {c['bot_groups']}"
         f"{privacy}\n\n<b>Вступление в новые группы:</b>\n" + "\n".join(esc(x) for x in c["diag"])
+        + "\n" + "\n".join(esc(x) for x in await joiner.timer_lines(manager))
         + ("\n\n⚡ <b>Ждут ваших действий</b> — кнопки сверху." if todo else "\n\n✅ Срочных дел нет.")
     )
     rows = [todo[i:i + 2] for i in range(0, len(todo), 2)]
     rows += [[("🔍 Поиск и вступление", "gr:sub:scout"), ("🧹 Качество групп", "gr:sub:quality")],
              [("🤖 Наш бот в группах", "gr:sub:bot"), ("📣 Реклама", "gr:sub:ads")],
-             [("❓ Как это работает", "gr:help")]]
+             [("❓ Что делать со списками", "gr:what"), ("❓ Как это работает", "gr:help")]]
     await reply(target, text, kb(rows))
 
 
@@ -187,7 +218,15 @@ async def show_list(cb: CallbackQuery, status: str) -> None:
     lines = [f"• {esc(g.title)} — {g.members} уч., заявок: {g.leads_count}"
              + (f", заявка на вступление отправлена {g.join_attempts} р., повтор {g.join_retry_at:%d.%m}"
                 if status == "requested" and g.join_retry_at else "") for g in groups]
-    await reply(cb, f"{STATUS[status].capitalize()}:\n" + "\n".join(lines), kb([[("◀️ Назад", "gr:menu")]]))
+    hint = f"\n\n💡 {STATUS_HINT[status]}" if status in STATUS_HINT else ""
+    await reply(cb, f"{STATUS[status].capitalize()}:\n" + "\n".join(lines) + hint,
+                kb([[("❓ Что делать со списками", "gr:what")], [("◀️ Назад", "gr:menu")]]))
+
+
+@router.callback_query(F.data == "gr:what")
+async def what_to_do(cb: CallbackQuery) -> None:
+    await reply(cb, WHAT_TO_DO, kb([[("❓ Кандидаты", "gr:list:candidate"), ("⏳ Очередь", "gr:list:approved")],
+                                    [("◀️ Группы", "gr:menu")]]))
 
 
 @router.callback_query(F.data.startswith("gr:back:"))
@@ -476,10 +515,23 @@ async def review(target) -> None:
         lines.append(f"{i}. {place_mark(g, home)} <b>{esc(g.title[:50])}</b>{uname} — {g.members} уч., {act} сообщ./сутки")
         rows.append([(f"✅ {i}. {g.title[:28]}", f"rv:j:{g.id}"), (f"❌ {i}", f"rv:s:{g.id}")])
     rows.append([("✅ Вступить во все", "rv:all:j"), ("❌ Пропустить все", "rv:all:s")])
+    rows.append([("🤖 Больше не спрашивать — вступать самому", "rv:auto")])
     rows.append([("◀️ Назад", "gr:menu")])
     await reply(target, f"❓ <b>Отбор групп</b> (осталось {total})\n✅ — разведчик вступит, ❌ — пропустить.\n"
                 f"Сначала 🏠 {esc(home or 'свой регион')}, потом ⛰ Кавказ, потом 🇷🇺 Россия.\n\n"
                 + "\n".join(lines), kb(rows))
+
+
+@router.callback_query(F.data == "rv:auto")
+async def review_auto(cb: CallbackQuery) -> None:
+    """Режим auto: найденные группы сразу в очередь (проверка перед вступлением остаётся). Вернуть — ⚙️ → 🔍 Разведчик."""
+    async with Session() as s:
+        await settings.put(s, "mode", "auto")
+        await s.execute(Group.__table__.update().where(Group.status == "candidate").values(status="approved"))
+        await s.commit()
+    await cb.answer("Готово: разведчик сам вступает в найденные группы (сначала дагестанские). "
+                    "Вернуть вопросы: ⚙️ → 🔍 Разведчик → Режим вступления = semi.", show_alert=True)
+    await groups_menu(cb)
 
 
 @router.callback_query(F.data == "rv:page")

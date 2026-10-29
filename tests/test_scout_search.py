@@ -237,3 +237,19 @@ async def test_candidates_ordered_home_first(maker):
         await s.commit()
         got = [g.title for g in await gh.ordered(s, "candidate", 10)]
     assert got == ["Барахолка Дербент", "Нальчик объявления", "Москва барахолка"]
+
+
+async def test_timer_lines(maker):
+    from datetime import timedelta
+
+    from app.models import now
+    from app.scout import joiner
+
+    joiner.TIMER.update(search_at=now() + timedelta(hours=2, minutes=5), searching=False, join_at=None)
+    lines = await joiner.timer_lines()
+    assert any("Следующий поиск" in x and "через 2 ч" in x for x in lines)
+    assert any("очередь пуста" in x for x in lines)
+    async with maker() as s:
+        await settings.put(s, "scout_paused", "1")
+    assert "на паузе" in (await joiner.timer_lines())[0]
+    joiner.TIMER.update(search_at=None, searching=False, join_at=None)
