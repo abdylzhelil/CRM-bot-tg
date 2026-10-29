@@ -107,6 +107,10 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
         home = await settings.get(s, "home_region")
         queue = (await s.scalars(select(Group).where(Group.status == "approved", Group.kind == "group", mine)
                                  .order_by(Group.wanted_by == 0, Group.members.desc()).limit(300))).all()
+        from app.scout import search as search_
+
+        st = await search_.stage(s)  # этап «Дагестан → Кавказ → Россия»: чужие круги ждут своей очереди
+        queue = [x for x in queue if x.wanted_by or geo.stage_allows(x.city, x.region, x.title, home, st)]
         g = min(queue, key=lambda x: (x.wanted_by == 0, geo.priority(x.city, x.region, x.title, home), -(x.members or 0)),
                 default=None)
         if not g:  # новых нет — повторяем заявки, которые админы групп ещё не одобрили (срок повтора подошёл)

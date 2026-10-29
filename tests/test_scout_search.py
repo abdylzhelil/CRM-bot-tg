@@ -160,3 +160,15 @@ def test_priority_from_home_region():
     assert geo.priority("", "", "Объявления Грозный", home) == 1
     assert geo.priority("", "", "Барахолка Москва", home) == 2
     assert geo.priority("", "", "Паттайя Барахолка №1 🇹🇭", home) == 3
+
+
+async def test_stage_zero_joins_only_home_region(maker):
+    from app.services import geo
+
+    assert geo.title_place("МОСКОВСКИЕ ДАГЕСТАНЦЫ") == ("Москва", "Москва")
+    assert geo.find("встреча в 10:00 по московскому времени") == ("", "")  # в заявках прилагательное не считается
+    allowed = [t for t in ("Кавказцы в Москве Дагестан", "АВИТО ДАГЕСТАНА", "МОСКОВСКИЕ ДАГЕСТАНЦЫ", "Нальчик работа",
+                           "Объявления") if geo.stage_allows("", "", t, "Дагестан", 0)]
+    assert allowed == ["АВИТО ДАГЕСТАНА", "Объявления"]
+    assert geo.stage_allows("", "", "Нальчик работа", "Дагестан", 1)
+    assert geo.stage_allows("", "", "МОСКОВСКИЕ ДАГЕСТАНЦЫ", "Дагестан", 2)

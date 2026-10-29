@@ -59,6 +59,22 @@ ALIASES: dict[str, str] = {
     "мхк": "Махачкала", "махачкале": "Махачкала", "мск": "Москва", "спб": "Санкт-Петербург",
     "питер": "Санкт-Петербург", "ростов": "Ростов-на-Дону",
 }
+# Только для НАЗВАНИЙ групп: «Московские дагестанцы» — земляки в Москве, место группы — Москва
+# (в тексте заявки «по московскому времени» не значит Москва, поэтому не в ALIASES).
+_TITLE_ADJ = (("московск", "Москва"), ("подмосков", "Московская область"), ("питерск", "Санкт-Петербург"),
+              ("петербургск", "Санкт-Петербург"))
+
+
+def title_place(title: str) -> tuple[str, str]:
+    """Место группы по названию: обычный поиск, затем прилагательные городов («московские …»)."""
+    city, region = find(title or "")
+    if city or region:
+        return city, region
+    low = (title or "").lower()
+    for stem, place in _TITLE_ADJ:
+        if stem in low:
+            return (place, place) if place in CITIES else ("", place)
+    return "", ""
 REGION_ALIASES: dict[str, str] = {
     "рд": "Дагестан", "дагестан": "Дагестан", "чечня": "Чечня", "кбр": "Кабардино-Балкария", "кчр": "Карачаево-Черкесия",
     "ингушетия": "Ингушетия", "адыгея": "Адыгея", "калмыкия": "Калмыкия", "осетия": "Северная Осетия",
@@ -110,6 +126,18 @@ def detect(text: str, group_title: str = "", group_city: str = "", group_region:
 NEIGHBORS: dict[str, tuple[str, ...]] = {r: tuple(x for x in CAUCASUS if x != r) for r in CAUCASUS}
 
 
+def stage_allows(city: str, region: str, title: str, home: str, stage: int) -> bool:
+    """Можно ли вступать в группу на этом этапе поиска (0 — только свой регион, 1 — ещё соседи, 2 — все).
+    Место не определить — можно: после вступления его уточнит «🧹 Проверка групп»."""
+    if stage >= 2 or not home:
+        return True
+    if not (city or region):
+        city, region = title_place(title)
+    if not (city or region):
+        return not is_foreign(title)
+    return tier(city, region, home) <= stage
+
+
 def tier(city: str, region: str, home: str) -> int:
     """Круг поиска: 0 — свой регион, 1 — соседи (для Кавказа — весь Кавказ), 2 — остальная Россия."""
     region = region or region_of(city)
@@ -138,7 +166,7 @@ def priority(city: str, region: str, title: str, home: str) -> int:
     """0 — свой регион, 1 — соседи, 2 — Россия (в т. ч. без города), 3 — заграница. Меньше — раньше."""
     region = region or region_of(city)
     if not region and not city:
-        city, region = find(title or "")
+        city, region = title_place(title)
     if home and (region == home or city in home_cities(home)):
         return 0
     if region and region in NEIGHBORS.get(home, ()):

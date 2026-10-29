@@ -46,6 +46,8 @@ def earn_reason(texts: list[str]) -> str:
 def place(title: str, about: str = "") -> dict:
     """Охват по названию и описанию, без ИИ."""
     city, region = geo.find(f"{title}\n{about}")
+    if not (city or region):
+        city, region = geo.title_place(title)  # «Московские дагестанцы» → Москва
     if city:
         return {"scope": "city", "city": city, "region": region}
     if region:
