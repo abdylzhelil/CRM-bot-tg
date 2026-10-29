@@ -366,6 +366,9 @@ async def seed(session: AsyncSession) -> None:
     from app.scout import captchas
 
     await captchas.restore_skipped(session)
+    from app.scout import search
+
+    await search.requeue_small_home(session)
     if await session.scalar(select(func.count()).select_from(Category)):
         await add_missing(session)
         return

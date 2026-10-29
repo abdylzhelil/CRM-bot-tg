@@ -172,3 +172,27 @@ async def test_stage_zero_joins_only_home_region(maker):
     assert allowed == ["АВИТО ДАГЕСТАНА", "Объявления"]
     assert geo.stage_allows("", "", "Нальчик работа", "Дагестан", 1)
     assert geo.stage_allows("", "", "МОСКОВСКИЕ ДАГЕСТАНЦЫ", "Дагестан", 2)
+
+
+async def test_home_region_small_groups_get_softer_threshold(maker):
+    from datetime import timedelta
+
+    from app.models import now
+
+    async with maker() as s:
+        s.add_all([
+            Group(tg_id=-7001, title="Барахолка Кизилюрт", status="skipped", members=150, msgs_per_day=4),
+            Group(tg_id=-7002, title="Барахолка Тула", status="skipped", members=150, msgs_per_day=4),
+            Group(tg_id=-7003, title="Кизилюрт чат", status="skipped", members=40, msgs_per_day=4),
+            Group(tg_id=-7004, title="Каспийск флуд", status="skipped", members=900, skip_reason="по названию — реклама"),
+        ])
+        mark = await s.get(Setting, "small_home_v1")  # при запуске (seed) уже отработало на пустой базе
+        if mark is not None:
+            await s.delete(mark)
+        await s.commit()
+        assert await search.requeue_small_home(s) == 1
+        assert await search.requeue_small_home(s) == 0  # один раз
+        st = {g.tg_id: g.status for g in (await s.scalars(select(Group))).all()}
+    assert st == {-7001: "candidate", -7002: "skipped", -7003: "skipped", -7004: "skipped"}
+    old = Group(tg_id=1, status="skipped", found_at=now() - timedelta(days=40))
+    assert search._recheck_small(old) and not search._recheck_small(Group(tg_id=2, status="skipped", found_at=now()))

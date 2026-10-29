@@ -205,6 +205,9 @@ async def _options(s) -> dict:
     return {
         "min_members": await settings.get_int(s, "min_members"),
         "min_msgs": await settings.get_int(s, "min_msgs_per_day"),
+        "min_members_home": await settings.get_int(s, "min_members_home"),
+        "min_msgs_home": await settings.get_int(s, "min_msgs_home"),
+        "home": await settings.get(s, "home_region"),
         "auto": await settings.get(s, "mode") == "auto",
         "check": await settings.get(s, "join_check") == "1",
         "places": geo_places(await settings.get(s, "scout_places")),
@@ -249,7 +252,12 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
             continue  # нужны группы/чаты, не каналы
         tg_id = utils.get_peer_id(chat)
         async with Session() as s:
-            if await s.scalar(select(Group.id).where(Group.tg_id == tg_id)) or await is_covered(s, tg_id):
+            old = await s.scalar(select(Group).where(Group.tg_id == tg_id))
+            if old is not None and _recheck_small(old):
+                await s.delete(old)  # была маленькой/тихой месяц назад — посмотрим заново (могла вырасти)
+                await s.commit()
+                old = None
+            if old is not None or await is_covered(s, tg_id):
                 c["known"] += 1
                 continue
         try:
@@ -270,7 +278,11 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
         if not reason and opt.get("places") and geo.place_state(res.get("city", ""), res.get("region", ""),
                                                                 chat.title or "", opt["places"]) is False:
             reason = "место не в списке (" + ", ".join(opt["places"][:3]) + ("…" if len(opt["places"]) > 3 else "") + ")"
-        ok = not reason and members >= opt["min_members"] and (msgs_day < 0 or msgs_day >= opt["min_msgs"])
+        min_members, min_msgs = opt["min_members"], opt["min_msgs"]
+        if opt.get("home") and geo.tier(res.get("city", ""), res.get("region", ""), opt["home"]) == 0 and (
+                res.get("city") or res.get("region")):
+            min_members, min_msgs = opt.get("min_members_home", min_members), opt.get("min_msgs_home", min_msgs)
+        ok = not reason and members >= min_members and (msgs_day < 0 or msgs_day >= min_msgs)
         async with Session() as s:
             g = Group(
                 tg_id=tg_id, username=public_username(chat), title=chat.title or "",
@@ -291,6 +303,44 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
             c["small"] += 1
         await asyncio.sleep(random.uniform(2, 6))
     return c
+
+
+SMALL_RECHECK_DAYS = 30
+
+
+def _recheck_small(g: Group) -> bool:
+    """Пропущенная только из-за размера/тишины (без причины) больше месяца назад — можно проверить снова."""
+    from datetime import timedelta
+
+    from app.models import now
+
+    return (g.status == "skipped" and not g.skip_reason and g.account_id is None
+            and g.found_at is not None and g.found_at < now() - timedelta(days=SMALL_RECHECK_DAYS))
+
+
+async def requeue_small_home(s) -> int:
+    """Один раз (29.10): группы своего региона, пропущенные как «маленькие/тихие» по старому порогу 300/10,
+    снова в очередь, если проходят мягкий порог своего региона. Коммит — здесь."""
+    from app.models import Setting
+    from app.services import geo
+
+    if await s.get(Setting, "small_home_v1") is not None:
+        return 0
+    home = await settings.get(s, "home_region")
+    lo_m, lo_d = await settings.get_int(s, "min_members_home"), await settings.get_int(s, "min_msgs_home")
+    auto = await settings.get(s, "mode") == "auto"
+    n = 0
+    if home:
+        for g in (await s.scalars(select(Group).where(Group.status == "skipped", Group.skip_reason == "",
+                                                     Group.kind == "group"))).all():
+            city, region = (g.city, g.region) if (g.city or g.region) else geo.title_place(g.title)
+            if (city or region) and geo.tier(city, region, home) == 0 and (g.members or 0) >= lo_m and (
+                    g.msgs_per_day < 0 or g.msgs_per_day >= lo_d):
+                g.status = "approved" if auto else "candidate"
+                n += 1
+    s.add(Setting(key="small_home_v1", value=str(n)))
+    await s.commit()
+    return n
 
 
 async def user_pass(client: TelegramClient) -> int:

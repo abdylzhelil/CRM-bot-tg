@@ -9,6 +9,8 @@ DEFAULTS: dict[str, str] = {
     "mode": "semi",  # semi — спрашивать о вступлении, auto — вступать самому
     "min_members": "300",
     "min_msgs_per_day": "10",
+    "min_members_home": "100",
+    "min_msgs_home": "3",
     "default_join_limit": "10",
     "search_interval_h": "6",
     "spam_suspicious": "30",
@@ -101,6 +103,8 @@ LABELS: dict[str, str] = {
     "mode": "Режим вступления (semi/auto)",
     "min_members": "Мин. участников в группе",
     "min_msgs_per_day": "Мин. сообщений в сутки",
+    "min_members_home": "Мин. участников — группы своего региона",
+    "min_msgs_home": "Мин. сообщений в сутки — группы своего региона",
     "default_join_limit": "Вступлений в сутки на новый аккаунт",
     "search_interval_h": "Поиск групп раз в N часов",
     "spam_suspicious": "Порог «подозрительный» (0–100)",
@@ -222,7 +226,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
     ("🔍", "Разведчик", ["home_region", "mode", "min_members", "min_msgs_per_day", "default_join_limit", "search_interval_h",
                         "rotation_days", "join_retry_days", "join_retry_max",
                         "user_search_free", "user_search_full", "user_search_days"]),
-    ("🧹", "Проверка групп и капча", ["scout_grow", "scout_places", "join_check", "group_audit", "group_audit_leave", "group_rules_check",
+    ("🧹", "Проверка групп и капча", ["scout_grow", "scout_places", "min_members_home", "min_msgs_home", "join_check", "group_audit", "group_audit_leave", "group_rules_check",
                                      "captcha_skip", "captcha_leave_days", "mod_bot_username"]),
     ("📣", "Реклама в группах", ["adpost_enabled", "adpost_auto_allow", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "adpost_price", "adpost_daily_limit", "adpost_group_daily", "adpost_gap_min", "adpost_footer", "adpost_require_erid"]),
     ("📊", "Рейтинг в группах", ["board_enabled", "board_hours", "board_percent", "offer_daily"]),
@@ -246,7 +250,7 @@ SHORT: dict[str, str] = {
     "submit_daily_limit": "Групп от человека/день", "catalog_min_members": "Мин. участников в группе",
     "niche_daily_limit": "Своих ниш/день", "ad_leads": "Реклама: цена в заявках", "ad_days": "Реклама: дней", "license_enabled": "Лицензия модерации (1/0)", "license_leads": "Лицензия: заявок", "license_days": "Лицензия: дней", "channel_poll_min": "Опрос каналов, мин",
     "channel_hour": "Статистика в канал, час",
-    "mode": "Режим вступления", "min_members": "Мин. участников", "min_msgs_per_day": "Мин. сообщений/сутки",
+    "mode": "Режим вступления", "min_members": "Мин. участников", "min_msgs_per_day": "Мин. сообщений/сутки", "min_members_home": "Мин. участников (свой регион)", "min_msgs_home": "Мин. сообщ./сутки (свой регион)",
     "default_join_limit": "Вступлений/сутки", "search_interval_h": "Поиск раз в, ч",
     "rotation_days": "Выход из тихих групп, дн",
     "join_retry_days": "Повтор заявки, дн",
@@ -287,6 +291,8 @@ HINTS: dict[str, str] = {
     "mode": "semi — разведчик спрашивает вас о вступлении, auto — вступает сам.",
     "min_members": "Группы меньше этого размера разведчик пропускает.",
     "min_msgs_per_day": "Тихие группы (меньше сообщений в сутки) не берём — заявок там не будет.",
+    "min_members_home": "Для групп своего региона (Дагестан) порог мягче: группы городов и сёл маленькие, но заявки там свои. Остальные — по «Мин. участников».",
+    "min_msgs_home": "Для групп своего региона: сколько сообщений в сутки достаточно. Тихая местная группа всё равно может давать заявки.",
     "default_join_limit": "Сколько групп один аккаунт вступает в сутки. Больше — выше риск блокировки аккаунта.",
     "search_interval_h": "Как часто разведчик ищет новые группы.",
     "spam_suspicious": "Сообщение с оценкой выше — помечается «подозрительным».",
@@ -426,6 +432,7 @@ class SettingError(ValueError):
 FLAGS = {"autorenew", "license_enabled", "ai_enabled", "scout_paused", "adpost_enabled", "adpost_auto_approve", "adpost_auto_refund", "adpost_fulfill", "ai_classify", "ai_decide", "adpost_require_erid", "join_check", "adpost_auto_allow", "group_rules_check", "group_audit", "group_audit_leave", "ai_check_leads", "captcha_skip", "board_enabled", "credits_enabled", "scout_grow"}
 # Разумные границы: опечатка (0 или лишний ноль) не должна ломать работу бота
 RANGES: dict[str, tuple[int, int]] = {
+    "min_members_home": (0, 100000), "min_msgs_home": (0, 1000),
     "max_recipients": (1, 50),
     "offer_votes_to_learn": (1, 20),          # 0 — заявки перестали бы доходить до людей
     "search_interval_h": (1, 168),      # 0 — разведчик искал бы без пауз
