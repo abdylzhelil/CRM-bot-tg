@@ -168,9 +168,12 @@ async def group_list(cb: CallbackQuery) -> None:
 
 async def show_list(cb: CallbackQuery, status: str) -> None:
     async with Session() as s:
-        q = select(Group).where(Group.status == status)
-        q = q.order_by(Group.leads_count.desc() if status == "joined" else Group.members.desc()).limit(15)
-        groups = (await s.scalars(q)).all()
+        if status == "approved":  # очередь — в том порядке, в каком разведчик будет вступать
+            groups = await ordered(s, status, 15)
+        else:
+            q = select(Group).where(Group.status == status)
+            q = q.order_by(Group.leads_count.desc() if status == "joined" else Group.members.desc()).limit(15)
+            groups = (await s.scalars(q)).all()
     if not groups:
         return await cb.answer("Пусто", show_alert=True)
     if status == "candidate":
@@ -439,11 +442,30 @@ async def toggle_pause(cb: CallbackQuery) -> None:
 
 
 # ---------- отбор найденных групп списком ----------
+PLACE_MARK = {0: "🏠", 1: "⛰", 2: "🇷🇺", 3: "🌍"}
+
+
+async def ordered(s, status: str, limit: int) -> list:
+    """Группы по правилу владельца: свой регион (Дагестан) → соседи (Кавказ) → Россия → заграница, внутри — крупные."""
+    from app.services import geo
+
+    home = await settings.get(s, "home_region")
+    rows = (await s.scalars(select(Group).where(Group.status == status).order_by(Group.members.desc())
+                            .limit(500))).all()
+    return sorted(rows, key=lambda g: geo.priority(g.city, g.region, g.title, home))[:limit]
+
+
+def place_mark(g, home: str) -> str:
+    from app.services import geo
+
+    return PLACE_MARK.get(geo.priority(g.city, g.region, g.title, home), "")
+
+
 async def review(target) -> None:
     async with Session() as s:
         total = await s.scalar(select(func.count()).select_from(Group).where(Group.status == "candidate"))
-        groups = (await s.scalars(select(Group).where(Group.status == "candidate")
-                                  .order_by(Group.members.desc()).limit(REVIEW_PAGE))).all()
+        groups = await ordered(s, "candidate", REVIEW_PAGE)
+        home = await settings.get(s, "home_region")
     if not groups:
         return await reply(target, "❓ Новых групп для отбора нет.", kb([[("◀️ Назад", "gr:menu")]]))
     lines = []
@@ -451,11 +473,12 @@ async def review(target) -> None:
     for i, g in enumerate(groups, 1):
         act = "н/д" if g.msgs_per_day < 0 else f"{g.msgs_per_day:.0f}"
         uname = f" @{esc(g.username)}" if g.username else ""
-        lines.append(f"{i}. <b>{esc(g.title[:50])}</b>{uname} — {g.members} уч., {act} сообщ./сутки")
+        lines.append(f"{i}. {place_mark(g, home)} <b>{esc(g.title[:50])}</b>{uname} — {g.members} уч., {act} сообщ./сутки")
         rows.append([(f"✅ {i}. {g.title[:28]}", f"rv:j:{g.id}"), (f"❌ {i}", f"rv:s:{g.id}")])
     rows.append([("✅ Вступить во все", "rv:all:j"), ("❌ Пропустить все", "rv:all:s")])
     rows.append([("◀️ Назад", "gr:menu")])
-    await reply(target, f"❓ <b>Отбор групп</b> (осталось {total})\n✅ — разведчик вступит, ❌ — пропустить.\n\n"
+    await reply(target, f"❓ <b>Отбор групп</b> (осталось {total})\n✅ — разведчик вступит, ❌ — пропустить.\n"
+                f"Сначала 🏠 {esc(home or 'свой регион')}, потом ⛰ Кавказ, потом 🇷🇺 Россия.\n\n"
                 + "\n".join(lines), kb(rows))
 
 
@@ -479,8 +502,7 @@ async def review_one(cb: CallbackQuery) -> None:
 async def review_all(cb: CallbackQuery) -> None:
     action = cb.data.split(":")[2]
     async with Session() as s:
-        ids = (await s.scalars(select(Group.id).where(Group.status == "candidate")
-                               .order_by(Group.members.desc()).limit(REVIEW_PAGE))).all()
+        ids = [g.id for g in await ordered(s, "candidate", REVIEW_PAGE)]
         await s.execute(Group.__table__.update().where(Group.id.in_(ids))
                         .values(status="approved" if action == "j" else "skipped"))
         await s.commit()
@@ -1044,7 +1066,7 @@ async def gp_order(cb: CallbackQuery) -> None:
     """Поиск по кругам с начала: снять ограничение мест (иначе Кавказ и Россия не возьмутся) и начать со своего региона."""
     async with Session() as s:
         await settings.put(s, "scout_places", "")
-        for key in ("search_stage", "search_offset_home", "search_offset_near", "search_offset"):
+        for key in ("search_stage", "search_offset_home", "search_offset_near", "search_offset", "search_stage_found", "search_stage_wrapped"):
             await settings.put(s, key, "0")
     await cb.answer("Готово: поиск начнётся со своего региона, потом соседи и вся Россия. Ограничение мест снято.",
                     show_alert=True)

@@ -129,7 +129,7 @@ async def reset_finish(s: AsyncSession, spam_ids: set[int]) -> dict[str, int]:
         part = gone[i:i + 500]
         await s.execute(update(Lead).where(Lead.group_id.in_(part)).values(group_id=None))
         await s.execute(delete(Group).where(Group.id.in_(part)))
-    for key in ("search_offset", "search_offset_home", "search_offset_near", "search_stage"):
+    for key in ("search_offset", "search_offset_home", "search_offset_near", "search_stage", "search_stage_found", "search_stage_wrapped"):
         await settings.put(s, key, "0")
     await settings.put(s, "scout_grow", "1")
     await s.commit()

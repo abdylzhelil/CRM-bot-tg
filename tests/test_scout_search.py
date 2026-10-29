@@ -26,7 +26,8 @@ async def test_queries_from_niches_and_cities_rotate(maker):
         assert total == len(all_q)
         for _ in range(len(home_q) // search.PER_PASS + 1):
             b, st, _ = await search.next_batch(s)
-        assert await search.stage(s) >= 1
+        # круг Дагестана пройден — этап меняет stage_after_pass, если новых групп почти нет
+        assert await settings.raw(s, search.STAGE_WRAP_KEY) == "1" and await search.stage(s) == 0
         # этап 1 — свой регион + Кавказ
         await settings.put(s, "search_stage", "1")
         b, st, _ = await search.next_batch(s)
@@ -211,3 +212,28 @@ async def test_scoutreport_and_joinable_fallback(maker):
     assert [g.title for g in joiner.joinable(q, "Дагестан", 0)] == ["Нальчик объявления"]
     text = await scoutreport.build()
     assert "Очередь: 2, можно вступать сейчас: 1" in text and "этап 0" in text
+
+
+async def test_stage_stays_home_while_new_groups_found(maker):
+    async with maker() as s:
+        await settings.put(s, search.STAGE_KEY, "0")
+        await settings.put(s, search.STAGE_WRAP_KEY, "1")
+    await search.stage_after_pass(5, completed=True)  # круг Дагестана пройден, но новых нашлось 5 — остаёмся
+    async with maker() as s:
+        assert await search.stage(s) == 0
+        await settings.put(s, search.STAGE_WRAP_KEY, "1")
+    await search.stage_after_pass(1, completed=True)  # новых почти нет — дальше, на Кавказ
+    async with maker() as s:
+        assert await search.stage(s) == 1
+
+
+async def test_candidates_ordered_home_first(maker):
+    from app.bot.handlers import groups as gh
+
+    async with maker() as s:
+        s.add_all([Group(tg_id=-9001, title="Москва барахолка", status="candidate", members=5000),
+                   Group(tg_id=-9002, title="Нальчик объявления", status="candidate", members=3000),
+                   Group(tg_id=-9003, title="Барахолка Дербент", status="candidate", members=200)])
+        await s.commit()
+        got = [g.title for g in await gh.ordered(s, "candidate", 10)]
+    assert got == ["Барахолка Дербент", "Нальчик объявления", "Москва барахолка"]

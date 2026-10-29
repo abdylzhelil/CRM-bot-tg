@@ -69,6 +69,11 @@ STAGE_SHARES = {0: (20, 0, 0), 1: (6, 14, 0), 2: (4, 6, 10)}
 TIER_KEYS = ("search_offset_home", "search_offset_near", "search_offset")
 TIER_NAMES = ("свой регион", "соседи", "Россия")
 STAGE_KEY = "search_stage"
+# Правило владельца (29.10): пока в своём регионе находятся новые группы — этап не меняется. Круг этапа пройден,
+# а новых за круг меньше STAGE_MIN_NEW — переходим дальше (Дагестан → Кавказ → Россия).
+STAGE_MIN_NEW = 3
+STAGE_FOUND_KEY = "search_stage_found"
+STAGE_WRAP_KEY = "search_stage_wrapped"
 HOME_KEY, OFFSET_KEY = TIER_KEYS[0], TIER_KEYS[2]
 HOME_PER_PASS = STAGE_SHARES[2][0]
 
@@ -168,6 +173,22 @@ async def _take(s, key: str, items: list[str], n: int) -> tuple[list[str], int, 
     return batch, start, start + len(batch) >= len(items)
 
 
+async def stage_after_pass(found_in_stage: int, completed: bool) -> None:
+    """После прохода: копим новые группы круга текущего этапа; если круг закончился — решаем, идти ли дальше."""
+    async with Session() as s:
+        st = await stage(s)
+        if st >= 2:
+            return
+        total = int(await settings.raw(s, STAGE_FOUND_KEY, "0") or 0) + found_in_stage
+        if completed and await settings.raw(s, STAGE_WRAP_KEY) == "1":
+            await settings.put(s, STAGE_WRAP_KEY, "0")
+            await settings.put(s, STAGE_FOUND_KEY, "0")
+            if total < STAGE_MIN_NEW:
+                await settings.put(s, STAGE_KEY, str(st + 1))
+            return
+        await settings.put(s, STAGE_FOUND_KEY, str(total))
+
+
 async def stage(s) -> int:
     raw = await settings.raw(s, STAGE_KEY)
     return min(int(raw), 2) if raw.isdigit() else 0
@@ -191,8 +212,10 @@ async def next_batch(s) -> tuple[list[str], int, int]:
         parts.append(batch)
         wrapped[i] = w
     # этап закончен, когда его главный круг пройден целиком (или пуст)
-    if st < 2 and (wrapped[st] or not tiers[st]):
-        await settings.put(s, STAGE_KEY, str(st + 1))
+    if st < 2 and not tiers[st]:
+        await settings.put(s, STAGE_KEY, str(st + 1))  # своего круга нет вовсе — сразу дальше
+    elif st < 2 and wrapped[st]:
+        await settings.put(s, STAGE_WRAP_KEY, "1")  # решим после прохода: нашлись ли новые (stage_after_pass)
     await s.commit()
     _last_parts[:] = [len(p) for p in parts]
     return [q for p in parts for q in p], st, sum(len(x) for x in tiers)
@@ -421,6 +444,8 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
     found = known = small = errors = junked = 0
     lost = False
     done = 0
+    in_stage = 0
+    stage_part = sum(_last_parts[:st]), sum(_last_parts[:st + 1])  # запросы круга текущего этапа в пачке
     for q in queries:
         done += 1
         if _stop_requested:
@@ -429,6 +454,8 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         if c is None:
             lost = True
             break
+        if stage_part[0] < done <= stage_part[1]:
+            in_stage += c["found"]
         found += c["found"]
         known += c["known"]
         small += c["small"]
@@ -437,6 +464,7 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         await asyncio.sleep(random.uniform(10, 30))
     if lost:  # недоделанные запросы вернём в очередь: следующий проход начнёт с них
         await rewind_tiers(done - 1)
+    await stage_after_pass(in_stage, completed=not lost and not _stop_requested)
     summary = (f"этап «{STAGE_LABELS[st]}», запросов {done - lost} из {total}, новых {found}, уже знали {known}, "
                f"мелких или тихих {small}" + (f", реклама/флуд {junked}" if junked else "")
                + (f", ошибок {errors}" if errors else "")
