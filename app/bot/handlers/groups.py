@@ -44,21 +44,42 @@ async def _menu_counts(bot) -> dict:
     return c
 
 
+def _pairs(items: list) -> list[list]:
+    return [items[i:i + 2] for i in range(0, len(items), 2)]
+
+
+async def _scout_text(c: dict) -> str:
+    """Шапка «🔍 Поиск и вступление»: что сейчас делает разведчик — коротко, без лишних цифр."""
+    from app.scout import search as search_
+
+    async with Session() as s:
+        st = await search_.stage(s)
+        grow = await settings.get(s, "scout_grow") == "1"
+        home = await settings.get(s, "home_region")
+    state = "⏸ на паузе" if c["paused"] else ("▶️ работает" if grow else "⏹ только читает (новые группы не ищет)")
+    lines = [f"🔍 <b>Поиск и вступление</b> · разведчик {state}",
+             f"🧭 Этап: {search_.STAGE_LABELS[st]}" + (f" ({esc(home)} → Кавказ → Россия)" if home else ""),
+             "", *(esc(x) for x in c["diag"])]
+    return "\n".join(lines)
+
+
 def _sections(c: dict) -> dict[str, tuple[str, list]]:
     """Подразделы «🔍 Группы» (раньше — 27 кнопок одним экраном): название и кнопки."""
     cnt = c["cnt"]
     return {
         "scout": ("🔍 Поиск и вступление", [
-            [("▶️ Искать сейчас", "gr:search"), ("⏹ Остановить поиск", "gr:stop")],
-            [("▶️ Возобновить разведчика" if c["paused"] else "⏸ Пауза разведчика", "gr:pause"),
-             ("🔄 Ротация сейчас", "gr:rotate")],
-            [(f"⏳ Очередь {cnt.get('approved', 0)}", "gr:list:approved"),
-             (f"❓ Кандидаты {cnt.get('candidate', 0)}", "gr:list:candidate")],
-            [(f"🕓 Ждут одобрения {cnt.get('requested', 0)}", "gr:list:requested"),
-             (f"🏆 Вступили {cnt.get('joined', 0)}", "gr:list:joined")],
-            [(f"🚫 Пропущены {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли {cnt.get('left', 0)}", "gr:list:left")],
-            [(f"🛡 С нашим ботом {cnt.get('covered', 0)}", "gr:list:covered"), ("🔎 Поисковые запросы", "gq:list")],
-            [(f"🖐 Вступить вручную {cnt.get('manual', 0)}", "gr:man"), (f"🧩 Капча {c['cap']}", "gr:cap")],
+            [("▶️ Искать сейчас", "gr:search"), ("⏹ Стоп поиск", "gr:stop")],
+            [("▶️ Снять с паузы" if c["paused"] else "⏸ Пауза", "gr:pause"),
+             ("🔄 Ротация", "gr:rotate")],
+            [(f"🏆 Вступил · {cnt.get('joined', 0)}", "gr:list:joined"), (f"⏳ Очередь · {cnt.get('approved', 0)}", "gr:list:approved")],
+            [(f"🚫 Пропущены · {cnt.get('skipped', 0)}", "gr:list:skipped"), (f"👋 Вышли · {cnt.get('left', 0)}", "gr:list:left")],
+            *_pairs([(label, data) for k, label, data in (
+                ("candidate", "❓ Кандидаты", "gr:list:candidate"),
+                ("requested", "🕓 Ждут одобрения", "gr:list:requested"),
+                ("manual", "🖐 Вручную", "gr:man"),
+                ("covered", "🛡 С нашим ботом", "gr:list:covered"),
+            ) if cnt.get(k, 0) for label, data in [(f"{label} · {cnt.get(k, 0)}", data)]]),
+            [("🔎 Запросы", "gq:list"), ("📍 Места и порядок", "gp:menu")],
         ]),
         "quality": ("🧹 Качество групп", [
             [("🧹 Проверка групп", "gr:audit"), ("📋 Правила групп", "gr:rules")],
@@ -109,8 +130,10 @@ async def groups_menu(target: Message | CallbackQuery) -> None:
 @router.callback_query(F.data.regexp(r"^gr:sub:(scout|quality|bot|ads)$"))
 async def groups_section(cb: CallbackQuery) -> None:
     c = await _menu_counts(cb.bot)
-    title, rows = _sections(c)[cb.data.split(":")[2]]
-    await reply(cb, f"<b>{title}</b>", kb(rows + [[("◀️ Группы", "gr:menu")]]))
+    key = cb.data.split(":")[2]
+    title, rows = _sections(c)[key]
+    text = await _scout_text(c) if key == "scout" else f"<b>{title}</b>"
+    await reply(cb, text, kb(rows + [[("◀️ Группы", "gr:menu")]]))
 
 
 @router.callback_query(F.data == "gr:bot")
@@ -1079,7 +1102,7 @@ async def gt_reset(cb: CallbackQuery) -> None:
                 f"• Не тронем <b>{p['keep']}</b>: каталог, реклама, просьбы пользователей, группы с нашим ботом, каналы.\n\n"
                 "Потом поиск начнётся с начала по новым правилам: сначала ваш регион, места из «📍 Места разведчика», "
                 "проверка группы перед вступлением, сторож спама.\n"
-                + ("⏸ Разведчик сейчас на паузе — искать начнёт после «▶️ Возобновить разведчика».\n" if paused else "")
+                + ("⏸ Разведчик сейчас на паузе — искать начнёт после 🔍 Поиск и вступление → «▶️ Снять с паузы».\n" if paused else "")
                 + "\nОтменить это нельзя (вернуть только из копии базы). Продолжить?",
                 kb([[("✅ Да, начать заново", "gt:reset:go")], [("❌ Не надо", "gt:menu")]]))
 
@@ -1109,7 +1132,7 @@ async def gt_reset_go(cb: CallbackQuery) -> None:
             f"🔄 Начать заново: вышел из {res['left']} групп, удалил из базы {fin['deleted']}, "
             f"спамных запомнил {fin['remembered']}."
             + (f"\n⚠️ Не получилось выйти из {fin['still']} — они остались, можно нажать ещё раз." if fin["still"] else "")
-            + ("\n⏸ Разведчик на паузе — поиск начнётся после «▶️ Возобновить разведчика»." if await joiner.paused()
+            + ("\n⏸ Разведчик на паузе — поиск начнётся после 🔍 Поиск и вступление → «▶️ Снять с паузы»." if await joiner.paused()
                else "\n🔎 Запускаю поиск новых групп."))
         if await joiner.paused():
             return

@@ -230,7 +230,7 @@ async def test_left_and_covered_groups_have_buttons(maker, monkeypatch):
     await groups.groups_section(target)
     markup = sent.await_args.args[2]
     buttons = {b.callback_data: b.text for row in markup.inline_keyboard for b in row if b.callback_data}
-    assert "Вышли 2" in buttons["gr:list:left"] and "С нашим ботом 1" in buttons["gr:list:covered"]
+    assert "Вышли · 2" in buttons["gr:list:left"] and "С нашим ботом · 1" in buttons["gr:list:covered"]
     await groups.group_list(cb("gr:list:covered"))  # список «с нашим ботом» открывается (только просмотр)
     async with maker() as s:
         left = await s.scalar(select(Group).where(Group.status == "left").order_by(Group.id))

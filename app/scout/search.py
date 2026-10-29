@@ -400,7 +400,7 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         raise ConnectionError("связь оборвалась во время поиска")
     if not found and report:
         await notify._send(f"🔍 Поиск закончен: {summary}.\nНовых групп нет — следующий поиск возьмёт другие запросы "
-                           "(их можно добавить: 🔍 Группы → 🔎 Поисковые запросы).")
+                           "(их можно добавить: 🔍 Группы → 🔍 Поиск и вступление → 🔎 Запросы).")
     return found
 
 

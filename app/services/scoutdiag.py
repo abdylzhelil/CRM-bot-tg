@@ -22,7 +22,7 @@ async def join_diagnosis(s, manager=None) -> tuple[str, list[str]]:
         lines.append("⚠️ " + text)
 
     if await settings.get(s, "scout_paused") == "1":
-        bad("разведчик на паузе — 🔍 Группы → «▶️ Возобновить разведчика»")
+        bad("разведчик на паузе — 🔍 Группы → 🔍 Поиск и вступление → «▶️ Снять с паузы»")
     accs = (await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled))).all()
     if not accs:
         bad("нет включённых аккаунтов — 🛠 Управление → 👤 Аккаунты")
@@ -55,7 +55,7 @@ async def join_diagnosis(s, manager=None) -> tuple[str, list[str]]:
              "(или ⚙️ → Режим вступления = auto, тогда вступает сам)")
     else:
         warn("очередь пуста и новых кандидатов нет — поиск не находит новых групп. "
-             "Нажмите «▶️ Искать сейчас» или добавьте запросы в «🔎 Поисковые запросы»")
+             "Нажмите «▶️ Искать сейчас» или добавьте запросы в «🔎 Запросы» (🔍 Поиск и вступление)")
     from app.scout.search import last_search
 
     lines.append(f"🔎 последний поиск: {await last_search()}")
