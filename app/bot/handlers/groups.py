@@ -954,13 +954,25 @@ async def places_view(target, page: str = "r") -> None:
         allowed = geo.parse_places(await settings.get(s, "scout_places"))
         users = await tidy.user_places(s)
         home = await settings.get(s, "home_region")
+        from app.scout import search as search_
+        from app.services import queryideas
+
+        st = await search_.stage(s)
+        ideas = await queryideas.stored(s)
     mine = ", ".join(f"{p} — {n}" for p, n in users[:8]) or "никто ещё не указал город"
-    text = ("📍 <b>Места разведчика</b>\nРазведчик ищет и берёт только группы из выбранных мест. Группы, где место "
+    n_ideas = sum(len(x) for x in ideas)
+    order = (f"🧭 Порядок поиска: сначала {esc(home or 'свой регион')}, потом соседи"
+             + (" (весь Кавказ)" if home in geo.CAUCASUS else "") + ", потом вся Россия. "
+             f"Сейчас этап: <b>{search_.STAGE_LABELS[st]}</b>.\n"
+             f"🤖 Подсказки ИИ для поиска: {n_ideas or 'пока нет (ИИ предложит при следующем поиске)'}"
+             + (" запросов (районы, сёла, местные названия)" if n_ideas else "") + "\n\n")
+    text = (order + "📍 <b>Места разведчика</b>\nРазведчик ищет и берёт только группы из выбранных мест. Группы, где место "
             "не определить, он пока берёт и после вступления проверяет.\n\n"
             f"Сейчас: <b>{esc(', '.join(allowed)) if allowed else 'любые (ограничения нет)'}</b>\n"
             f"👥 Места ваших пользователей: {esc(mine)}\nСвой регион: {esc(home or '—')}\n\n"
             "Отметьте нужные (регион включает его города):")
-    rows = [[("📥 Взять места пользователей", "gp:users"), ("🌐 Любые места", "gp:any")]]
+    rows = [[("🧭 Сначала свой регион, потом Кавказ и Россия", "gp:order")],
+            [("📥 Взять места пользователей", "gp:users"), ("🌐 Любые места", "gp:any")]]
     rows += _place_buttons(allowed, page)
     rows.append([("🏙 Города" if page == "r" else "🗺 Регионы", f"gp:pg:{'c' if page == 'r' else 'r'}"), ("◀️ Назад", "gr:sub:quality")])
     await reply(target, text, kb(rows))
@@ -1001,6 +1013,18 @@ async def gp_users(cb: CallbackQuery) -> None:
         allowed = tidy.allowed_default(users, await settings.get(s, "home_region"))
         await settings.put(s, "scout_places", ", ".join(allowed))
     await cb.answer(f"Выбрано мест: {len(allowed)}" if allowed else "Пользователи пока не указали города", show_alert=not allowed)
+    await places_view(cb)
+
+
+@router.callback_query(F.data == "gp:order")
+async def gp_order(cb: CallbackQuery) -> None:
+    """Поиск по кругам с начала: снять ограничение мест (иначе Кавказ и Россия не возьмутся) и начать со своего региона."""
+    async with Session() as s:
+        await settings.put(s, "scout_places", "")
+        for key in ("search_stage", "search_offset_home", "search_offset_near", "search_offset"):
+            await settings.put(s, key, "0")
+    await cb.answer("Готово: поиск начнётся со своего региона, потом соседи и вся Россия. Ограничение мест снято.",
+                    show_alert=True)
     await places_view(cb)
 
 

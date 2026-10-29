@@ -15,15 +15,40 @@ async def test_queries_from_niches_and_cities_rotate(maker):
         assert len(all_q) > 100  # не 11 ручных, а сотни
         assert "барахолка Махачкала" in all_q and any(q.startswith("сантехник") or q == "сайт" for q in all_q)
         assert len({q.casefold() for q in all_q}) == len(all_q)  # без повторов
-        home_q, rest = await search.split_queries(s)
-        b1, start1, total = await search.next_batch(s)
-        b2, start2, _ = await search.next_batch(s)
-        rest_n = search.PER_PASS - search.HOME_PER_PASS
-        assert len(b1) == search.PER_PASS and start1 == 0 and start2 == rest_n and set(b1).isdisjoint(b2)
-        assert total == len(rest) and len(home_q) + len(rest) == len(all_q)
-        # «от Дагестана дальше»: в каждой пачке 5 запросов про Дагестан, и список начинается с них
-        assert all(q in home_q for q in b1[:search.HOME_PER_PASS]) and all_q[0] == "Махачкала"
+        home_q, near_q, rest = await search.tier_queries(s)
+        assert len(home_q) + len(near_q) + len(rest) == len(all_q) and all_q[0] == "Махачкала"
         assert any("Дербент" in q for q in home_q) and not any("Москва" in q for q in home_q)
+        assert any("Грозный" in q for q in near_q) and any("Пятигорск" in q for q in near_q)
+        assert not any("Москва" in q for q in near_q) and any("Москва" in q for q in rest)
+        # этап 0 — только свой регион, пока его круг не пройден
+        b1, st1, total = await search.next_batch(s)
+        assert st1 == 0 and len(b1) == search.PER_PASS and all(q in home_q for q in b1)
+        assert total == len(all_q)
+        for _ in range(len(home_q) // search.PER_PASS + 1):
+            b, st, _ = await search.next_batch(s)
+        assert await search.stage(s) >= 1
+        # этап 1 — свой регион + Кавказ
+        await settings.put(s, "search_stage", "1")
+        b, st, _ = await search.next_batch(s)
+        assert st == 1 and sum(q in near_q for q in b) == 14 and sum(q in home_q for q in b) == 6
+        await settings.put(s, "search_stage", "2")
+        b, st, _ = await search.next_batch(s)
+        assert st == 2 and sum(q in rest for q in b) == 10
+
+
+async def test_rewind_returns_undone_queries_to_their_circle(maker):
+    async with maker() as s:
+        await settings.put(s, "search_stage", "2")
+        b, _, _ = await search.next_batch(s)
+        before = {k: await settings.raw(s, k) for k in search.TIER_KEYS}
+    await search.rewind_tiers(2)  # сделали 2 из 4 «своих», остальное не успели
+    async with maker() as s:
+        tiers = await search.tier_queries(s)
+        after = {k: await settings.raw(s, k) for k in search.TIER_KEYS}
+    home_key, near_key, rest_key = search.TIER_KEYS
+    assert int(after[home_key]) == (int(before[home_key]) - 2) % len(tiers[0])
+    assert int(after[near_key]) == (int(before[near_key]) - 6) % len(tiers[1])
+    assert int(after[rest_key]) == (int(before[rest_key]) - 10) % len(tiers[2])
 
 
 async def test_discover_reports_even_when_nothing_new(maker, tgbot, monkeypatch):
@@ -91,11 +116,11 @@ async def test_search_without_connection_does_not_waste_queries(maker, tgbot, mo
     async with maker() as s:
         assert await s.get(Setting, "search_offset") is None  # очередь запросов не сдвинулась
     # связь оборвалась после 3 запросов и не вернулась — следующий проход начнётся с 4-го
-    # (первые 5 в пачке — про свой регион: их круг откатился к 4-му, общий круг не тронут)
+    # (на первом этапе вся пачка — про свой регион: его круг откатился к 4-му, общий круг не тронут)
     with pytest.raises(ConnectionError):
         await search.discover(FakeClient(drop_after=3), report=True)
     async with maker() as s:
-        assert (await s.get(Setting, "search_offset")).value == "0"
+        assert await s.get(Setting, "search_offset") is None
         assert (await s.get(Setting, search.HOME_KEY)).value == "3"
     assert "прервался" in sent.call_args.args[0]
 

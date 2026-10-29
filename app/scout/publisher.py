@@ -522,6 +522,7 @@ async def spam_round(manager, limit: int = 5) -> dict[str, int]:
             return {}
         leave_on = await settings.get(s, "group_audit_leave") == "1"
         todo = [(g.id, spamwatch.verdict(g)) for g in await spamwatch.suspects(s, limit)]
+        doubt = await spamwatch.doubtful(s)
         await s.commit()
     out: dict[str, int] = {}
     for gid, reason in todo:
@@ -532,6 +533,14 @@ async def spam_round(manager, limit: int = 5) -> dict[str, int]:
             r = "skip"
         out[r] = out.get(r, 0) + 1
         await asyncio.sleep(random.uniform(3, 8))
+    for gid in doubt:  # спорные — проверка с ИИ по последним сообщениям (правила + ИИ решают, выходить ли)
+        try:
+            r = await audit_one(manager, gid)
+        except Exception:
+            log.exception("сторож спама: проверка спорной группы %s", gid)
+            r = "skip"
+        out["doubt_" + r] = out.get("doubt_" + r, 0) + 1
+        await asyncio.sleep(random.uniform(5, 12))
     return out
 
 

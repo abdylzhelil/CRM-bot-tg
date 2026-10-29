@@ -104,3 +104,41 @@ async def test_reset_plan_and_finish(maker):
     assert res == {"deleted": 2, "remembered": 2, "still": 0}
     assert left == {-2002: "skipped", -2004: "joined", -2005: "joined", -2006: "left", -2007: "skipped"}
     assert lead.group_id is None and offset == "0" and grow == "1"
+
+
+def test_ai_query_ideas_are_cleaned():
+    from app.services import queryideas
+
+    got = queryideas.clean(["барахолка Кизилюрт", "Взаимопиар Дагестан", "объявления Карабудахкентский район",
+                            "Барахолка кизилюрт", "https://t.me/x", "очень длинный запрос из многих разных слов", 5])
+    assert got == ["барахолка Кизилюрт", "объявления Карабудахкентский район"]
+
+
+async def test_ai_ideas_join_their_circle(maker, monkeypatch):
+    from app.scout import search
+    from app.services import brain, queryideas
+
+    answers = iter([{"queries": ["барахолка Кизилюрт"]}, {"queries": ["объявления Назрань район"]},
+                    {"queries": ["услуги Тула"]}])
+    monkeypatch.setattr(brain, "ask", lambda *a, **k: _ret(next(answers)))
+    async with maker() as s:
+        assert await queryideas.refresh(s, [["Дагестан"], ["Чечня"], ["Тула"]], ["сантехник"]) == 3
+        assert await queryideas.refresh(s, [["Дагестан"], ["Чечня"], ["Тула"]], ["сантехник"]) == 0  # раз в неделю
+        home_q, near_q, rest = await search.tier_queries(s)
+    assert "барахолка Кизилюрт" in home_q and "объявления Назрань район" in near_q and "услуги Тула" in rest
+
+
+async def _ret(x):
+    return x
+
+
+async def test_doubtful_groups_go_to_ai_check(maker):
+    async with maker() as s:
+        acc = await _scout(s)
+        s.add_all([Group(tg_id=-3001, title="a", status="joined", account_id=acc, watch_seen=100, watch_junk=55),
+                   Group(tg_id=-3002, title="b", status="joined", account_id=acc, watch_seen=100, watch_junk=20),
+                   Group(tg_id=-3003, title="c", status="joined", account_id=acc, watch_seen=100, watch_junk=55,
+                         audit_at=now() - timedelta(days=1))])
+        await s.commit()
+        ids = await spamwatch.doubtful(s)
+        assert [(await s.get(Group, i)).tg_id for i in ids] == [-3001]

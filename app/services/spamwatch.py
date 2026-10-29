@@ -19,6 +19,8 @@ MIN_SEEN = 40      # меньше сообщений — рано судить
 JUNK_SHARE = 0.7   # столько и больше мусора — спамная группа
 LEAD_DAYS = 14     # если оттуда за столько дней была заявка — группу не трогаем
 WINDOW = 300       # после стольких сообщений счётчики делятся пополам
+DOUBT_SHARE = 0.45  # мусора столько и больше, но меньше JUNK_SHARE — «спорная»: пусть посмотрит ИИ (🧹 Проверка групп)
+DOUBT_RECHECK = timedelta(days=3)
 
 _counts: dict[int, list[int]] = {}  # tg_id группы → [прочитано, мусор]
 
@@ -85,3 +87,14 @@ async def suspects(s: AsyncSession, limit: int = 0) -> list[Group]:
         Group.watch_seen >= MIN_SEEN))).all()
     out = sorted((g for g in rows if verdict(g)), key=share, reverse=True)
     return out[:limit] if limit else out
+
+
+async def doubtful(s: AsyncSession, limit: int = 2) -> list[int]:
+    """Спорные группы (мусора от DOUBT_SHARE до JUNK_SHARE): их перепроверяет «🧹 Проверка групп» с ИИ —
+    не ждать недели. Каждую не чаще раза в DOUBT_RECHECK."""
+    rows = (await s.scalars(select(Group).where(
+        Group.status == "joined", Group.kind == "group", Group.account_id.is_not(None), ~Group.no_leads,
+        Group.watch_seen >= MIN_SEEN,
+        Group.audit_at.is_(None) | (Group.audit_at < now() - DOUBT_RECHECK)))).all()
+    out = sorted((g for g in rows if DOUBT_SHARE <= share(g) < JUNK_SHARE and not verdict(g)), key=share, reverse=True)
+    return [g.id for g in out[:limit]]
