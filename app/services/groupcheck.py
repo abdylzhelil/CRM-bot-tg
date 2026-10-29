@@ -19,6 +19,7 @@ from app.services import geo, junk
 
 PER_ROUND = 3                 # групп за один заход перепроверки
 RECHECK = timedelta(days=30)  # уже проверенную группу — раз в месяц
+RECHECK_QUIET = timedelta(days=7)  # …а группу, откуда ещё не было ни одной заявки, — раз в неделю
 EARN_SHARE = 0.4              # столько и больше сообщений про заработок/серые темы — группа-спам
 SCOPES = {"city": ("🏙", "Город"), "region": ("🗺", "Регион"), "country": ("🇷🇺", "Вся страна"), "": ("❓", "Не определено")}
 _COUNTRY = re.compile(r"росси|\bрф\b|по всей стран|вся стран|всероссийск|\bснг\b|удал[её]нн|онлайн", re.I)
@@ -120,12 +121,14 @@ def apply_place(g: Group, res: dict) -> None:
 
 
 async def due(s: AsyncSession, accounts: set[int], limit: int = PER_ROUND) -> list[int]:
-    """Вступившие группы разведчика, которые пора перепроверить: ни разу — первыми, остальные раз в месяц."""
+    """Вступившие группы разведчика, которые пора перепроверить: ни разу — первыми, без заявок — раз в неделю,
+    остальные раз в месяц."""
     if not accounts:
         return []
     return list((await s.scalars(select(Group.id).where(
         Group.status == "joined", Group.kind == "group", Group.account_id.in_(accounts),
-        Group.audit_at.is_(None) | (Group.audit_at < now() - RECHECK))
+        Group.audit_at.is_(None) | (Group.audit_at < now() - RECHECK)
+        | ((Group.audit_at < now() - RECHECK_QUIET) & (Group.leads_count == 0)))
         .order_by(Group.audit_at.is_not(None), Group.audit_at, Group.members.desc()).limit(limit))).all())
 
 

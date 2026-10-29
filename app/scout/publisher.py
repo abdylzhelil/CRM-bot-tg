@@ -479,16 +479,30 @@ async def audit_one(manager, gid: int) -> str:
             await s.commit()
             return "good"
         reason = ("проверка: " + (res["reason"] or "не подходит"))[:120]
+        await s.commit()
+    return await drop_group(manager, gid, reason, leave_on)
+
+
+async def drop_group(manager, gid: int, reason: str, leave_on: bool) -> str:
+    """Спамная группа: выйти (если можно) или хотя бы не брать из неё заявки. → left / muted / skip."""
+    from app.services import groupcheck
+
+    async with Session() as s:
+        g = await s.get(Group, gid)
+        if g is None or g.status != "joined":
+            return "skip"
+        client = manager.clients.get(g.account_id)
         guard = groupcheck.protected(g) or ("вернул админ" if g.skip_reason == "вернул админ" else "")
-        if guard or not leave_on:
+        if guard or not leave_on or client is None:
             g.no_leads, g.skip_reason = True, reason  # остаёмся, но заявки отсюда не берём («🙈 Без заявок»)
             await s.commit()
             return "muted"
-        await s.commit()
+        await s.commit()  # не держим базу, пока ждём Telegram
         try:
+            entity = await resolve(client, g)
             await client(functions.channels.LeaveChannelRequest(entity))
         except Exception:
-            log.info("проверка группы %s: не вышел", g.title, exc_info=True)
+            log.info("не вышел из спамной группы %s", g.title, exc_info=True)
             g.no_leads, g.skip_reason = True, reason
             await s.commit()
             return "muted"
@@ -496,6 +510,29 @@ async def audit_one(manager, gid: int) -> str:
         await s.commit()
         log.info("вышел из группы %s: %s", g.title, reason)
         return "left"
+
+
+async def spam_round(manager, limit: int = 5) -> dict[str, int]:
+    """🕵️ Сторож спама: перенести счётчики сообщений в базу и выйти из групп, где почти один мусор."""
+    from app.services import spamwatch
+
+    async with Session() as s:
+        await spamwatch.flush(s)
+        if await settings.get(s, "group_audit") != "1":
+            return {}
+        leave_on = await settings.get(s, "group_audit_leave") == "1"
+        todo = [(g.id, spamwatch.verdict(g)) for g in await spamwatch.suspects(s, limit)]
+        await s.commit()
+    out: dict[str, int] = {}
+    for gid, reason in todo:
+        try:
+            r = await drop_group(manager, gid, reason, leave_on)
+        except Exception:
+            log.exception("сторож спама: группа %s", gid)
+            r = "skip"
+        out[r] = out.get(r, 0) + 1
+        await asyncio.sleep(random.uniform(3, 8))
+    return out
 
 
 _leaving = asyncio.Lock()
@@ -790,6 +827,8 @@ async def publish_loop(manager) -> None:
                 await rules_round(manager)
             if ticks % 10 == 7:  # ~раз в 10 минут — перепроверка следующих 3 вступивших групп (🧹 Проверка групп)
                 await audit_round(manager)
+            if ticks % 10 == 9:  # ~раз в 10 минут — сторож спама: выйти из групп, где почти один мусор
+                await spam_round(manager)
             if ticks % 15 == 11:  # ~раз в 15 минут — свежие заявки ещё на месте в группе?
                 await liveness_round(manager)
             if ticks % 10 == 5:  # ~раз в 10 минут — не просит ли бот группы капчу (🧩 Капча)

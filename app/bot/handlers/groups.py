@@ -598,11 +598,18 @@ async def audit_menu(cb: CallbackQuery) -> None:
         on = await settings.get(s, "group_audit") == "1"
         leave = await settings.get(s, "group_audit_leave") == "1"
         which = await ai.provider(s)
+        from app.services import spamwatch
+
+        await spamwatch.flush(s)
+        watched = len(await spamwatch.suspects(s))
     text = (
         "🧹 <b>Проверка групп</b> — разведчик перечитывает последние сообщения своих групп и решает: живая группа "
         "(объявления, просьбы об услугах) или спам, «заработок», реклама. Заодно определяет город/регион/всю страну.\n"
         + (f"Решает: правила + ИИ {esc(llm.NAMES.get(which, which))}." if which else "Решает: правила (ИИ не подключён).")
-        + f"\n\nГрупп разведчика: {total}, ещё не проверены: {never}."
+        + f"\n\nГрупп разведчика: {total}, ещё не проверены: {never}. Группы без заявок перепроверяются раз в неделю."
+        + f"\n🕵️ Сторож спама читает все сообщения: если за последние ~{spamwatch.MIN_SEEN}+ сообщений "
+          f"{int(spamwatch.JUNK_SHARE * 100)}% и больше — реклама, «заработок» или не по-русски, а заявок не было "
+          f"{spamwatch.LEAD_DAYS} дней, разведчик выходит в течение ~10 минут. Сейчас таких: {watched}."
         + f"\nЗа неделю: проверено {week['checked']}, вышли из спамных {week['left']}, "
           f"оставили, но без заявок {week['muted']}."
         + ("" if on else "\n⏸ Проверка выключена — кнопка «▶️ Включить проверку» ниже.")
@@ -1029,8 +1036,68 @@ async def tidy_view(target) -> None:
             rows.append([(f"👀 {title.split(' ', 1)[1]} · {n}", f"gt:v:{kind}")])
     lines += ["", f"🔎 Поиск и вступление в новые группы: {'▶️ идёт' if grow else '⏹ остановлен'}"]
     rows.append([("⏹ Остановить поиск и вступление" if grow else "▶️ Включить поиск и вступление", "gt:grow")])
+    rows.append([("🔄 Начать заново — убрать все группы", "gt:reset")])
     rows.append([("📍 Места разведчика", "gp:menu"), ("◀️ Назад", "gr:sub:quality")])
     await reply(target, "\n".join(lines), kb(rows))
+
+
+@router.callback_query(F.data == "gt:reset")
+async def gt_reset(cb: CallbackQuery) -> None:
+    from app.services import tidy
+
+    async with Session() as s:
+        p = await tidy.reset_plan(s)
+        paused = await settings.get(s, "scout_paused") == "1"
+    await reply(cb, "🔄 <b>Начать заново</b>\n"
+                f"• Разведчик выйдет из <b>{len(p['leave'])}</b> групп (по одной, с паузами — около {len(p['leave']) * 6 // 60 + 1} мин.).\n"
+                f"• Из базы удалятся <b>{p['delete']}</b> групп (очередь, кандидаты, пропущенные, вышли). Заявки и клиенты останутся.\n"
+                f"• <b>{len(p['spam'])}</b> спамных запомним как «пропущена» — чтобы не вступить в них снова.\n"
+                f"• Не тронем <b>{p['keep']}</b>: каталог, реклама, просьбы пользователей, группы с нашим ботом, каналы.\n\n"
+                "Потом поиск начнётся с начала по новым правилам: сначала ваш регион, места из «📍 Места разведчика», "
+                "проверка группы перед вступлением, сторож спама.\n"
+                + ("⏸ Разведчик сейчас на паузе — искать начнёт после «▶️ Возобновить разведчика».\n" if paused else "")
+                + "\nОтменить это нельзя (вернуть только из копии базы). Продолжить?",
+                kb([[("✅ Да, начать заново", "gt:reset:go")], [("❌ Не надо", "gt:menu")]]))
+
+
+@router.callback_query(F.data == "gt:reset:go")
+async def gt_reset_go(cb: CallbackQuery) -> None:
+    import asyncio
+
+    from app.bot import notify
+    from app.scout import joiner, publisher
+    from app.scout.search import discover
+    from app.services import tidy
+
+    if publisher._leaving.locked():
+        return await cb.answer("Выход из групп уже идёт — дождитесь итога", show_alert=True)
+    async with Session() as s:
+        p = await tidy.reset_plan(s)
+    if p["leave"] and (manager is None or not manager.clients):
+        return await cb.answer("Разведчик не подключён — сначала нужно выйти из групп. Подключите аккаунт и повторите.",
+                               show_alert=True)
+
+    async def run():
+        res = await publisher.leave_groups(manager, p["leave"], "начать заново") if p["leave"] else {"left": 0, "failed": 0}
+        async with Session() as s:
+            fin = await tidy.reset_finish(s, set(p["spam"]))
+        await notify._send(
+            f"🔄 Начать заново: вышел из {res['left']} групп, удалил из базы {fin['deleted']}, "
+            f"спамных запомнил {fin['remembered']}."
+            + (f"\n⚠️ Не получилось выйти из {fin['still']} — они остались, можно нажать ещё раз." if fin["still"] else "")
+            + ("\n⏸ Разведчик на паузе — поиск начнётся после «▶️ Возобновить разведчика»." if await joiner.paused()
+               else "\n🔎 Запускаю поиск новых групп."))
+        if await joiner.paused():
+            return
+        for client in (manager.clients.values() if manager else []):
+            try:
+                await discover(client, report=True)
+            except ConnectionError:
+                pass
+
+    asyncio.create_task(run())
+    await cb.answer("Начал: выхожу из групп по одной, итог пришлю сообщением", show_alert=True)
+    await tidy_view(cb)
 
 
 @router.callback_query(F.data == "gt:menu")

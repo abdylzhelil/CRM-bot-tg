@@ -17,7 +17,7 @@ from app.db import Session
 from app.models import ScoutAccount
 from app.scout.client import make_client
 from app.services.antispam import AuthorInfo
-from app.services import intake
+from app.services import intake, spamwatch
 from app.services.pipeline import Incoming
 
 log = logging.getLogger(__name__)
@@ -108,6 +108,7 @@ class ScoutManager:
         try:
             if not event.is_group or not event.raw_text or len(event.raw_text) < 8:
                 return
+            spamwatch.note(event.chat_id, event.raw_text)
             sender = await event.get_sender()
             if not isinstance(sender, User):
                 return

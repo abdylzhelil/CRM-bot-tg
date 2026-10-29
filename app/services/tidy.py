@@ -5,12 +5,13 @@
 (`scout_places`; пустой список — места не проверяем) и она не спамная. Выходим только по кнопке владельца, с подтверждением;
 вернуть группу можно: 🔍 Группы → 👋 Вышли → ↩️.
 """
+import re
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Group, User, now
+from app.models import AdPost, Group, Lead, User, now
 from app.services import geo, groupcheck, junk, settings
 
 QUIET_DAYS = 14  # «без заявок»: состоит дольше стольки дней и заявок оттуда не было ни одной
@@ -66,3 +67,70 @@ async def classify(s: AsyncSession) -> dict:
         else:
             out["keep"] += 1
     return out
+
+
+# ---------- 🔄 Начать заново (владелец 29.10: «удалить все группы с базы и заново искать по правильным алгоритмам») ----------
+_SPAM_REASON = re.compile(r"реклам|флуд|игры|заработ|серые|не на русском|спам|сторож|проверка:", re.I)
+
+
+def reset_keep(g: Group) -> str:
+    """Почему группу «начать заново» не трогает ("" — трогает)."""
+    if g.kind != "group":
+        return "канал"
+    if g.bot_member:
+        return "в ней наш бот"
+    if g.status == "joined" and not g.account_id:
+        return "вступил не разведчик"
+    return groupcheck.protected(g)
+
+
+def is_spam(g: Group) -> bool:
+    """Группу запомнили как спамную — после сброса она остаётся в базе как «пропущена», чтобы не вступить в неё снова."""
+    return bool(g.no_leads or g.audit_verdict in ("spam", "offtopic") or junk.title_reason(g.title)
+                or _SPAM_REASON.search(g.skip_reason or ""))
+
+
+async def reset_plan(s: AsyncSession) -> dict:
+    """{'leave': [id вступивших — выйти], 'delete': n, 'spam': [id — запомнить], 'keep': n}"""
+    with_posts = set((await s.scalars(select(AdPost.group_id).distinct())).all())
+    out: dict = {"leave": [], "delete": 0, "spam": [], "keep": 0}
+    for g in (await s.scalars(select(Group))).all():
+        if reset_keep(g) or g.id in with_posts:
+            out["keep"] += 1
+            continue
+        if g.status == "joined":
+            out["leave"].append(g.id)
+        if is_spam(g):
+            out["spam"].append(g.id)
+        else:
+            out["delete"] += 1
+    return out
+
+
+async def reset_finish(s: AsyncSession, spam_ids: set[int]) -> dict[str, int]:
+    """После выхода: удалить группы из базы (кроме защищённых, тех, откуда выйти не вышло, и спамных — их
+    запоминаем как «пропущена»), сбросить очередь поисковых запросов. Заявки остаются (без ссылки на группу)."""
+    with_posts = set((await s.scalars(select(AdPost.group_id).distinct())).all())
+    gone, remembered, still = [], 0, 0
+    for g in (await s.scalars(select(Group))).all():
+        if reset_keep(g) or g.id in with_posts:
+            continue
+        if g.status == "joined":
+            still += 1  # не получилось выйти (нет связи и т. п.) — остаётся, можно повторить
+            continue
+        if g.id in spam_ids or is_spam(g):
+            g.status = "skipped"
+            if not _SPAM_REASON.search(g.skip_reason or ""):
+                g.skip_reason = "спам (запомнили при «начать заново»)"
+            remembered += 1
+            continue
+        gone.append(g.id)
+    for i in range(0, len(gone), 500):
+        part = gone[i:i + 500]
+        await s.execute(update(Lead).where(Lead.group_id.in_(part)).values(group_id=None))
+        await s.execute(delete(Group).where(Group.id.in_(part)))
+    for key in ("search_offset", "search_offset_home"):
+        await settings.put(s, key, "0")
+    await settings.put(s, "scout_grow", "1")
+    await s.commit()
+    return {"deleted": len(gone), "remembered": remembered, "still": still}
