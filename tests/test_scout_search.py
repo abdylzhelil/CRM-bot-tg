@@ -196,3 +196,18 @@ async def test_home_region_small_groups_get_softer_threshold(maker):
     assert st == {-7001: "candidate", -7002: "skipped", -7003: "skipped", -7004: "skipped"}
     old = Group(tg_id=1, status="skipped", found_at=now() - timedelta(days=40))
     assert search._recheck_small(old) and not search._recheck_small(Group(tg_id=2, status="skipped", found_at=now()))
+
+
+async def test_scoutreport_and_joinable_fallback(maker):
+    from app import scoutreport
+    from app.scout import joiner
+
+    async with maker() as s:
+        s.add_all([Group(tg_id=-8001, title="Нальчик объявления", status="approved", members=500),
+                   Group(tg_id=-8002, title="Москва барахолка", status="approved", members=900)])
+        await s.commit()
+        q = (await s.scalars(select(Group).where(Group.status == "approved"))).all()
+    # на этапе «Дагестан» дагестанских нет — берём следующий круг (Кавказ), но не Москву
+    assert [g.title for g in joiner.joinable(q, "Дагестан", 0)] == ["Нальчик объявления"]
+    text = await scoutreport.build()
+    assert "Очередь: 2, можно вступать сейчас: 1" in text and "этап 0" in text

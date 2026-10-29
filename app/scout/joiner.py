@@ -77,6 +77,18 @@ async def _quality(client: TelegramClient, entity, g: Group, s=None) -> tuple[st
     return ("" if res["verdict"] == "good" else res["reason"] or "не подходит"), res
 
 
+def joinable(queue: list, home: str, stage: int) -> list:
+    """Кого можно брать сейчас: группы текущего этапа (Дагестан → Кавказ → Россия) и просьбы пользователей.
+    Если таких нет — следующий круг, чтобы разведчик не простаивал (Дагестан всё равно первым, когда появится)."""
+    from app.services import geo
+
+    for st in (stage, min(stage + 1, 2)):
+        out = [x for x in queue if x.wanted_by or geo.stage_allows(x.city, x.region, x.title, home, st)]
+        if out:
+            return out
+    return []
+
+
 async def join_one(client: TelegramClient, acc_id: int) -> bool:
     """Вступить в одну одобренную группу. True — если попытка была (нужна пауза)."""
     from app.scout.client import ensure_connected
@@ -110,7 +122,7 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
         from app.scout import search as search_
 
         st = await search_.stage(s)  # этап «Дагестан → Кавказ → Россия»: чужие круги ждут своей очереди
-        queue = [x for x in queue if x.wanted_by or geo.stage_allows(x.city, x.region, x.title, home, st)]
+        queue = joinable(queue, home, st)
         g = min(queue, key=lambda x: (x.wanted_by == 0, geo.priority(x.city, x.region, x.title, home), -(x.members or 0)),
                 default=None)
         if not g:  # новых нет — повторяем заявки, которые админы групп ещё не одобрили (срок повтора подошёл)

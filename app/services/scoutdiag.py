@@ -48,12 +48,24 @@ async def join_diagnosis(s, manager=None) -> tuple[str, list[str]]:
     cnt = dict((await s.execute(select(Group.status, func.count()).where(Group.kind == "group")
                                 .group_by(Group.status))).all())
     queue, cands = cnt.get("approved", 0), cnt.get("candidate", 0)
-    if queue:
-        lines.append(f"⏳ в очереди на вступление: {queue}")
-    elif cands:
-        warn(f"очередь пуста, а {cands} найденных групп ждут вашего отбора — 🔍 Группы → «❓ Кандидаты» "
-             "(или ⚙️ → Режим вступления = auto, тогда вступает сам)")
-    else:
+    from app.scout import joiner, search as search_
+
+    st = await search_.stage(s)
+    home = await settings.get(s, "home_region")
+    lines.append(f"🧭 этап поиска: {search_.STAGE_LABELS[st]}")
+    if await settings.get(s, "scout_grow") != "1":
+        bad("поиск и вступление в новые группы выключены — 🔍 Группы → 🧹 Качество групп → 🧹 Навести порядок → "
+            "«▶️ Включить поиск и вступление»")
+    ready = len(joiner.joinable((await s.scalars(select(Group).where(
+        Group.status == "approved", Group.kind == "group").limit(300))).all(), home, st)) if queue else 0
+    if queue and not ready:
+        warn(f"в очереди {queue}, но все — из других мест (не {home}) и ждут следующего этапа поиска")
+    elif queue:
+        lines.append(f"⏳ в очереди на вступление: {queue}" + (f" (сейчас подходят {ready})" if ready < queue else ""))
+    if cands and await settings.get(s, "mode") != "auto":
+        warn(f"{cands} найденных групп ждут вашего отбора — 🔍 Группы → «❓ Кандидаты» "
+             "(или ⚙️ → 🔍 Разведчик → Режим вступления = auto, тогда вступает сам)")
+    if not queue and not cands:
         warn("очередь пуста и новых кандидатов нет — поиск не находит новых групп. "
              "Нажмите «▶️ Искать сейчас» или добавьте запросы в «🔎 Запросы» (🔍 Поиск и вступление)")
     from app.scout.search import last_search
