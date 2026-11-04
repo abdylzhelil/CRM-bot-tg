@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -44,3 +47,50 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Тесты на PostgreSQL
         run: pytest -q
+
+  deploy:
+    name: Deploy CRM
+    needs: [test, test-postgres]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/ccr-a042c0a9-cjx9fv' && vars.CRM_AUTO_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: crm-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Deploy the tested commit over SSH
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.CRM_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.CRM_DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.CRM_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.CRM_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ vars.CRM_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?Set DEPLOY_HOST}"
+          : "${DEPLOY_USER:?Set DEPLOY_USER}"
+          : "${DEPLOY_SSH_KEY:?Set DEPLOY_SSH_KEY}"
+          : "${DEPLOY_KNOWN_HOSTS:?Set DEPLOY_KNOWN_HOSTS}"
+          DEPLOY_PORT=${DEPLOY_PORT:-22}
+          DEPLOY_PATH=${DEPLOY_PATH:-/root/CRM-bot-tg}
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]] && ((DEPLOY_PORT >= 1 && DEPLOY_PORT <= 65535))
+          [[ "$DEPLOY_PATH" = /* ]]
+          install -m 700 -d "$RUNNER_TEMP/crm-ssh"
+          trap 'rm -rf -- "$RUNNER_TEMP/crm-ssh"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/crm-ssh/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/crm-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/crm-ssh/"*
+          printf -v remote_command '%q ' bash -s -- "$GITHUB_SHA" "$DEPLOY_PATH"
+          ssh -T -p "$DEPLOY_PORT" -i "$RUNNER_TEMP/crm-ssh/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/crm-ssh/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" < docker/autodeploy.sh
