@@ -1,0 +1,400 @@
+"""Сквозной сценарий через диспетчер aiogram с фальшивым Telegram: регистрация, меню, права."""
+from datetime import datetime
+from itertools import count
+
+import pytest
+from aiogram.client.session.base import BaseSession
+from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetMe, GetMyName, SendMessage, TelegramMethod
+from aiogram.types import CallbackQuery, Chat, Message, Update, User
+from sqlalchemy import select
+
+from app.bot.setup import build
+from app.models import Category, UserCategory
+from app.models import User as DbUser
+from tests.conftest import ADMIN_ID
+
+_ids = count(1)
+
+
+class FakeSession(BaseSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[TelegramMethod] = []
+
+    async def make_request(self, bot, method, timeout=None):
+        self.requests.append(method)
+        if isinstance(method, GetMe):
+            return User(id=42, is_bot=True, first_name="CRM", username="crm_test_bot")
+        if isinstance(method, SendMessage | EditMessageText):
+            return Message(message_id=next(_ids), date=datetime.now(),
+                           chat=Chat(id=method.chat_id or 0, type="private"), text=method.text)
+        if isinstance(method, GetMyName):
+            from aiogram.types import BotName
+
+            return BotName(name="старое имя")
+        if isinstance(method, AnswerCallbackQuery):
+            return True
+        return True
+
+    async def stream_content(self, *args, **kwargs):  # pragma: no cover
+        yield b""
+
+    async def close(self) -> None:
+        pass
+
+    def texts(self, chat_id: int) -> list[str]:
+        return [r.text for r in self.requests
+                if isinstance(r, SendMessage | EditMessageText) and r.chat_id == chat_id]
+
+
+_BUILT = None
+
+
+@pytest.fixture
+def app_bot(maker):
+    """Роутеры aiogram можно подключить к диспетчеру один раз — диспетчер общий для тестов."""
+    global _BUILT
+    from app.bot import notify
+
+    if _BUILT is None:
+        _BUILT = build(None)
+    bot, dp = _BUILT
+    session = FakeSession()
+    bot.session = session
+    notify.init(bot)
+    return bot, dp, session
+
+
+def text_update(uid: int, text: str) -> Update:
+    return Update(update_id=next(_ids), message=Message(
+        message_id=next(_ids), date=datetime.now(), chat=Chat(id=uid, type="private"),
+        from_user=User(id=uid, is_bot=False, first_name="Тест"), text=text,
+    ))
+
+
+def cb_update(uid: int, data: str) -> Update:
+    msg = Message(message_id=next(_ids), date=datetime.now(), chat=Chat(id=uid, type="private"), text="x")
+    return Update(update_id=next(_ids), callback_query=CallbackQuery(
+        id=str(next(_ids)), from_user=User(id=uid, is_bot=False, first_name="Тест"), chat_instance="c",
+        message=msg, data=data,
+    ))
+
+
+async def pass_captcha(bot, dp, uid: int) -> None:
+    """Пройти проверку «я не бот»: нажать нужный значок."""
+    from app.bot import captcha
+
+    icons, target, _ = captcha._pending[uid]
+    await dp.feed_update(bot, cb_update(uid, f"cap:{icons.index(target)}"))
+
+
+async def test_new_user_onboarding_flow(app_bot, maker):
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(500, "/start"))
+    assert "Проверка" in api.texts(500)[-1]  # сначала «я не бот»
+    await dp.feed_update(bot, text_update(500, "привет"))  # пока проверки нет — ничего, кроме неё, не работает
+    assert "Проверка" in api.texts(500)[-1]
+    from app.bot import captcha
+
+    icons, target, _ = captcha._pending[500]
+    wrong = next(i for i, ic in enumerate(icons) if ic != target)
+    await dp.feed_update(bot, cb_update(500, f"cap:{wrong}"))
+    async with maker() as s:
+        assert not (await s.get(DbUser, 500)).verified  # неверный значок — проверка не пройдена
+    await pass_captcha(bot, dp, 500)
+    assert "Привет" in api.texts(500)[-1] and "ниши" in api.texts(500)[-1]
+
+    async with maker() as s:
+        sites = await s.scalar(select(Category.id).where(Category.name == "Сайты"))
+    await dp.feed_update(bot, cb_update(500, "ob:done"))  # без ниши нельзя
+    await dp.feed_update(bot, cb_update(500, f"ob:cat:{sites}"))
+    await dp.feed_update(bot, cb_update(500, "ob:done"))
+    assert "Город" in api.texts(500)[-1]
+    await dp.feed_update(bot, cb_update(500, "ob:city:0"))  # Махачкала
+    assert any("Готово" in t for t in api.texts(500))
+    async with maker() as s:
+        u = await s.get(DbUser, 500)
+        assert u.onboarded and u.city == "Махачкала" and not u.is_admin
+        assert await s.get(UserCategory, (500, sites))
+
+
+async def test_admin_sections_hidden_from_users(app_bot, maker):
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(501, "/start"))
+    await pass_captcha(bot, dp, 501)
+    async with maker() as s:
+        (await s.get(DbUser, 501)).onboarded = True
+        await s.commit()
+    before = len(api.texts(501))
+    await dp.feed_update(bot, text_update(501, "🔍 Группы"))
+    await dp.feed_update(bot, text_update(501, "👥 Пользователи"))
+    await dp.feed_update(bot, cb_update(501, "us:plan:501:0"))  # попытка выдать себе тариф
+    assert len(api.texts(501)) == before
+    async with maker() as s:
+        assert (await s.get(DbUser, 501)).plan == "free"
+
+    await dp.feed_update(bot, text_update(501, "👤 Профиль"))
+    assert "Профиль" in api.texts(501)[-1]
+
+
+async def test_admin_can_manage_users(app_bot, maker):
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(502, "/start"))
+    await pass_captcha(bot, dp, 502)
+    await dp.feed_update(bot, text_update(ADMIN_ID, "👥 Пользователи"))
+    assert "Пользователей" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "us:plan:502:30"))
+    async with maker() as s:
+        u = await s.get(DbUser, 502)
+        assert u.plan == "full" and u.plan_until is not None
+    assert any("Полный тариф" in t for t in api.texts(502))
+
+
+async def test_no_start_needed_unknown_text_shows_menu(app_bot, maker):
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(ADMIN_ID, "привет"))
+    last = [r for r in api.requests if isinstance(r, SendMessage) and r.chat_id == ADMIN_ID][-1]
+    assert "меню" in last.text and not last.reply_markup.is_persistent  # панель можно свернуть
+    labels = [b.text for row in last.reply_markup.keyboard for b in row]
+    assert "🛠 Управление" in labels and "❓ Помощь" in labels and "👥 Пользователи" not in labels
+    await dp.feed_update(bot, text_update(ADMIN_ID, "🛠 Управление"))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "adm:users"))
+    assert "Пользователей" in api.texts(ADMIN_ID)[-1]
+
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/leads"))
+    assert "Заявки" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/help"))
+    assert "Как пользоваться" in api.texts(ADMIN_ID)[-1]
+
+
+async def test_user_menu_has_no_admin_buttons_and_profile_is_set(app_bot, maker):
+    from aiogram.methods import SetMyCommands, SetMyDescription
+
+    from app.bot.setup import setup_profile
+
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(503, "/start"))
+    await pass_captcha(bot, dp, 503)
+    async with maker() as s:
+        (await s.get(DbUser, 503)).onboarded = True
+        await s.commit()
+    await dp.feed_update(bot, text_update(503, "что тут"))
+    last = [r for r in api.requests if isinstance(r, SendMessage) and r.chat_id == 503][-1]
+    labels = [b.text for row in last.reply_markup.keyboard for b in row]
+    assert "🛠 Управление" not in labels and "📥 Заявки" in labels
+    await dp.feed_update(bot, cb_update(503, "adm:users"))  # чужой не откроет управление
+    assert not any("Пользователей" in t for t in api.texts(503))
+
+    await setup_profile(bot)
+    assert any(isinstance(r, SetMyCommands) for r in api.requests)
+    assert any(isinstance(r, SetMyDescription) for r in api.requests)
+
+
+async def test_about_command_and_profile_texts(app_bot):
+    from aiogram.methods import SetMyName
+
+    from app import config
+    from app.bot import setup
+
+    bot, dp, api = app_bot
+    assert len(setup.DESCRIPTION) <= 512 and len(setup.SHORT_DESCRIPTION) <= 120
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/about"))
+    assert "КлиентРадар" in api.texts(ADMIN_ID)[-1]
+    await setup.setup_profile(bot)
+    assert any(isinstance(r, SetMyName) for r in api.requests)
+    assert any(c.command == "about" for c in setup.USER_COMMANDS)
+
+
+async def test_settings_status_presets_and_search(app_bot, maker):
+    from app.services import settings as st
+
+    for k in st.LABELS:
+        assert k in st.HINTS
+    for _, _, _, vals in st.PRESETS.values():
+        assert all(k in st.DEFAULTS and v.isdigit() for k, v in vals.items())
+
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:status"))
+    assert any("Состояние бота" in t for t in api.texts(ADMIN_ID))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:pre:careful"))
+    assert "изменит" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:preok:careful"))
+    async with maker() as s:
+        assert await st.get(s, "default_join_limit") == "5"
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:def:default_join_limit"))
+    async with maker() as s:
+        assert await st.get(s, "default_join_limit") == "10"
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:find"))
+    await dp.feed_update(bot, text_update(ADMIN_ID, "возврат"))
+    assert "Нашлось" in api.texts(ADMIN_ID)[-1]
+    assert st.search("возврат") == ["refund_days"] or "refund_days" in st.search("возврат")
+
+
+async def test_autosetup_for_user_and_admin(app_bot, maker):
+    from sqlalchemy import select
+
+    from app.models import UserNegative
+    from app.services import autosetup
+
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(504, "/start"))
+    await pass_captcha(bot, dp, 504)
+    async with maker() as s:
+        u = await s.get(DbUser, 504)
+        u.onboarded, u.paused = True, True
+        await s.commit()
+    await dp.feed_update(bot, cb_update(504, "pf:auto"))
+    assert "Бесплатный тариф" in api.texts(504)[-1] and "23-8" in api.texts(504)[-1]
+    await dp.feed_update(bot, cb_update(504, "pf:autook"))
+    async with maker() as s:
+        u = await s.get(DbUser, 504)
+        assert u.quiet_hours == "23-8" and not u.paused
+        assert len((await s.scalars(select(UserNegative).where(UserNegative.user_id == 504))).all()) == 4
+    await dp.feed_update(bot, cb_update(504, "pf:autook"))  # повтор ничего не дублирует
+    async with maker() as s:
+        assert len((await s.scalars(select(UserNegative).where(UserNegative.user_id == 504))).all()) == 4
+        assert await autosetup.user_plan(s, await s.get(DbUser, 504)) == []
+    await dp.feed_update(bot, cb_update(504, "st:auto"))  # чужой не открывает автонастройку бота
+    assert not any("Автонастройка бота" in t for t in api.texts(504))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "st:auto"))
+    assert "Автонастройка бота" in api.texts(ADMIN_ID)[-1]
+
+
+async def test_forget_command_asks_confirmation_then_deletes(app_bot, maker):
+    from app.models import Lead
+
+    bot, dp, api = app_bot
+    async with maker() as s:
+        s.add(Lead(author_id=910, username="gone_u", name="Автор", text="Нужен бот", text_hash="forget1"))
+        await s.commit()
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/forget"))
+    assert "Напишите так" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/forget @gone_u"))
+    assert "Удалить данные автора" in api.texts(ADMIN_ID)[-1] and "заявок 1" in api.texts(ADMIN_ID)[-1]
+    async with maker() as s:
+        assert (await s.scalar(select(Lead.id).where(Lead.author_id == 910))) is not None  # без подтверждения ничего не удалено
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "fg:do:910"))
+    assert "Удалено" in api.texts(ADMIN_ID)[-1]
+    async with maker() as s:
+        assert (await s.scalar(select(Lead.id).where(Lead.author_id == 910))) is None
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/forget @нет_такого"))
+    assert "не найден" in api.texts(ADMIN_ID)[-1]
+
+
+async def test_forget_is_admin_only_and_never_for_bot_users(app_bot, maker):
+    bot, dp, api = app_bot
+    await dp.feed_update(bot, text_update(504, "/start"))
+    await pass_captcha(bot, dp, 504)
+    async with maker() as s:
+        (await s.get(DbUser, 504)).onboarded = True
+        await s.commit()
+    await dp.feed_update(bot, text_update(504, "/forget 905"))
+    assert not any("Удалить данные автора" in t or "Напишите так" in t for t in api.texts(504))
+    await dp.feed_update(bot, cb_update(504, "fg:do:905"))
+    assert not any("Удалено" in t for t in api.texts(504))
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "fg:do:504"))  # 504 — пользователь бота: удаляется через /deleteme
+    async with maker() as s:
+        assert await s.get(DbUser, 504) is not None
+
+
+async def test_aitest_command_confirmation_and_no_key_spends_nothing(app_bot, maker, monkeypatch):
+    from app import config
+    from app.models import AiCall, Lead
+    from tests.test_ai import FakeClaude
+
+    bot, dp, api = app_bot
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/aitest"))
+    assert "Ключа ИИ нет" in api.texts(ADMIN_ID)[-1]  # без ключа — ничего не тратится
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    claude = FakeClaude()
+    monkeypatch.setattr("app.services.ai.make_client", lambda: claude)
+    async with maker() as s:
+        s.add(Lead(author_id=920, username="u920", name="Автор", text="Нужен сайт для кафе", text_hash="aitest1"))
+        await s.commit()
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/aitest 3"))
+    assert "Запустить?" in api.texts(ADMIN_ID)[-1] and not claude.calls  # сначала подтверждение, запросов ещё нет
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "ait:go:3"))
+    assert [c["model"] for c in claude.calls] == ["claude-haiku-5-5", "claude-sonnet-5-5"]
+    assert any("Сравнение" in t or "haiku" in t for t in api.texts(ADMIN_ID))
+    async with maker() as s:
+        assert len((await s.scalars(select(AiCall))).all()) == 2
+    # обычный пользователь команду не получает
+    await dp.feed_update(bot, text_update(504, "/start"))
+    await pass_captcha(bot, dp, 504)
+    async with maker() as s:
+        (await s.get(DbUser, 504)).onboarded = True
+        await s.commit()
+    before = len(claude.calls)
+    await dp.feed_update(bot, text_update(504, "/aitest"))
+    await dp.feed_update(bot, cb_update(504, "ait:go:3"))
+    assert len(claude.calls) == before
+
+
+# ---------- привязанная карта: показ и отвязка (требование ЮKassa к интерфейсу) ----------
+
+async def test_unbind_card_flow_in_bot(app_bot, maker):
+    from datetime import timedelta
+
+    from app.models import User as U, now
+    from tests.conftest import make_user
+
+    bot, dp, api = app_bot
+    await make_user(maker, 80, plan="full", plan_until=now() + timedelta(days=10), renew_method="pm-9", renew_card="Mir •••• 4242", renew_days=30)
+    await dp.feed_update(bot, cb_update(80, "pf:plan"))
+    shown = api.texts(80)[-1]
+    assert "Привязанная карта" in shown and "Mir •••• 4242" in shown and "Отвязать карту можно в любой момент" in shown
+    await dp.feed_update(bot, cb_update(80, "ren:ask"))
+    assert "Отвязать карту?" in api.texts(80)[-1]
+    async with maker() as s:
+        assert (await s.get(U, 80)).renew_method == "pm-9"  # пока не подтвердили — ничего не изменилось
+    await dp.feed_update(bot, cb_update(80, "ren:off"))
+    assert "Карта отвязана" in api.texts(80)[-1]
+    async with maker() as s:
+        u = await s.get(U, 80)
+        assert (u.renew_method, u.renew_card, u.renew_days, u.renew_for) == ("", "", 0, None)
+        assert u.plan == "full"  # оплаченный тариф остаётся
+    await dp.feed_update(bot, cb_update(80, "pf:plan"))
+    assert "Привязанная карта" not in api.texts(80)[-1]  # карты больше нет
+    await dp.feed_update(bot, cb_update(80, "ren:ask"))  # повторно — «Карта не привязана», без ошибки
+
+
+
+async def test_demo_card_for_screenshots_is_admin_only_and_never_charged(app_bot, maker, monkeypatch):
+    from datetime import timedelta
+
+    from app import config as cfg
+    from app.models import User as U, now
+    from app.services import payments, settings
+    from tests.conftest import make_user
+
+    bot, dp, api = app_bot
+    monkeypatch.setattr(cfg, "YOOKASSA_SHOP_ID", "1")
+    monkeypatch.setattr(cfg, "YOOKASSA_SECRET_KEY", "k")
+    async with maker() as s:
+        await settings.put(s, "autorenew", "1")
+        await settings.put(s, "price_30", "490")
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/demo_card"))
+    assert "Демо включено" in api.texts(ADMIN_ID)[-1]
+    await dp.feed_update(bot, cb_update(ADMIN_ID, "pf:plan"))
+    assert "Mir •••• 4242" in api.texts(ADMIN_ID)[-1]
+    called = []
+
+    async def forbidden(*a, **k):
+        called.append(a)
+        return {}
+
+    async with maker() as s:
+        admin = await s.get(U, ADMIN_ID)
+        admin.plan_until = now() + timedelta(hours=2)  # срок «горит» — но админа не списываем
+        await s.commit()
+        assert await payments.renew_due(s, api=forbidden) == 0
+    assert not called  # ни одного запроса в ЮKassa
+    await dp.feed_update(bot, text_update(ADMIN_ID, "/demo_card off"))
+    async with maker() as s:
+        assert (await s.get(U, ADMIN_ID)).renew_method == ""
+    # обычному пользователю команда недоступна
+    await make_user(maker, 81)
+    await dp.feed_update(bot, text_update(81, "/demo_card"))
+    async with maker() as s:
+        assert (await s.get(U, 81)).renew_method == ""
