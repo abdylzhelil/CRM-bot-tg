@@ -44,8 +44,20 @@ CURRENT=$(docker compose ps -q bot)
 PROJECT=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$CURRENT")
 [[ -n "$PROJECT" && "$PROJECT" != 'tg-group-bot' ]] || { echo 'Invalid CRM project' >&2; exit 1; }
 OLD_IMAGE=$(docker inspect -f '{{.Image}}' "$CURRENT")
+CURRENT_IMAGE=$OLD_IMAGE
 ROLLBACK_TAG="crm-rollback:$PREVIOUS"
-docker image tag "$OLD_IMAGE" "$ROLLBACK_TAG"
+if docker image inspect "$OLD_IMAGE" >/dev/null 2>&1; then
+    docker image tag "$OLD_IMAGE" "$ROLLBACK_TAG"
+else
+    # An image can be removed while its container remains alive. Preserve that
+    # container's filesystem/config before touching it; mounted DB/media stay out.
+    # --pause=false keeps the existing CRM running. Never push this local snapshot:
+    # its image config includes the container's environment.
+    echo 'Original image unavailable; saving running CRM as a local rollback image'
+    OLD_IMAGE=$(timeout 180 docker commit --pause=false "$CURRENT" "$ROLLBACK_TAG")
+    [[ "$OLD_IMAGE" = sha256:* ]] || { echo 'Could not preserve rollback image' >&2; exit 1; }
+    docker image inspect "$OLD_IMAGE" >/dev/null
+fi
 STATE=$(git rev-parse --git-path crm-autodeploy)
 mkdir -p -- "$STATE"
 STATE=$(cd "$STATE" && pwd)
@@ -115,7 +127,7 @@ bot['image']='crm-bot:'+target
 bot['build']={'context':str(p/'source'),'dockerfile':'Dockerfile'}
 (p/'new.json').write_text(json.dumps(cfg))
 PY
-healthy "$OLD_IMAGE" || { echo 'Current CRM /healthz baseline failed; no update attempted' >&2; exit 1; }
+healthy "$CURRENT_IMAGE" || { echo 'Current CRM /healthz baseline failed; no update attempted' >&2; exit 1; }
 mkdir -p "$RELEASE/source"
 git archive "$TARGET" | tar -x -C "$RELEASE/source"
 # Use the running image's config; no credentials/DB URL leave the container.

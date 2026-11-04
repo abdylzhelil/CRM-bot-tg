@@ -66,7 +66,7 @@ if a[0]=='compose':
         image=config['services']['bot']['image']
         if image.startswith('crm-rollback:'):
             if mode=='rollback-fail': sys.exit(1)
-            (p/'image').write_text('old-image')
+            (p/'image').write_text('sha256:recovery-image' if mode.startswith('missing-image') else 'old-image')
         else:
             (p/'image').write_text('new-image')
             if mode=='switch-fail': sys.exit(1)
@@ -74,15 +74,20 @@ if a[0]=='compose':
 elif a[0]=='inspect':
     fmt=a[a.index('-f')+1]
     print('true' if 'State.Running' in fmt else 'crm-bot-tg' if 'Labels' in fmt else (p/'image').read_text())
-elif a[:2]==['image','inspect']: print('new-image')
+elif a[:2]==['image','inspect']:
+    if mode.startswith('missing-image') and a[-1]=='old-image': sys.exit(1)
+    print('new-image')
 elif a[:2]==['image','tag']: pass
+elif a[0]=='commit':
+    assert '--pause=false' in a
+    print('sha256:recovery-image')
 elif a[0]=='exec':
     if '-i' in a:
         sys.stdin.read()
         if mode=='backup-fail': sys.exit(1)
         dest=p/'crm/data/backups/autodeploy'/(a[-1]+'.db')
         dest.parent.mkdir(parents=True,exist_ok=True); dest.write_bytes(b'verified SQLite mock')
-    elif (p/'image').read_text()=='new-image' and mode in ('health-fail','rollback-fail'): sys.exit(1)
+    elif (p/'image').read_text()=='new-image' and mode in ('health-fail','rollback-fail','missing-image-health-fail'): sys.exit(1)
 else: sys.exit(4)
 ''')
     fake.chmod(0o755)
@@ -135,6 +140,21 @@ def test_failed_new_image_rolls_back_but_job_fails(deployment, mode):
 def test_rollback_failure_is_explicit(deployment):
     result,_,_=deployment[0]('rollback-fail')
     assert result.returncode!=0 and 'ROLLBACK FAILED' in result.stderr
+
+
+@pytest.mark.parametrize('mode',['missing-image','missing-image-health-fail'])
+def test_missing_original_image_is_preserved_without_pausing(deployment, mode):
+    run,state,repo,old=deployment
+    result,calls,target=run(mode)
+    assert any(c[0]=='commit' and '--pause=false' in c for c in calls)
+    if mode.endswith('health-fail'):
+        assert result.returncode!=0
+        assert 'Previous CRM image restored' in result.stderr
+        assert (state/'image').read_text()=='sha256:recovery-image'
+        assert git(repo,'rev-parse','HEAD')==old
+    else:
+        assert result.returncode==0, result.stderr
+        assert git(repo,'rev-parse','HEAD')==target
 
 
 @pytest.mark.parametrize('mode',['backup-fail','build-fail','stale-during-build','local-during-build'])
