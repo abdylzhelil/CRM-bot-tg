@@ -11,14 +11,18 @@ for program in git docker python3 flock tar timeout sha256sum cmp; do command -v
 exec 9>"$(git rev-parse --git-path crm-deploy.lock)"
 flock -n 9 || { echo 'Another CRM deployment is running' >&2; exit 1; }
 [[ "$(git branch --show-current)" = "$BRANCH" ]] || { echo 'Unexpected CRM branch' >&2; exit 1; }
-clean() { [[ -z "$(git status --porcelain --untracked-files=all)" ]]; }
+clean() {
+    local status
+    status=$(git status --porcelain --untracked-files=all) || return 1
+    [[ -z "$status" ]]
+}
 clean || { echo 'Local changes found; preserve and review them manually' >&2; exit 1; }
 [[ -f .env ]] || { echo 'Missing CRM .env' >&2; exit 1; }
 latest() {
-    git fetch --quiet origin "$BRANCH"
+    git fetch --quiet origin "$BRANCH" || return 1
     [[ "$(git rev-parse FETCH_HEAD)" = "$TARGET" ]]
 }
-latest || { echo 'Skipped: obsolete commit'; exit 0; }
+latest || { echo 'Skipped: remote head unavailable or commit obsolete'; exit 0; }
 PREVIOUS=$(git rev-parse HEAD)
 ENV_STATE=$(sha256sum .env)
 git merge-base --is-ancestor "$PREVIOUS" "$TARGET" || { echo 'Not a fast-forward update' >&2; exit 1; }
@@ -58,7 +62,7 @@ source_unchanged() {
 }
 healthy() {
     local expected=$1 successes=0 container image
-    for ((attempt=0; attempt<36; attempt++)); do
+    for ((attempt=0; attempt<24; attempt++)); do
         container=$(old_compose ps -q bot 2>/dev/null) || container=''
         image=''
         if [[ -n "$container" ]]; then image=$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null) || image=''; fi
@@ -144,9 +148,9 @@ printf '%s\n' "$PREVIOUS" > "$BACKUP_PATH.commit"
 printf '%s\n' "$OLD_IMAGE" > "$BACKUP_PATH.image"
 sha256sum "$BACKUP_PATH" > "$BACKUP_PATH.sha256"
 # Compile while the old bot is still running; no new Telegram polling process.
-new_compose build bot </dev/null
+timeout 900 docker compose --project-directory "$REPO" --project-name "$PROJECT" -f "$RELEASE/new.json" build bot </dev/null
 NEW_IMAGE=$(docker image inspect -f '{{.Id}}' "crm-bot:$TARGET")
-latest || { echo 'Skipped: newer commit arrived during build'; exit 0; }
+latest || { echo 'Skipped: remote head unavailable or newer commit arrived during build'; exit 0; }
 source_unchanged || { echo 'Local configuration or source changed during build; stopped' >&2; exit 1; }
 echo "Switching CRM: $PREVIOUS -> $TARGET"
 TOUCHED=1
