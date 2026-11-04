@@ -1,0 +1,56 @@
+name: CRM scout diagnostics
+on:
+  push:
+    branches: [crm/scout-diagnostics]
+    paths: [.github/workflows/scout-diagnostics.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    name: Read CRM scout state
+    if: github.repository == 'abdylzhelil/CRM-bot-tg'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: crm-production
+      cancel-in-progress: false
+    steps:
+      - name: Read-only scout report over CRM SSH
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.CRM_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.CRM_DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.CRM_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.CRM_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ vars.CRM_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?Set DEPLOY_HOST}"
+          : "${DEPLOY_USER:?Set DEPLOY_USER}"
+          : "${DEPLOY_SSH_KEY:?Set DEPLOY_SSH_KEY}"
+          : "${DEPLOY_KNOWN_HOSTS:?Set DEPLOY_KNOWN_HOSTS}"
+          DEPLOY_PORT=${DEPLOY_PORT:-22}
+          DEPLOY_PATH=${DEPLOY_PATH:-/root/CRM-bot-tg}
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]] && ((DEPLOY_PORT >= 1 && DEPLOY_PORT <= 65535))
+          [[ "$DEPLOY_PATH" = /* ]]
+          install -m 700 -d "$RUNNER_TEMP/crm-ssh"
+          trap 'rm -rf -- "$RUNNER_TEMP/crm-ssh"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/crm-ssh/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/crm-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/crm-ssh/"*
+          printf -v remote_command '%q ' bash -s -- "$DEPLOY_PATH"
+          ssh -T -p "$DEPLOY_PORT" -i "$RUNNER_TEMP/crm-ssh/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/crm-ssh/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" <<'REMOTE'
+          set -euo pipefail
+          cd -- "$1"
+          [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
+          printf 'CRM_COMMIT: '
+          git rev-parse HEAD
+          timeout 120 docker compose exec -T bot python -m app.scoutreport | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
+          REMOTE
