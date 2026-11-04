@@ -24,7 +24,8 @@ fi
 [[ -f "$KEY" && -f "$KEY.pub" ]] || { echo 'Incomplete CRM key pair; inspect manually'; exit 1; }
 chmod 600 "$KEY"
 # Check the pair without displaying either key.
-[[ "$(ssh-keygen -y -f "$KEY")" = "$(awk '{print $1, $2}' "$KEY.pub")" ]] || { echo 'CRM key pair mismatch'; exit 1; }
+DERIVED=$(ssh-keygen -y -f "$KEY")
+[[ "$(printf '%s\n' "$DERIVED" | awk '{print $1, $2}')" = "$(awk '{print $1, $2}' "$KEY.pub")" ]] || { echo 'CRM key pair mismatch'; exit 1; }
 touch "$HOME/.ssh/authorized_keys"
 chmod 600 "$HOME/.ssh/authorized_keys"
 PUB=$(cat "$KEY.pub")
