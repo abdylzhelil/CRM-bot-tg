@@ -76,11 +76,11 @@ elif a[0]=='inspect':
     print('true' if 'State.Running' in fmt else 'crm-bot-tg' if 'Labels' in fmt else (p/'image').read_text())
 elif a[:2]==['image','inspect']:
     if mode.startswith('missing-image') and a[-1]=='old-image': sys.exit(1)
-    print('new-image')
+    print('sha256:recovery-image' if a[-1].startswith('crm-rollback:') else 'new-image')
 elif a[:2]==['image','tag']: pass
 elif a[0]=='commit':
     assert '--pause=false' in a
-    print('sha256:recovery-image')
+    print('Saved local image (noncanonical human-readable output)')
 elif a[0]=='exec':
     if '-i' in a:
         sys.stdin.read()

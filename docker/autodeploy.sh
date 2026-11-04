@@ -54,9 +54,11 @@ else
     # --pause=false keeps the existing CRM running. Never push this local snapshot:
     # its image config includes the container's environment.
     echo 'Original image unavailable; saving running CRM as a local rollback image'
-    OLD_IMAGE=$(timeout 180 docker commit --pause=false "$CURRENT" "$ROLLBACK_TAG")
-    [[ "$OLD_IMAGE" = sha256:* ]] || { echo 'Could not preserve rollback image' >&2; exit 1; }
-    docker image inspect "$OLD_IMAGE" >/dev/null
+    timeout 180 docker commit --pause=false "$CURRENT" "$ROLLBACK_TAG" >/dev/null
+    # Commit's human-readable stdout varies by Docker version. Inspect the tag
+    # instead, using the same API field that identifies every other image.
+    OLD_IMAGE=$(docker image inspect -f '{{.Id}}' "$ROLLBACK_TAG")
+    [[ -n "$OLD_IMAGE" ]] || { echo 'Could not resolve preserved rollback image' >&2; exit 1; }
 fi
 STATE=$(git rev-parse --git-path crm-autodeploy)
 mkdir -p -- "$STATE"
