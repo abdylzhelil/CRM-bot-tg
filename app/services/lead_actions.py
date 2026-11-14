@@ -59,18 +59,20 @@ async def vote_offer(s, lead: Lead, user: User, d: Delivery) -> str:
     Один человек не может «выключить» настоящую заявку у всех — нужен админ или несколько голосов."""
     from app.models import LabeledText, OfferVote
     from app.services import offers
+    from app.services import lead_sources
 
+    ids = [task.id for task in await lead_sources.tasks(s, lead)] or [lead.id]
     d.status = "rejected"
-    if await s.get(OfferVote, (lead.id, user.tg_id)) is None:
+    if not await s.scalar(select(OfferVote.lead_id).where(OfferVote.lead_id.in_(ids), OfferVote.user_id == user.tg_id).limit(1)):
         s.add(OfferVote(lead_id=lead.id, user_id=user.tg_id))
         await s.flush()
-    votes = await s.scalar(select(func.count()).select_from(OfferVote).where(OfferVote.lead_id == lead.id)) or 0
+    votes = await s.scalar(select(func.count(func.distinct(OfferVote.user_id))).where(OfferVote.lead_id.in_(ids))) or 0
     need = await settings.get_int(s, "offer_votes_to_learn")
     if not (user.is_admin or votes >= need):
         return f"Исполнитель — скрыта. Голосов: {votes} из {need}, потом фильтр запомнит"
     if not await s.scalar(select(LabeledText.id).where(LabeledText.kind == "offer", LabeledText.text == lead.text[:2000])):
         await offers.learn(s, lead.text, "offer")
-    pending = (await s.scalars(select(Delivery).where(Delivery.lead_id == lead.id, ~Delivery.sent))).all()
+    pending = (await s.scalars(select(Delivery).where(Delivery.lead_id.in_(ids), ~Delivery.sent))).all()
     for other in pending:
         other.status, other.sent = "rejected", True
     return "Исполнитель — похожие больше не придут"

@@ -256,6 +256,7 @@
     card.appendChild(el("div", { class: "lead-head" }, [el("b", { text: head }), el("span", { class: "muted", text: it.category })]));
     card.appendChild(el("div", { class: "muted", text: "Кто: " + who }));
     card.appendChild(el("div", { class: "muted", text: "Группа: " + it.group + (it.place ? " · " + it.place : "") }));
+    if (it.place_note) card.appendChild(el("div", { class: "muted", text: "📍 " + it.place_note }));
     card.appendChild(el("p", { class: "lead-text", text: it.text }));
     if (it.warning) card.appendChild(el("p", { class: "warn", text: it.warning }));
     if (it.gone) card.appendChild(el("p", { class: "muted", text: "🗑 Сообщение уже удалено в группе — пишите автору в личку" }));

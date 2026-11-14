@@ -8,6 +8,7 @@ from app.services import (
     ads, autosetup, catalog, crm, geo, lead_actions, levels, payments, profile_edit, quiet, referrals, scam, settings,
 )
 from app.services.distribute import is_paid
+from app.services import lead_sources
 from app.bot.handlers import leads as leads_h
 from app.bot.handlers.leads import category_name
 from app.web.keys import USER_KEY
@@ -35,6 +36,7 @@ def _plain(html_text: str) -> str:
 
 
 async def lead_item(s, d: Delivery, lead: Lead) -> dict:
+    from app.services import lead_sources
     return {
         "id": d.id,
         "status": d.status,
@@ -42,8 +44,9 @@ async def lead_item(s, d: Delivery, lead: Lead) -> dict:
         "name": lead.name,
         "username": lead.username,
         "group": lead.group_title,
-        "category": await category_name(s, lead.category_id),
+        "category": await lead_sources.category_label(s, lead),
         "place": lead.city or lead.region,
+        "place_note": geo.place_note(lead.text, lead.group_title, lead.city, lead.region),
         "link": "" if getattr(lead, "gone_at", None) else lead.link,
         "hot": quiet.is_hot(lead.text),
         "suspicious": lead.suspicious,
@@ -70,10 +73,9 @@ async def leads_list(request: web.Request) -> web.Response:
         q = q.where(Delivery.muted, Delivery.status == "new") if status == "muted" else q.where(Delivery.status == status)
         cat = _int(request.query.get("cat"), 0)
         place = request.query.get("place", "")[:64]
-        if cat:
-            q = q.where(Lead.category_id.in_(await leads_h._niche_ids(s, cat)))
-        if place in geo.KNOWN_PLACES:
-            q = q.where(leads_h._place_cond(place))
+        ids = await leads_h._niche_ids(s, cat) if cat else None
+        if cat or place in geo.KNOWN_PLACES:
+            q = q.where(lead_sources.filter_tasks(ids, place if place in geo.KNOWN_PLACES else ""))
         if before:
             q = q.where(Delivery.id < before)
         rows = (await s.execute(q.order_by(Delivery.id.desc()).limit(PAGE + 1))).all()

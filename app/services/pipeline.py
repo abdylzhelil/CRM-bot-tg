@@ -10,7 +10,7 @@ from app.models import BlacklistEntry, FilteredMessage, Group, Lead, ScoutAccoun
 from app.services import geo, offers, settings, spamtexts
 from app.services.antispam import AuthorInfo, Behavior, score_message, text_hash
 from app.services.rules import load_rules
-from app.services.text import match
+from app.services.text import match_tasks
 
 
 @dataclass
@@ -34,21 +34,21 @@ async def _niche_name(session: AsyncSession, category_id) -> str:
     return f"{parent.name} → {cat.name}" if parent else cat.name
 
 
-async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> Lead | None:
-    """Возвращает новый Lead или None (не заявка / спам / дубль)."""
+async def process_many(session: AsyncSession, msg: Incoming, force: bool = False) -> list[Lead]:
+    """Возвращает задачи нового источника или [] (не заявка / спам / дубль)."""
     author = msg.author
     if author.user_id and await session.scalar(select(ScoutAccount.id).where(ScoutAccount.tg_user_id == author.user_id)):
-        return None  # это наш разведчик (например, его рекламный пост) — не заявка
+        return []  # это наш разведчик (например, его рекламный пост) — не заявка
     entry = await session.get(BlacklistEntry, author.user_id)
     if entry and entry.status == "spam":
-        return None
+        return []
     group = await session.scalar(select(Group).where(Group.tg_id == msg.group_tg_id))
     if group is not None and group.no_leads and not force:
-        return None  # группа «без заявок» (реклама/флуд) — 🔍 Группы → 🙈 Без заявок
+        return []  # группа «без заявок» (реклама/флуд) — 🔍 Группы → 🙈 Без заявок
 
-    m = match(msg.text, await load_rules(session), context=msg.group_title)
-    if not m:
-        return None
+    tasks = match_tasks(msg.text, await load_rules(session), context=msg.group_title)
+    if not tasks:
+        return []
 
     # тот же спам с другого аккаунта: текст похож на уже отмеченный «спам» → не заявка, автор — в чёрный список
     sample_id = None if entry is not None and entry.status == "client" else await spamtexts.match(session, msg.text)
@@ -60,7 +60,7 @@ async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> 
             session.add(BlacklistEntry(user_id=author.user_id, username=author.username, status="spam",
                                        reason=f"текст как спам-образец №{sample_id}"))
         await session.commit()
-        return None
+        return []
 
     h = text_hash(msg.text)
     since = now() - timedelta(minutes=10)
@@ -94,7 +94,7 @@ async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> 
                 )
             )
         await session.commit()
-        return None
+        return []
 
     # Антидубли: то же/почти то же сообщение этого автора за последние N дней.
     days = await settings.get_int(session, "dedupe_days")
@@ -106,39 +106,45 @@ async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> 
     for old in prev:
         if difflib.SequenceMatcher(None, old.lower(), msg.text.lower()).ratio() >= 0.85:
             await session.commit()
-            return None
+            return []
 
     # исполнитель рекламирует свои услуги («Сделаю сайт за 3 дня…») — это не заказчик (force — админ вернул вручную)
     if not force and not whitelisted:
-        kind, by = await offers.verdict(session, msg.text, niche=await _niche_name(session, m.category_id))
+        kind, by = await offers.verdict(session, msg.text, niche=" / ".join(t.match.category_name for t in tasks))
         if kind != "request":
             session.add(FilteredMessage(
                 text=msg.text[:2000], author_id=author.user_id, username=author.username, first_name=author.first_name,
                 group_tg_id=msg.group_tg_id, group_title=msg.group_title, message_id=msg.message_id, link=msg.link,
                 reason=("реклама услуг" if kind == "offer" else "не заявка") + f" ({by})"))
             await session.commit()
-            return None
+            return []
 
+    at = now()
     if group:
-        group.leads_count += 1
-        group.last_lead_at = now()
-    lead = Lead(
-        author_id=author.user_id,
-        username=author.username,
-        name=f"{author.first_name} {author.last_name}".strip(),
-        group_id=group.id if group else None,
-        group_title=msg.group_title,
-        message_id=msg.message_id,
-        link=msg.link,
-        text=msg.text,
-        text_hash=h,
-        category_id=m.category_id,
-        spam_score=value,
-        suspicious=value >= await settings.get_int(session, "spam_suspicious"),
-    )
-    lead.matched = ", ".join(m.hits)[:160]
-    lead.city, lead.region = geo.detect(msg.text, msg.group_title, group.city if group else "",
-                                         group.region if group else "")
-    session.add(lead)
+        group.leads_count += 1  # источник, а не число услуг в нём
+        group.last_lead_at = at
+    leads = []
+    for task in tasks:
+        m = task.match
+        lead = Lead(
+            author_id=author.user_id, username=author.username,
+            name=f"{author.first_name} {author.last_name}".strip(),
+            group_id=group.id if group else None, group_title=msg.group_title,
+            message_id=msg.message_id, link=msg.link, text=msg.text, text_hash=h,
+            category_id=m.category_id, spam_score=value,
+            suspicious=value >= await settings.get_int(session, "spam_suspicious"),
+            created_at=at,
+        )
+        lead.matched = ", ".join(m.hits)[:160]
+        lead.city, lead.region = geo.detect(task.place_text, msg.group_title,
+                                           group.city if group else "", group.region if group else "")
+        session.add(lead)
+        leads.append(lead)
     await session.commit()
-    return lead
+    return leads
+
+
+async def process(session: AsyncSession, msg: Incoming, force: bool = False) -> Lead | None:
+    """Совместимый вход: все задачи сохраняются, возвращается основная."""
+    leads = await process_many(session, msg, force)
+    return leads[0] if leads else None

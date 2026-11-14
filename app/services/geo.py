@@ -1,5 +1,6 @@
 """Город и регион заявки: из текста, затем из названия группы, затем из карточки группы."""
 from functools import lru_cache
+import re
 
 from app.services.text import has_phrase, lemmas
 
@@ -110,16 +111,131 @@ def find(text: str) -> tuple[str, str]:
     return "", region_only
 
 
+@lru_cache(maxsize=1)
+def _request_phrases():
+    foreign = {
+        "Дубай": ("Дубай", "ОАЭ"), "ОАЭ": ("", "ОАЭ"),
+        "Алматы": ("Алматы", "Казахстан"), "Казахстан": ("", "Казахстан"),
+        "Стамбул": ("Стамбул", "Турция"), "Турция": ("", "Турция"),
+        "Тбилиси": ("Тбилиси", "Грузия"), "Грузия": ("", "Грузия"),
+        "Минск": ("Минск", "Беларусь"), "Беларусь": ("", "Беларусь"),
+    }
+    return _phrases() + [(lemmas(name), city, region) for name, (city, region) in foreign.items()]
+
+
+FOREIGN_REQUEST_REGIONS = {"ОАЭ", "Казахстан", "Турция", "Грузия", "Беларусь"}
+
+
+def _request_hits(text):
+    # Название часового пояса или ссылка — не адрес оказания услуги.
+    text = re.sub(r"https?://\S+|t\.me/\S+|@\w+", " ", text, flags=re.I)
+    text = re.sub(r"\b(?:до|после|с|в|к)?\s*\d{1,2}[:.]\d{2}\s*(?:по\s+)?(?:мск|москве|московскому\s+времени)\b", " ", text, flags=re.I)
+    text = re.sub(r"\bпо\s+времени\s+москвы\b", " ", text, flags=re.I)
+    lem = lemmas(text)
+    hits = []
+    for phrase, city, region in _request_phrases():
+        for i in range(len(lem) - len(phrase) + 1):
+            if lem[i:i + len(phrase)] != phrase:
+                continue
+            before = lem[max(0, i - 2):i]
+            if before and (before[-1] in {"не", "кроме"}
+                           or len(before) == 2 and before[0] == "не" and before[1] in {"в", "во", "из", "на"}):
+                continue
+            hits.append((i, city, region, before[-1] if before else ""))
+    return sorted(set(hits)), lem
+
+
+def request_places(text: str) -> list[tuple[str, str]]:
+    """Известные места в порядке текста, без повторов и региона уже найденного города.
+
+    Отдельно от find(): свободный поиск названий групп и порядок разведчика не меняются.
+    """
+    hits, _ = _request_hits(text)
+    city_regions = {r for _, c, r, _ in hits if c}
+    out = []
+    for _, city, region, _ in hits:
+        if not city and region in city_regions:
+            continue
+        if (city, region) not in out:
+            out.append((city, region))
+    return out
+
+
+def _sentence_destination(text):
+    hits, _ = _request_hits(text)
+    origins = [i for i, c, _, pre in hits if c and pre in {"из", "от", "с"}]
+    destinations = {(c, r) for i, c, r, pre in hits if c and pre in {"в", "во", "до"}
+                    and any(origin < i for origin in origins)}
+    return next(iter(destinations)) if len(destinations) == 1 else None
+
+
+def route_places(text):
+    out = []
+    for sentence in re.split(r"[;\n]+|(?<=[.!?])\s+", text):
+        if _sentence_destination(sentence) is not None:
+            for place in request_places(sentence):
+                if place not in out:
+                    out.append(place)
+    return out
+
+
+def route_destination(text):
+    destinations = {_sentence_destination(sentence) for sentence in re.split(r"[;\n]+|(?<=[.!?])\s+", text)} - {None}
+    return next(iter(destinations)) if len(destinations) == 1 else None
+
+
+def _request_location(text):
+    places = request_places(text)
+    if len(places) == 1:
+        return places[0]
+    if len(places) > 1:
+        # Маршрут «из A в B»: место назначения, а не первый город в словаре.
+        destination = route_destination(text)
+        if destination is not None:
+            return destination
+        regions = {r for _, r in places}
+        return "", next(iter(regions)) if len(regions) == 1 else ""
+    return None
+
+
 def detect(text: str, group_title: str = "", group_city: str = "", group_region: str = "") -> tuple[str, str]:
-    for source in (text, group_title):
-        city, region = find(source) if source else ("", "")
-        if city or region:
-            return city, region
+    location = _request_location(text)
+    if location is not None:
+        return location
+    city, region = title_place(group_title)
+    if city or region:
+        return city, region
     if group_city:
         return group_city, CITIES.get(group_city, group_city if group_city in REGIONS else group_region)
     if group_region:  # группа региона (определил разведчик при проверке группы)
         return "", group_region
     return "", ""
+
+
+def place_note(text: str, group_title: str, city: str, region: str) -> str:
+    places = request_places(text)
+    if len(places) > 1:
+        if city and _request_location(text) == (city, region):
+            return "Маршрут из текста; в поле «Где» — место назначения"
+        return "В сообщении несколько мест — уточните адрес"
+    if places:
+        if (city, region) not in places:
+            return "Сохранённое место отличается от текста — уточните адрес"
+        return "Место указано в сообщении"
+    if city or region:
+        if title_place(group_title) == (city, region):
+            return "Место определено по группе — уточните адрес"
+        return "Место не подтверждено текстом — уточните адрес"
+    return "Место не указано — уточните у заказчика"
+
+
+def matches_request(user_city, only_city, city, region, text, route=False):
+    places = request_places(text)
+    if route and len(places) > 1 and route_destination(text) is not None:
+        return any(matches(user_city, only_city, c, r) for c, r in route_places(text))
+    if not city and not region and len(places) > 1:
+        return any(matches(user_city, only_city, c, r) for c, r in places)
+    return matches(user_city, only_city, city, region)
 
 
 # «от Дагестана дальше» (владелец 25.10): порядок поиска и вступления — свой регион, соседи, Россия, заграница
@@ -219,7 +335,7 @@ def matches(user_city: str, only_city: bool, lead_city: str, lead_region: str) -
     Заявки без места приходят, если пользователь не включил «только мой город».
     """
     if not user_city:
-        return True
+        return lead_region not in FOREIGN_REQUEST_REGIONS
     if not lead_city and not lead_region:
         return not only_city
     if user_city in REGIONS and user_city not in CITIES:

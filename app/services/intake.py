@@ -4,21 +4,32 @@
 Если группу добавил пользователь — ему начисляется бонус за заявки из неё.
 """
 import logging
+import asyncio
+from weakref import WeakValueDictionary
 
 from app.bot import notify
 from app.db import Session
 from app.models import Group, Lead
 from app.services import catalog, levels, licenses
 from app.services.distribute import distribute
-from app.services.pipeline import Incoming, process
+from app.services.pipeline import Incoming, process_many
 
 log = logging.getLogger(__name__)
+_author_locks = WeakValueDictionary()
 
 
 async def handle(msg: Incoming, force: bool = False) -> Lead | None:
+    # Одновременная копия из feed/разведчика не должна создать второй набор задач.
+    lock = _author_locks.setdefault(msg.author.user_id, asyncio.Lock())
+    async with lock:
+        return await _handle(msg, force)
+
+
+async def _handle(msg: Incoming, force: bool = False) -> Lead | None:
     bonuses, new_level, finder = [], None, 0
     async with Session() as s:
-        lead = await process(s, msg, force)
+        tasks = await process_many(s, msg, force)
+        lead = tasks[0] if tasks else None
         if lead:
             await distribute(s, lead)
             bonuses = await catalog.award_bonus(s, lead.group_id)

@@ -52,7 +52,7 @@ async def _send_recent(user_id: int) -> None:
     """После оплаты — заявки по нишам за последние сутки, которые человек не получил (лимит бесплатного)."""
     try:
         from app.bot import notify
-        from app.bot.handlers.leads import category_name
+        from app.services.lead_sources import category_label
         from app.db import Session
         from app.models import Lead
         from app.services.distribute import preview
@@ -65,7 +65,7 @@ async def _send_recent(user_id: int) -> None:
             await notify._bot.send_message(user_id, f"📥 Заявки за последние сутки, которые прошли мимо из-за лимита ({len(shown)}):")
             for d in shown:
                 lead = await s.get(Lead, d.lead_id)
-                await notify.send_delivery(d, lead, user, await category_name(s, lead.category_id))
+                await notify.send_delivery(d, lead, user, await category_label(s, lead))
     except Exception:
         pass
 

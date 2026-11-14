@@ -4,12 +4,13 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from app.bot import notify
 from app.bot.common import COPY_MAX, ask, esc, kb, reply
 from app.db import Session
 from app.models import Category, Client, Delivery, Group, Lead, User, UserCategory, now
-from app.services import ai, draft, lead_actions, mute, referrals, settings
+from app.services import ai, draft, lead_actions, mute, referrals, settings, lead_sources
 from app.services.distribute import day_start, root_category
 
 router = Router()
@@ -59,7 +60,7 @@ async def send_card(msg: Message, s, d: Delivery, lead: Lead, user: User) -> Non
     if d.status == "taken":
         client_id = await s.scalar(select(Client.id).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
     await msg.answer(
-        notify.lead_text(lead, await category_name(s, lead.category_id)),
+        notify.lead_text(lead, await lead_sources.category_label(s, lead)),
         reply_markup=card_keyboard(lead, d, user, client_id), disable_web_page_preview=True,
     )
 
@@ -80,8 +81,10 @@ async def _niche_ids(s, cat: int) -> list[int]:
 
 async def _niches(s, user_id: int, status: str) -> list[tuple[int, str, int]]:
     """[(ниша верхнего уровня, название, сколько заявок)] в этом списке — для выбора ниши."""
-    q = select(Lead.category_id, func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id)
-    rows = (await s.execute(_filter(q, user_id, status).group_by(Lead.category_id))).all()
+    task = aliased(Lead)
+    q = (select(task.category_id, func.count(func.distinct(Delivery.id))).select_from(Delivery)
+         .join(Lead, Lead.id == Delivery.lead_id).join(task, lead_sources.same_source(task)))
+    rows = (await s.execute(_filter(q, user_id, status).group_by(task.category_id))).all()
     agg: dict[int, int] = {}
     for cid, n in rows:
         root = await root_category(s, cid) or 0
@@ -144,7 +147,8 @@ async def leads_list(cb: CallbackQuery, user: User) -> None:
     status = cb.data.split(":")[1]
     async with Session() as s:
         niches = await _niches(s, user.tg_id, status)
-    total = sum(n for _, _, n in niches)
+    async with Session() as s:
+        total = await s.scalar(_filter(select(func.count()).select_from(Delivery), user.tg_id, status)) or 0
     label = LABELS[status]
     if not total:
         return await reply(cb, f"{label}: пусто.", kb([[("◀️ Списки", "ll:menu")]]))
@@ -165,27 +169,27 @@ def _place_cond(place: str):
     """Заявки этого места: регион — сам регион и его города; город — только он."""
     from app.services import geo
 
-    if place in geo.REGIONS and place not in geo.CITIES:
-        return (Lead.region == place) | Lead.city.in_(geo.home_cities(place))
-    return Lead.city == place
+    return lead_sources.filter_tasks(place=place)
 
 
 async def _places(s, user_id: int, status: str, cat: int) -> list[tuple[int, str, int]]:
     """[(код места, название, сколько)]: регионы (с их городами) и города; свой регион и его города — первыми."""
     from app.services import geo
 
-    q = _filter(select(Lead.city, Lead.region, func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id),
-                user_id, status)
+    task = aliased(Lead)
+    q = _filter(select(Delivery.id, task.city, task.region).select_from(Delivery)
+                .join(Lead, Lead.id == Delivery.lead_id).join(task, lead_sources.same_source(task)), user_id, status)
     if cat:
-        q = q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
-    region_n: dict[str, int] = {}
-    city_n: dict[str, int] = {}
-    for city, region, n in (await s.execute(q.group_by(Lead.city, Lead.region))).all():
+        q = q.where(task.category_id.in_(await _niche_ids(s, cat)))
+    region_ids, city_ids = {}, {}
+    for did, city, region in (await s.execute(q.distinct())).all():
         region = region or geo.region_of(city or "")
         if region:
-            region_n[region] = region_n.get(region, 0) + n
+            region_ids.setdefault(region, set()).add(did)
         if city and city != region:
-            city_n[city] = city_n.get(city, 0) + n
+            city_ids.setdefault(city, set()).add(did)
+    region_n = {place: len(ids) for place, ids in region_ids.items()}
+    city_n = {place: len(ids) for place, ids in city_ids.items()}
     home = await settings.get(s, "home_region")
     out = []
     for name, n in list(region_n.items()) + list(city_n.items()):
@@ -207,7 +211,7 @@ async def choose_place(cb: CallbackQuery, user: User, status: str, cat: int) -> 
         places = await _places(s, user.tg_id, status, cat)
         q = _filter(select(func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id), user.tg_id, status)
         if cat:
-            q = q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
+            q = q.where(lead_sources.in_niches(await _niche_ids(s, cat)))
         total = await s.scalar(q) or 0
     if len(places) <= 1 or not total:
         return await show_one(cb, user, status, cat, 0, "c")
@@ -227,11 +231,10 @@ async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: in
     Листаем по номеру доставки, а не по позиции: после «Не моё»/«В работу» «▶️» ведёт к следующей, а не перескакивает."""
     async with Session() as s:
         q = _filter(select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id), user.tg_id, status)
-        if cat:
-            q = q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
         where = _place_name(place)
-        if where:
-            q = q.where(_place_cond(where))
+        ids = await _niche_ids(s, cat) if cat else None
+        if cat or where:
+            q = q.where(lead_sources.filter_tasks(ids, where))
         if way == "p":
             row = (await s.execute(q.where(Delivery.id > did).order_by(Delivery.id).limit(1))).first()
         else:
@@ -244,10 +247,8 @@ async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: in
                 row = (await s.execute(q.order_by(Delivery.id).limit(1))).first()
         count_q = select(func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id)
         count_q = _filter(count_q, user.tg_id, status)
-        if cat:
-            count_q = count_q.where(Lead.category_id.in_(await _niche_ids(s, cat)))
-        if where:
-            count_q = count_q.where(_place_cond(where))
+        if cat or where:
+            count_q = count_q.where(lead_sources.filter_tasks(ids, where))
         total = await s.scalar(count_q) or 0
         label = (LABELS[status] + (f" · {(await s.get(Category, cat)).name}" if cat and await s.get(Category, cat) else "")
                  + (f" · 📍 {where}" if where else ""))
@@ -258,7 +259,7 @@ async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: in
         client_id = None
         if d.status == "taken":
             client_id = await s.scalar(select(Client.id).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
-        text = f"<b>{esc(label)}</b> — {pos} из {total}\n\n" + notify.lead_text(lead, await category_name(s, lead.category_id))
+        text = f"<b>{esc(label)}</b> — {pos} из {total}\n\n" + notify.lead_text(lead, await lead_sources.category_label(s, lead))
     card = card_keyboard(lead, d, user, client_id)
     await reply(cb, text, with_nav(card, nav_rows(status, cat, d.id, pos, total, place)))
 
@@ -412,7 +413,10 @@ async def pass_to(s, m: Message, d, text):
             f"по {await settings.get_int(s, 'ref_days')} дней 💎:\n{referrals.link(bot_name, me.tg_id)}")
     if colleague.tg_id == me.tg_id:
         return await m.answer("Это вы сами 🙂")
-    if await s.scalar(select(Delivery.id).where(Delivery.lead_id == mine.lead_id, Delivery.user_id == colleague.tg_id)):
+    source = await s.get(Lead, mine.lead_id)
+    if source is None:
+        return await m.answer("Заявка не найдена.")
+    if await lead_sources.delivery(s, colleague.tg_id, source):
         return await m.answer("У коллеги уже есть эта заявка.")
     if not me.is_admin:
         today = await s.scalar(select(func.count()).select_from(Delivery).where(

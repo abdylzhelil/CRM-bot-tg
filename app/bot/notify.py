@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app import config
 from app.db import Session
 from app.models import Delivery, Group, Lead, User
-from app.services import mute, quiet
+from app.services import mute, quiet, geo, lead_sources
 
 log = logging.getLogger(__name__)
 _bot: Bot | None = None
@@ -111,6 +111,7 @@ def lead_text(lead: Lead, category: str) -> str:
     if getattr(lead, "gone_at", None):
         link = "\n🗑 Сообщение уже удалено в группе — отвечайте автору в личку"
     place = f"\nГде: {html.escape(lead.city or lead.region)}" if (lead.city or lead.region) else ""
+    place += "\n📍 " + html.escape(geo.place_note(lead.text, lead.group_title, lead.city, lead.region))
     spam = f"\nСпам-скор: {lead.spam_score}" if lead.suspicious else ""
     from app.services import scam
 
@@ -168,7 +169,7 @@ async def flush_due() -> int:
                     d.sent, d.muted = True, True
                     await s.commit()
                     continue
-                category = await category_name(s, lead.category_id)
+                category = await lead_sources.category_label(s, lead)
                 result = await send_delivery(d, lead, user, category)
                 if result == RETRY:
                     break  # Telegram просит подождать — остальное отправит следующий проход

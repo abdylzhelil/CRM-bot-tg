@@ -81,6 +81,13 @@ class Match:
     hits: list[str]
 
 
+@dataclass
+class TaskMatch:
+    match: Match
+    text: str
+    place_text: str
+
+
 def compile_phrases(words: list[str]) -> list[list[str]]:
     return [p for p in (lemmas(w) for w in words) if p]
 
@@ -177,13 +184,31 @@ def match(text: str, rules: Rules, context: str = "") -> Match | None:
     meal_lem = _without_meal_perks(lem)
 
     best: tuple[int, int, Match] | None = None
+    explicit_places = None
     for node in rules.nodes:
         if node.name.split(" → ")[0] == "Недвижимость" and not _property_request(raw, lem):
             continue
         if negative_hit(lem, raw, node.negatives):
             continue
-        if node.city and not (has_phrase(lem, node.city) or has_phrase(ctx, node.city)):
-            continue
+        if node.city:
+            if explicit_places is None:
+                from app.services import geo
+                explicit_places = geo.request_places(text)
+            cities = [city for city, _ in explicit_places if city]
+            if cities:
+                if not any(has_phrase(lemmas(city + " " + region), node.city) for city, region in explicit_places if city):
+                    continue  # явный город заказа важнее названия группы
+            elif explicit_places:
+                regions = {region for city, region in geo.CITIES.items() if has_phrase(lemmas(city), node.city)}
+                if not any(region in regions or has_phrase(lemmas(region), node.city) for _, region in explicit_places):
+                    continue
+                if not any(has_phrase(lemmas(region), node.city) for _, region in explicit_places) and not has_phrase(ctx, node.city):
+                    continue  # один регион не расширяет настроенный город категории
+            elif any(has_phrase(lemmas(city), node.city) for city in geo.CITIES):
+                if not has_phrase(ctx, node.city):
+                    continue  # название часового пояса в исходном тексте не адрес
+            elif not (has_phrase(lem, node.city) or has_phrase(ctx, node.city)):
+                continue
         word_lem = meal_lem if node.name.split(" → ")[0] == "Еда на заказ" else lem
         words = [p for p in node.words if has_phrase(word_lem, p)]
         contextual = [p for p in node.words if tuple(p) in aliases
@@ -202,3 +227,63 @@ def match(text: str, rules: Rules, context: str = "") -> Match | None:
             hits = [" ".join(p) for p in words + strong + inferred]
             best = (*key, Match(node.id, node.name, hits))
     return best[2] if best else None
+
+
+def match_tasks(text: str, rules: Rules, context: str = "") -> list[TaskMatch]:
+    """Отдельные просьбы: собственное намерение в предложении или общее перед «и».
+
+    Не превращаем все упомянутые товары/услуги в ниши. Каждая часть проходит
+    обычный matcher; намерение не переносится в следующее предложение.
+    """
+    primary = match(text, rules, context)
+    if primary is None:
+        return []
+    from app.services import geo
+
+    raw_all = tokens(text)
+    lem_all = [_lemma(t) for t in raw_all]
+    # Минусы категории относятся ко всему исходному сообщению, как до разбиения.
+    # Иначе слово из соседней задачи могло бы обойти исключение владельца.
+    rules = Rules(rules.intents, rules.negatives,
+                  [n for n in rules.nodes if not negative_hit(lem_all, raw_all, n.negatives)])
+    roots = {n.id: n.parent_id or n.id for n in rules.nodes}
+    found = {}
+    for sentence in re.split(r"[;\n]+|(?<=[.!?])\s+", text):
+        raw = tokens(sentence)
+        lem = [_lemma(t) for t in raw]
+        prefix = ""
+        for i in range(len(lem)):
+            phrase = next((p for p in rules.intents if lem[i:i + len(p)] == p), None)
+            if phrase:
+                prefix = " ".join(raw[i:i + len(phrase)])
+                break
+        for fragment in re.split(r"\s+и\s+|,\s*(?=(?:нуж|треб|ищ|надо))", sentence, flags=re.I):
+            if re.match(r"\s*(?:но\s+)?не\s+(?:нуж|треб|надо|ищ)", fragment, flags=re.I):
+                continue
+            common = geo.request_places(text)
+            fragment_context = context + (" " + common[0][0] if len(common) == 1 else "")
+            m = match(fragment, rules, fragment_context)
+            available = re.search(r"\bуже\s+(?:есть|приш|найд|наня|готов)", fragment, flags=re.I)
+            if m is None and prefix and not available:
+                m = match(prefix + " " + fragment, rules, fragment_context)
+            if m is None:
+                continue
+            place_text = fragment
+            if not geo.request_places(fragment):
+                if len(geo.request_places(sentence)) == 1:
+                    place_text = sentence
+                elif len(geo.request_places(text)) == 1:
+                    place_text = text
+            found.setdefault(roots[m.category_id], TaskMatch(m, fragment, place_text))
+    if len(found) < 2:
+        if len(found) == 1:
+            task = next(iter(found.values()))
+            if roots[primary.category_id] in found:
+                task.match = primary
+            return [task]
+        return [TaskMatch(primary, text, text)]
+    root = roots[primary.category_id]
+    first = found.pop(root, None)
+    if first is not None:
+        first.match = primary
+    return ([first] if first else []) + list(found.values())[:6 - bool(first)]

@@ -268,6 +268,7 @@ async def rating_take(cb: CallbackQuery, user: User) -> None:
     from app.bot import notify
     from app.bot.handlers.leads import category_name
     from app.models import Delivery, Lead
+    from app.services import lead_sources
 
     if user.plan != "full" and not user.is_admin:
         return await cb.answer("Брать заявки из рейтинга можно на полном тарифе 💎 (👤 Профиль → 💎 Тариф)", show_alert=True)
@@ -275,13 +276,14 @@ async def rating_take(cb: CallbackQuery, user: User) -> None:
         lead = await s.get(Lead, int(cb.data.split(":")[2]))
         if lead is None:
             return await cb.answer("Заявка уже удалена", show_alert=True)
-        d = await s.scalar(select(Delivery).where(Delivery.lead_id == lead.id, Delivery.user_id == user.tg_id))
+        d = await lead_sources.delivery(s, user.tg_id, lead)
         if d is None:
             d = Delivery(lead_id=lead.id, user_id=user.tg_id, sent=True)
             s.add(d)
         d.sent = True
         await s.commit()
-        cat = await category_name(s, lead.category_id)
+        lead = await s.get(Lead, d.lead_id)
+        cat = await lead_sources.category_label(s, lead)
     await notify.send_delivery(d, lead, user, cat)
     await cb.answer("Карточка заявки — ниже 👇")
 

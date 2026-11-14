@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Category, Delivery, Group, Lead, SpamVote, User, UserCategory, UserNegative, now
-from app.services import geo, quiet, settings
+from app.services import geo, quiet, settings, lead_sources
 from app.services.text import compile_negatives, lemmas, negative_hit, tokens
 
 log = logging.getLogger(__name__)
@@ -49,8 +49,14 @@ async def eligible(s: AsyncSession, u: User, lead: Lead, voted: set[int], lead_l
     """Подходит ли заявка пользователю (ниша проверяется отдельно)."""
     if u.tg_id in voted or u.tg_id == lead.author_id:
         return False
-    if not u.is_admin and not geo.matches(u.city, u.only_city, lead.city, lead.region):
-        return False
+    if not u.is_admin:
+        route = False
+        if len(geo.request_places(lead.text)) > 1:
+            root = await root_category(s, lead.category_id)
+            cat = await s.get(Category, root) if root else None
+            route = cat is not None and cat.name == "Перевозки и доставка"
+        if not geo.matches_request(u.city, u.only_city, lead.city, lead.region, lead.text, route):
+            return False
     negatives = (await s.scalars(select(UserNegative.word).where(UserNegative.user_id == u.tg_id))).all()
     raw = tokens(lead.text)
     return not negative_hit(lead_lemmas, raw, compile_negatives(list(negatives)))
@@ -63,6 +69,14 @@ async def niche_flow(s: AsyncSession, root: int) -> int:
         Lead.category_id.in_(ids), Lead.created_at > now() - timedelta(days=1))) or 1
 
 
+async def task_for_user(s, user, batch, voted, lead_lemmas):
+    roots = set((await s.scalars(select(UserCategory.category_id).where(UserCategory.user_id == user.tg_id))).all())
+    for task in batch:
+        if await root_category(s, task.category_id) in roots and await eligible(s, user, task, voted, lead_lemmas):
+            return task
+    return None
+
+
 async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]:
     """Кому отдать заявку: [(пользователь, когда, место в очереди)].
 
@@ -73,13 +87,14 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
     k = ceil(людей / заявок ниши за сутки). Заявок много — у каждого свои, разные; мало — одну получают несколько.
     Автор группы (из каталога) всегда получает заявки своей группы. Администраторы получают все.
     """
-    root = await root_category(s, lead.category_id)
-    if root is None:
+    batch = await lead_sources.tasks(s, lead) or [lead]
+    roots = {await root_category(s, task.category_id) for task in batch} - {None}
+    if not roots:
         return []
     users = (await s.scalars(
         select(User).join(UserCategory, UserCategory.user_id == User.tg_id).where(
-            UserCategory.category_id == root, ~User.blocked, ~User.paused, User.onboarded,
-        )
+            UserCategory.category_id.in_(roots), ~User.blocked, ~User.paused, User.onboarded,
+        ).distinct()
     )).all()
     voted = set((await s.scalars(select(SpamVote.user_id).where(SpamVote.author_id == lead.author_id))).all())
     lead_lemmas = lemmas(lead.text)
@@ -88,7 +103,7 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
     wanted_id = group.wanted_by if group is not None else 0  # нашли группу по его запросу «🔎 Найти группы для меня»
     finder, wanted, admins, paid, free = None, None, [], [], []
     for u in users:
-        if not await eligible(s, u, lead, voted, lead_lemmas):
+        if await task_for_user(s, u, batch, voted, lead_lemmas) is None:
             continue
         if u.tg_id == finder_id and not u.is_admin:
             finder = u
@@ -110,7 +125,8 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
     over = [u for u in free if load[u.tg_id] >= limit]
     free = [u for u in free if load[u.tg_id] < limit]
     pool = len(paid) + len(free)
-    flow, max_k = await niche_flow(s, root), await settings.get_int(s, "max_recipients")
+    flow = max([await niche_flow(s, root) for root in roots])
+    max_k = await settings.get_int(s, "max_recipients")
     k = min(max_k, -(-pool // flow))
     order = lambda us: sorted(us, key=lambda u: (load[u.tg_id], random.random()))  # noqa: E731
     if over:  # «лимит исчерпан — мимо прошло N»: честно — только тем, кому заявка досталась бы с 💎
@@ -132,9 +148,17 @@ async def recipients(s: AsyncSession, lead: Lead) -> list[tuple[User, str, int]]
 async def distribute(s: AsyncSession, lead: Lead) -> list[Delivery]:
     delay = timedelta(minutes=await settings.get_int(s, "free_delay_min"))
     gap = timedelta(minutes=await settings.get_int(s, "share_gap_min"))
-    rows = [Delivery(lead_id=lead.id, user_id=u.tg_id,
-                     deliver_after=now() + (delay if when == "late" else timedelta()) + gap * rank)
-            for u, when, rank in await recipients(s, lead)]
+    batch = await lead_sources.tasks(s, lead) or [lead]
+    ids = [task.id for task in batch]
+    if await s.scalar(select(Delivery.id).where(Delivery.lead_id.in_(ids)).limit(1)):
+        return []  # один проход раздачи на исходное сообщение, не по каждой услуге
+    rows = []
+    voted = set((await s.scalars(select(SpamVote.user_id).where(SpamVote.author_id == lead.author_id))).all())
+    for u, when, rank in await recipients(s, lead):
+        task = await task_for_user(s, u, batch, voted, lemmas(lead.text))
+        if task is not None:
+            rows.append(Delivery(lead_id=task.id, user_id=u.tg_id,
+                                 deliver_after=now() + (delay if when == "late" else timedelta()) + gap * rank))
     s.add_all(rows)
     await s.commit()
     return rows
@@ -181,13 +205,15 @@ async def preview(s: AsyncSession, user: User, limit: int = 5) -> list[Delivery]
     leads = (await s.scalars(
         select(Lead).where(Lead.created_at > now() - timedelta(days=1)).order_by(Lead.id.desc()).limit(300)
     )).all()
-    have = set((await s.scalars(select(Delivery.lead_id).where(Delivery.user_id == user.tg_id))).all())
+    delivered = (await s.scalars(select(Lead).join(Delivery, Delivery.lead_id == Lead.id).where(Delivery.user_id == user.tg_id))).all()
+    have = {lead_sources.key(lead) for lead in delivered}
     out: list[Delivery] = []
     for lead in leads:
-        if lead.id in have or lead.suspicious or await root_category(s, lead.category_id) not in roots:
+        if lead_sources.key(lead) in have or lead.suspicious or await root_category(s, lead.category_id) not in roots:
             continue
         if not await eligible(s, user, lead, set(), lemmas(lead.text)):
             continue
+        have.add(lead_sources.key(lead))
         out.append(Delivery(lead_id=lead.id, user_id=user.tg_id, sent=True, deliver_after=now(),
                             created_at=day_start() - timedelta(seconds=1)))
         if len(out) >= limit:

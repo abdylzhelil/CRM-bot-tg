@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Category, Delivery, Lead, Payment, User, UserCategory, now
-from app.services import geo, plans, quiet, settings
+from app.services import geo, plans, quiet, settings, lead_sources
 
 NOTE_AFTER = 3          # «лимит исчерпан» — когда мимо прошло уже столько заявок…
 NOTE_EVENING_HOUR = 20  # …или вечером, если пропущена хоть одна
@@ -55,9 +55,16 @@ async def week_stats(s: AsyncSession, user: User) -> tuple[int, int]:
     if not roots:
         return 0, 0
     ids = roots | set((await s.scalars(select(Category.id).where(Category.parent_id.in_(roots)))).all())
-    rows = (await s.execute(select(Lead.city, Lead.region).where(
+    from app.services.distribute import eligible
+    from app.services.text import lemmas
+
+    rows = (await s.scalars(select(Lead).where(
         Lead.created_at > week, Lead.category_id.in_(ids), Lead.status != "spam"))).all()
-    total = sum(geo.matches(user.city, user.only_city, c, r) for c, r in rows)
+    sources = set()
+    for lead in rows:
+        if await eligible(s, user, lead, set(), lemmas(lead.text)):
+            sources.add(lead_sources.key(lead))
+    total = len(sources)
     got = await s.scalar(select(func.count()).select_from(Delivery).where(  # и ещё в пути (задержка бесплатного)
         Delivery.user_id == user.tg_id, Delivery.created_at > week)) or 0
     return total, got
