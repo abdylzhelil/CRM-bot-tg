@@ -53,7 +53,7 @@ jobs:
           [[ "$(git rev-parse HEAD)" = "51212b8658f9d391267d9b989dc8e95abc9d1346" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
           printf 'CRM_COMMIT: '
           git rev-parse HEAD
-          timeout 120 docker compose exec -T bot python -m app.scoutreport | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
+          timeout 120 docker compose exec -T bot python -m app.scoutreport </dev/null | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
           timeout 120 docker compose exec -T -i bot python - <<'PRODUCT_PY'
           import asyncio,json
           from datetime import timedelta
