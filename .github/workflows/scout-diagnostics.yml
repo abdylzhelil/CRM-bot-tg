@@ -55,4 +55,4 @@ jobs:
           git rev-parse HEAD
           timeout 120 docker compose exec -T bot python -m app.scoutreport | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
           REMOTE
-# Read-only verification after the 2026-11-14 Dagestan queue fix.
+# Read-only check of the next discovery pass and current queue, 2026-11-14.
