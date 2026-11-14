@@ -50,8 +50,13 @@ jobs:
           set -euo pipefail
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
-          [[ "$(git rev-parse HEAD)" = "c2050029b544d894e39c92043ebd81e431c8fee8" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
+          [[ "$(git rev-parse HEAD)" = "f164fe6919c980a0b0499005cbcca998ab69d7f9" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
           python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("SERVER_STORAGE:",json.dumps({"total_gib":round(d.total/2**30,2),"free_gib":round(d.free/2**30,2)}))'
+          expected_image=$(docker image inspect -f '{{.Id}}' 'crm-bot:f164fe6919c980a0b0499005cbcca998ab69d7f9')
+          running_container=$(docker compose ps -q bot)
+          [[ -n "$running_container" ]]
+          [[ "$(docker inspect -f '{{.Image}}' "$running_container")" = "$expected_image" ]] || { echo 'CRM runtime image mismatch'; exit 1; }
+          timeout 30 docker compose exec -T bot python -c 'import json,urllib.request; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz" % config.WEBAPP_PORT,timeout=5); assert r.status==200 and json.load(r).get("ok") is True; print("CRM_HEALTH: 200 ok")' </dev/null
           printf 'CRM_COMMIT: '
           git rev-parse HEAD
           timeout 120 docker compose exec -T bot python -m app.scoutreport </dev/null | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
@@ -120,4 +125,4 @@ jobs:
 
 # Verify missing-niche repair and Dagestan onboarding release after deployment.
 
-# Restore aggregate-only diagnostics after private quality review.
+# Verify installed quality fix, image and health after deployment.
