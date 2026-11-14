@@ -101,6 +101,11 @@ jobs:
                       totals["has_niche_subscriber"]+=bool(interested)
                       totals["has_niche_and_place_fit"]+=bool(fit)
                       niche_fit[cid]+=bool(fit)
+                  subscribers=Counter()
+                  for u in audience:
+                      subscribers.update(choices.get(u.tg_id,set()))
+                  out["audience"]={"active_non_admin":len(audience),"paused_non_admin":await count(User,~User.is_admin,User.paused),"without_niches":sum(not choices.get(u.tg_id) for u in audience)}
+                  out["subscriber_niches"]=[{"niche":cats[cid].name if cid in cats else "none","subscribers":n,"leads_7d":niche_totals[cid],"fit_7d":niche_fit[cid]} for cid,n in subscribers.most_common()]
                   out["coverage_7d"]=dict(totals)
                   out["niche_coverage_7d"]=[{"niche":cats[cid].name if cid in cats else "none","leads":n,"with_niche_and_place_fit":niche_fit[cid]} for cid,n in niche_totals.most_common(10)]
                   out["moderation_feed"]={"known_groups":await count(FeedChat),"enabled_groups":await count(FeedChat,FeedChat.enabled)}
