@@ -408,6 +408,20 @@ async def user_pass(client: TelegramClient) -> int:
 
 
 async def discover(client: TelegramClient, report: bool = False) -> int:
+    """Публичный запуск: неожиданный сбой тоже виден владельцу в последнем поиске."""
+    try:
+        return await _discover(client, report)
+    except ConnectionError:
+        raise  # подробный результат и откат смещений уже сохранены
+    except asyncio.CancelledError:
+        await save_last("поиск прерван при остановке бота — повторится после запуска")
+        raise
+    except Exception as exc:
+        await save_last(f"поиск завершился ошибкой {type(exc).__name__} — см. отчёт о проблемах")
+        raise
+
+
+async def _discover(client: TelegramClient, report: bool = False) -> int:
     """Один проход: сначала запросы пользователей, потом следующая порция общих запросов. Возвращает число новых кандидатов.
 
     Карточки по одной не шлём — в конце одно сообщение «найдено N», отбор — списком в 🔍 Группы.
@@ -429,7 +443,12 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         if report:
             await notify._send("🔍 Поиск не запустился: разведчик сейчас без связи с Telegram. Повторю сам через 10 минут.")
         raise ConnectionError("разведчик без связи")
-    await user_pass(client)
+    await save_last("поиск начат — проверяю запросы пользователей и готовлю запросы своего региона")
+    try:
+        await user_pass(client)
+    except ConnectionError:
+        await save_last("поиск прервался на запросах пользователей: нет связи с Telegram — повторю через 10 мин")
+        raise
     async with Session() as s:
         from app.services import queryideas
 
@@ -443,17 +462,19 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
     auto = opt["auto"]
     found = known = small = errors = junked = 0
     lost = False
-    done = 0
+    done = completed = 0
     in_stage = 0
     stage_part = sum(_last_parts[:st]), sum(_last_parts[:st + 1])  # запросы круга текущего этапа в пачке
     for q in queries:
-        done += 1
         if _stop_requested:
             break
+        done += 1
         c = await _run_query(client, q, opt)
         if c is None:
             lost = True
             break
+        if not _stop_requested:
+            completed += 1
         if stage_part[0] < done <= stage_part[1]:
             in_stage += c["found"]
         found += c["found"]
@@ -461,13 +482,16 @@ async def discover(client: TelegramClient, report: bool = False) -> int:
         small += c["small"]
         junked += c["junked"]
         errors += c["errors"]
+        await save_last(f"поиск идёт: этап «{STAGE_LABELS[st]}», запросов {done} из {len(queries)}, "
+                        f"новых {found}, уже знали {known}, мелких или тихих {small}, реклама/флуд {junked}")
         await asyncio.sleep(random.uniform(10, 30))
-    if lost:  # недоделанные запросы вернём в очередь: следующий проход начнёт с них
-        await rewind_tiers(done - 1)
+    if lost or _stop_requested:  # не терять недоделанные запросы при обрыве ИЛИ кнопке «стоп»
+        await rewind_tiers(completed)
     await stage_after_pass(in_stage, completed=not lost and not _stop_requested)
     summary = (f"этап «{STAGE_LABELS[st]}», запросов {done - lost} из {total}, новых {found}, уже знали {known}, "
                f"мелких или тихих {small}" + (f", реклама/флуд {junked}" if junked else "")
                + (f", ошибок {errors}" if errors else "")
+               + (" — остановлен пользователем, недоделанные запросы сохранены" if _stop_requested else "")
                + (" — связь с Telegram оборвалась, продолжу через 10 мин" if lost else ""))
     await save_last(summary)
     if found:

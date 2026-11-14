@@ -335,13 +335,22 @@ async def _wait_or_user_search(manager, seconds: float) -> None:
     from app.scout.search import user_pass
     from app.services import mysearch
 
+    try:
+        was_running = await search_ready()
+    except Exception:
+        log.exception("состояние поиска перед ожиданием")
+        was_running = True  # временный сбой базы не должен завершать search_loop
     left = seconds
     while left > 0:
         await asyncio.sleep(min(TICK, left))
         left -= TICK
         try:
-            if await paused():
+            running = await search_ready()
+            if not running:
+                was_running = False
                 continue
+            if not was_running:
+                return  # возобновили поиск: не ждём оставшиеся 6–12 часов
             async with Session() as s:
                 if not await mysearch.has_new(s):
                     continue
@@ -353,6 +362,13 @@ async def _wait_or_user_search(manager, seconds: float) -> None:
                     log.warning("поиск для пользователя #%s: нет связи", acc_id)
         except Exception:
             log.exception("поиск для пользователя")
+
+
+async def search_ready() -> bool:
+    """Оба включателя нужны для поиска: пауза и рост списка групп."""
+    async with Session() as s:
+        return (await settings.get(s, "scout_paused") != "1"
+                and await settings.get(s, "scout_grow") == "1")
 
 
 ROTATION_KEY = "rotation_at"  # когда последний раз выходили из пустых групп (переживает перезапуск)

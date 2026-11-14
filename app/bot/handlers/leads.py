@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -94,7 +96,9 @@ async def _niches(s, user_id: int, status: str) -> list[tuple[int, str, int]]:
 async def menu_view(user: User) -> tuple[str, object]:
     async with Session() as s:
         cnt = await status_counts(s, user.tg_id)
-        waiting = await s.scalar(select(func.count()).select_from(Delivery).where(Delivery.user_id == user.tg_id, ~Delivery.sent))
+        waiting = await s.scalar(select(func.count()).select_from(Delivery).where(
+            Delivery.user_id == user.tg_id, ~Delivery.sent,
+            Delivery.deliver_after > now() - timedelta(days=1)))
         row = await s.get(User, user.tg_id)
         muted_n = await mute.accumulated(s, user.tg_id)
     markup = lists_keyboard(cnt)
@@ -106,6 +110,12 @@ async def menu_view(user: User) -> tuple[str, object]:
             + (f"\n⏳ Ещё придут: {waiting}" if waiting else "")
             + (f"\n🔕 Уведомления выключены {mute.until_text(row)} — заявки копятся без сообщений." if mute.is_muted(row) else "")
             + ("" if cnt.get("new") or cnt.get("postponed") else "\nНовых заявок пока нет — пришлю, как только появятся."))
+    if cnt.get("new") or cnt.get("postponed"):
+        text += ("\n\n💡 Откройте подходящую заявку → «Ответить» → напишите клиенту. "
+                 "Нажмите «✅ В работу», чтобы сохранить его в CRM и поставить напоминание. "
+                 "Бот сам клиентам не пишет.")
+    else:
+        text += "\nПроверьте свои ниши и город в 👤 Профиле. Если подходящих заявок мало — там можно изменить выбор."
     return text, markup
 
 

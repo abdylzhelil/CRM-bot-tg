@@ -154,6 +154,23 @@ async def test_preview_does_not_spend_free_limit(maker, tgbot):
         assert await distribute.delivered_today(s, 91) == 0
 
 
+async def test_lead_menu_does_not_promise_expired_notifications(maker):
+    await make_user(maker, 990)
+    async with maker() as s:
+        lead = Lead(author_id=991, text="Нужен мастер", text_hash="pending-test")
+        s.add(lead)
+        await s.flush()
+        s.add_all([
+            Delivery(user_id=990, lead_id=lead.id, sent=False, deliver_after=now()-timedelta(days=2)),
+            Delivery(user_id=990, lead_id=lead.id, sent=False, deliver_after=now()+timedelta(minutes=30)),
+        ])
+        await s.commit()
+        user = await s.get(User, 990)
+    text, _ = await leads.menu_view(user)
+    assert "Ещё придут: 1" in text
+    assert "Ещё придут: 2" not in text
+
+
 async def test_blocked_user_marked(maker, tgbot):
     await make_user(maker, 95, plan="full")
     tgbot.blocked.add(95)

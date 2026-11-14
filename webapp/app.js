@@ -124,6 +124,12 @@
         stat(me.stats.taken, "в работе", function () { state.leadsStatus = "taken"; go("leads"); }),
         stat(me.stats.clients, "клиентов")
       ]),
+      me.stats.clients === 0 && me.stats.taken === 0 ? el("div", { class: "card" }, [
+        el("h2", { text: "Как начать работу с клиентом" }),
+        el("p", { text: "Откройте подходящую заявку и нажмите «✍️ Написать». Шаблон поможет составить ответ. Бот сам клиентам не пишет." }),
+        el("p", { class: "muted", text: "«✅ В работу» сохранит клиента в CRM — там можно записать бюджет и поставить напоминание." }),
+        el("button", { class: "btn", text: "📥 Открыть заявки", onclick: function () { state.leadsStatus = "new"; go("leads"); } })
+      ]) : null,
       el("h2", { text: "Ещё" }),
       el("div", { class: "grid" }, [
         el("button", { class: "btn ghost", text: "🌐 Каталог", onclick: renderCatalog }),
@@ -178,7 +184,14 @@
       more.disabled = true;
       api("GET", q).then(function (res) {
         if (!lastId) drawFilters(filters, res);
-        if (!lastId && !res.items.length) list.appendChild(el("p", { class: "muted center-block", text: "Здесь пока пусто." }));
+        if (!lastId && !res.items.length) {
+          var filtered = Boolean(state.leadsCat || state.leadsPlace);
+          list.appendChild(el("p", { class: "muted center-block", text: filtered ? "По выбранным нише и месту заявок нет. Попробуйте сбросить фильтры." :
+            state.leadsStatus === "new" ? "Новых заявок пока нет. Проверьте ниши и город в профиле. Подходящие заявки появятся здесь после доставки." :
+            state.leadsStatus === "taken" ? "Пока нет заявок в работе. Откройте «Новые» и нажмите «✅ В работу» под подходящей заявкой." : "В этом списке пока нет заявок." }));
+          if (filtered) list.appendChild(el("button", { class: "btn ghost", text: "Сбросить фильтры", onclick: function () { state.leadsCat = 0; state.leadsPlace = ""; renderLeads(); } }));
+          else if (state.leadsStatus === "new") list.appendChild(el("button", { class: "btn ghost", text: "⚙️ Проверить мой профиль", onclick: function () { go("profile"); } }));
+        }
         res.items.forEach(function (it) { list.appendChild(leadCard(it)); lastId = it.id; });
         more.hidden = !res.has_more; more.disabled = false;
       }).catch(function (e) { toast(e.message, true); more.disabled = false; });

@@ -271,9 +271,102 @@ async def test_small_dagestan_group_survives_large_outside_queue(maker, monkeypa
         _, lines = await scoutdiag.join_diagnosis(s)
         assert not any("все — из других мест" in line for line in lines)
     client = AsyncMock()
+    client.is_connected = lambda: True
     assert await joiner.join_one(client, 91) is True
     client.get_entity.assert_awaited_once_with("derbent_test")
     async with maker() as s:
         home = await s.scalar(select(Group).where(Group.tg_id == -89999))
         assert home.status == "joined"
         assert await s.scalar(select(Group.status).where(Group.tg_id == -80000)) == "approved"
+
+
+async def test_search_wakes_after_pause_instead_of_waiting_twelve_hours(monkeypatch):
+    from app.scout import joiner
+
+    monkeypatch.setattr(joiner, "search_ready", AsyncMock(side_effect=[False, False, True]))
+    sleep = AsyncMock()
+    monkeypatch.setattr(joiner.asyncio, "sleep", sleep)
+    await joiner._wait_or_user_search(SimpleNamespace(clients={}), 12 * 3600)
+    assert sleep.await_count == 2
+
+
+async def test_search_ready_requires_both_switches(maker):
+    from app.scout import joiner
+
+    assert await joiner.search_ready()
+    async with maker() as s:
+        await settings.put(s, "scout_grow", "0")
+    assert not await joiner.search_ready()
+    async with maker() as s:
+        await settings.put(s, "scout_grow", "1")
+        await settings.put(s, "scout_paused", "1")
+    assert not await joiner.search_ready()
+
+
+async def test_ready_search_keeps_normal_interval(maker, monkeypatch):
+    from app.scout import joiner
+    from app.services import mysearch
+
+    monkeypatch.setattr(joiner, "search_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(mysearch, "has_new", AsyncMock(return_value=False))
+    sleep = AsyncMock()
+    monkeypatch.setattr(joiner.asyncio, "sleep", sleep)
+    await joiner._wait_or_user_search(SimpleNamespace(clients={}), 3 * joiner.TICK)
+    assert sleep.await_count == 3
+
+
+async def test_diagnosis_counts_each_scout_for_the_same_day(maker):
+    from datetime import date
+
+    async with maker() as s:
+        for i, count in ((71, 5), (72, 9)):
+            s.add(ScoutAccount(id=i, name=f"account{i}", api_id=1, api_hash="x", joined_today=count,
+                               joined_date=date.today().isoformat(), daily_join_limit=20))
+        await s.commit()
+        _, lines = await scoutdiag.join_diagnosis(s)
+    assert any("account71" in line and "сегодня вступил 5" in line for line in lines)
+    assert any("account72" in line and "сегодня вступил 9" in line for line in lines)
+
+
+async def test_manual_stop_preserves_unfinished_search_queries(maker, tgbot, monkeypatch):
+    monkeypatch.setattr(search.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(search.notify, "_send", AsyncMock())
+    seen = []
+
+    async def run_query(client, q, opt, owner=None):
+        seen.append(await search.last_search())
+        if len(seen) == 2:
+            search.request_stop()  # stopped in the middle of the second query
+        return {"found": 0, "known": 0, "small": 0, "junked": 0, "errors": 0}
+
+    monkeypatch.setattr(search, "_run_query", run_query)
+    assert await search.discover(FakeClient(), report=True) == 0
+    assert "поиск начат" in seen[0]
+    assert "поиск идёт" in seen[1]
+    async with maker() as s:
+        assert await settings.raw(s, search.HOME_KEY) == "1"  # retry partial query, not skip the whole batch
+    assert "остановлен пользователем" in await search.last_search()
+
+
+async def test_unexpected_search_failure_replaces_stale_progress(monkeypatch):
+    failure = AsyncMock(side_effect=RuntimeError("private details"))
+    saved = AsyncMock()
+    monkeypatch.setattr(search, "_discover", failure)
+    monkeypatch.setattr(search, "save_last", saved)
+    import pytest
+    with pytest.raises(RuntimeError):
+        await search.discover(object())
+    assert "RuntimeError" in saved.call_args.args[0]
+    assert "private details" not in saved.call_args.args[0]
+
+
+async def test_temporary_state_read_failure_does_not_kill_search_wait(maker, monkeypatch):
+    from app.scout import joiner
+    from app.services import mysearch
+
+    monkeypatch.setattr(joiner, "search_ready", AsyncMock(side_effect=[RuntimeError("temporary"), True]))
+    monkeypatch.setattr(mysearch, "has_new", AsyncMock(return_value=False))
+    sleep = AsyncMock()
+    monkeypatch.setattr(joiner.asyncio, "sleep", sleep)
+    await joiner._wait_or_user_search(SimpleNamespace(clients={}), joiner.TICK)
+    sleep.assert_awaited_once()
