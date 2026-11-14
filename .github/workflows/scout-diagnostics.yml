@@ -190,6 +190,51 @@ jobs:
               print("CRM_AD_REVENUE_AUDIT:",json.dumps(out,ensure_ascii=False))
           asyncio.run(audit())
           REVENUE_PY
+          timeout 60 docker compose exec -T -i bot python - <<'PROVIDER_AUDIT_PY'
+          import asyncio,json,re
+          from collections import Counter
+          from sqlalchemy import select
+          from app.db import Session
+          from app.models import Payment,User,AdOrder
+          from app.services import adposts,geo,payments,settings
+          async def audit():
+              out={"provider":{"checked":0,"test_payments":0,"live_payments":0,"unclassified":0,"errors":0,"statuses":{}}}
+              async with Session() as s:
+                  users=(await s.scalars(select(User))).all()
+                  admins={u.tg_id for u in users if u.is_admin}
+                  pays=(await s.scalars(select(Payment).where(Payment.days==0,Payment.charge_id.like("yk:%")).order_by(Payment.created_at.desc()).limit(20))).all()
+                  out["paid_by_owner_count"]=sum(p.user_id in admins for p in pays)
+                  out["paid_by_non_owner_count"]=sum(p.user_id not in admins for p in pays)
+                  orders=(await s.scalars(select(AdOrder))).all()
+                  out["orders_by_owner_count"]=sum(o.user_id in admins for o in orders)
+                  out["orders_by_non_owner_count"]=sum(o.user_id not in admins for o in orders)
+                  groups=await adposts.eligible_groups(s)
+                  out["inventory_examples"]=[]
+                  for g in groups:
+                      city,region=(g.city,g.region) if g.city or g.region else geo.title_place(g.title)
+                      out["inventory_examples"].append({"kind":g.kind,"city":city,"region":region,"members":g.members,"messages_per_day":round(g.msgs_per_day,1),"price_rub":adposts.group_price(g,await settings.get_int(s,"adpost_price")),"agreement_recorded":g.ad_agreed})
+              statuses=Counter()
+              for p in pays:
+                  pid=p.provider_id or p.charge_id.removeprefix("yk:")
+                  if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",pid):
+                      out["provider"]["errors"]+=1
+                      continue
+                  try:
+                      data=await asyncio.wait_for(payments._api("GET","/payments/"+pid),timeout=10)
+                  except Exception:
+                      out["provider"]["errors"]+=1
+                      continue
+                  if data.get("_http")!=200:
+                      out["provider"]["errors"]+=1
+                      continue
+                  out["provider"]["checked"]+=1
+                  statuses[str(data.get("status","unknown"))]+=1
+                  flag=data.get("test")
+                  out["provider"]["test_payments" if flag is True else "live_payments" if flag is False else "unclassified"]+=1
+              out["provider"]["statuses"]=dict(statuses)
+              print("CRM_AD_PROVIDER_READONLY:",json.dumps(out,ensure_ascii=False))
+          asyncio.run(audit())
+          PROVIDER_AUDIT_PY
           REMOTE
 # Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
 
@@ -204,3 +249,5 @@ jobs:
 # Verify task cities, route endpoints and source delivery uniqueness after release.
 
 # Read-only ad inventory, settings and revenue aggregates. No campaigns, charges or messages.
+
+# Provider audit uses GET only, no creates/captures/cancels/refunds or publication.
