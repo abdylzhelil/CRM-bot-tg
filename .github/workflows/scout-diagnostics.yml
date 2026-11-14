@@ -50,9 +50,9 @@ jobs:
           set -euo pipefail
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
-          [[ "$(git rev-parse HEAD)" = "b13d33a26484275b01c2c035daa60c1365957f86" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
+          [[ "$(git rev-parse HEAD)" = "8c5631b1551d3d9faacbfa907f476a13a2eb2600" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
           python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("SERVER_STORAGE:",json.dumps({"total_gib":round(d.total/2**30,2),"free_gib":round(d.free/2**30,2)}))'
-          expected_image=$(docker image inspect -f '{{.Id}}' 'crm-bot:b13d33a26484275b01c2c035daa60c1365957f86')
+          expected_image=$(docker image inspect -f '{{.Id}}' 'crm-bot:8c5631b1551d3d9faacbfa907f476a13a2eb2600')
           running_container=$(docker compose ps -q bot)
           [[ -n "$running_container" ]]
           [[ "$(docker inspect -f '{{.Image}}' "$running_container")" = "$expected_image" ]] || { echo 'CRM runtime image mismatch'; exit 1; }
@@ -161,127 +161,36 @@ jobs:
               print("PRODUCT_AGGREGATES:",json.dumps(out,ensure_ascii=False))
           asyncio.run(run())
           PRODUCT_PY
-          timeout 60 docker compose exec -T -i bot python - <<'REVENUE_PY'
+          timeout 60 docker compose exec -T -i bot python - <<'REVENUE_VERIFY_PY'
           import asyncio,json
-          from collections import Counter
-          from sqlalchemy import select,func
-          from app.db import Session
-          from app.models import Group,ScoutAccount,AdOrder,AdPost,Payment,User
-          from app.services import adposts,settings,geo,payments
-          async def audit():
-              out={}
-              async with Session() as s:
-                  keys=["adpost_enabled","adpost_auto_allow","adpost_auto_approve","adpost_auto_refund","adpost_price","adpost_daily_limit","adpost_group_daily","adpost_gap_min","adpost_require_erid","ad_leads","ad_days"]
-                  out["settings"]={k:await settings.get(s,k) for k in keys}
-                  out["payment_config"]={"telegram":payments.enabled(),"bank_links":payments.links_enabled()}
-                  accounts=(await s.scalars(select(ScoutAccount))).all()
-                  out["accounts"]={"total":len(accounts),"enabled":sum(a.enabled for a in accounts),"enabled_publishers":sum(a.enabled and a.can_post for a in accounts)}
-                  groups=(await s.scalars(select(Group).where(Group.status=="joined"))).all()
-                  eligible=await adposts.eligible_groups(s)
-                  prices=[adposts.group_price(g,await settings.get_int(s,"adpost_price")) for g in eligible]
-                  out["inventory"]={"joined":len(groups),"allowed":sum(g.ads_allowed for g in groups),"visible":len(eligible),"dagestan_visible":sum(g.region=="Дагестан" or g.city in geo.home_cities("Дагестан") for g in eligible),"with_photo":sum(not g.no_media for g in eligible),"zero_price":sum(p<=0 for p in prices),"min_price_rub":min(prices) if prices else None,"max_price_rub":max(prices) if prices else None,"visible_with_rules_requiring_agreement":sum(bool(adposts.rules_verdict(g.ad_rules)) and not g.ad_agreed for g in eligible)}
-                  orders=(await s.scalars(select(AdOrder))).all()
-                  posts=(await s.scalars(select(AdPost))).all()
-                  out["orders"]={"by_status":dict(Counter(o.status for o in orders)),"positive_price":sum(o.price>0 for o in orders),"paid_references":sum(bool(o.yk_id) for o in orders)}
-                  out["posts"]={"by_status":dict(Counter(p.status for p in posts)),"verified":sum(p.verified_at is not None for p in posts),"marked_checked_without_verification":sum(p.checked and p.status=="sent" and p.verified_at is None for p in posts)}
-                  pay=(await s.scalars(select(Payment).where(Payment.days==0,Payment.charge_id.like("yk:%")))).all()
-                  out["ad_money"]={"recorded_payments":len(pay),"gross_kop":sum(p.amount for p in pay),"refunded_kop":sum(p.refunded_amount for p in pay),"not_refunded_kop":sum(max(0,p.amount-p.refunded_amount) for p in pay)}
-                  out["audience"]={"registered_non_admin":await s.scalar(select(func.count()).select_from(User).where(~User.is_admin,User.onboarded,~User.blocked)) or 0}
-              print("CRM_AD_REVENUE_AUDIT:",json.dumps(out,ensure_ascii=False))
-          asyncio.run(audit())
-          REVENUE_PY
-          timeout 60 docker compose exec -T -i bot python - <<'PROVIDER_AUDIT_PY'
-          import asyncio,json,re
-          from collections import Counter
+          from datetime import timedelta
+          from types import SimpleNamespace
           from sqlalchemy import select
           from app.db import Session
-          from app.models import Payment,User,AdOrder
-          from app.services import adposts,geo,payments,settings
-          async def audit():
-              out={"provider":{"checked":0,"test_payments":0,"live_payments":0,"unclassified":0,"errors":0,"statuses":{}}}
+          from app.models import ScoutAccount,now
+          from app.services import adposts,payments,settings
+          async def verify():
               async with Session() as s:
-                  users=(await s.scalars(select(User))).all()
-                  admins={u.tg_id for u in users if u.is_admin}
-                  pays=(await s.scalars(select(Payment).where(Payment.days==0,Payment.charge_id.like("yk:%")).order_by(Payment.created_at.desc()).limit(20))).all()
-                  out["paid_by_owner_count"]=sum(p.user_id in admins for p in pays)
-                  out["paid_by_non_owner_count"]=sum(p.user_id not in admins for p in pays)
-                  orders=(await s.scalars(select(AdOrder))).all()
-                  out["orders_by_owner_count"]=sum(o.user_id in admins for o in orders)
-                  out["orders_by_non_owner_count"]=sum(o.user_id not in admins for o in orders)
-                  groups=await adposts.eligible_groups(s)
-                  out["inventory_examples"]=[]
-                  for g in groups:
-                      city,region=(g.city,g.region) if g.city or g.region else geo.title_place(g.title)
-                      out["inventory_examples"].append({"kind":g.kind,"city":city,"region":region,"members":g.members,"messages_per_day":round(g.msgs_per_day,1),"price_rub":adposts.group_price(g,await settings.get_int(s,"adpost_price")),"agreement_recorded":g.ad_agreed})
-              statuses=Counter()
-              for p in pays:
-                  pid=p.provider_id or p.charge_id.removeprefix("yk:")
-                  if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",pid):
-                      out["provider"]["errors"]+=1
-                      continue
-                  try:
-                      data=await asyncio.wait_for(payments._api("GET","/payments/"+pid),timeout=10)
-                  except Exception:
-                      out["provider"]["errors"]+=1
-                      continue
-                  if data.get("_http")!=200:
-                      out["provider"]["errors"]+=1
-                      continue
-                  out["provider"]["checked"]+=1
-                  statuses[str(data.get("status","unknown"))]+=1
-                  flag=data.get("test")
-                  out["provider"]["test_payments" if flag is True else "live_payments" if flag is False else "unclassified"]+=1
-              out["provider"]["statuses"]=dict(statuses)
-              print("CRM_AD_PROVIDER_READONLY:",json.dumps(out,ensure_ascii=False))
-          asyncio.run(audit())
-          PROVIDER_AUDIT_PY
-          timeout 90 docker compose exec -T -i bot python - <<'RECONCILE_PY'
-          import asyncio,json,re
-          from collections import Counter
-          from sqlalchemy import select,exists
-          from app.db import Session
-          from app.models import Payment,PendingLink,AdOrder,AdPost
-          from app.services import payments
-          async def run():
-              out={}
-              async with Session() as s:
-                  missing=select(PendingLink).where(PendingLink.done,~exists(select(Payment.id).where(Payment.charge_id==("yk:"+PendingLink.yk_id)))).order_by(PendingLink.created_at.desc())
-                  all_missing=(await s.scalars(missing)).all()
-                  links=all_missing[:20]
-                  out["closed_without_payment_record_total"]=len(all_missing)
-                  orders=(await s.scalars(select(AdOrder).where(AdOrder.yk_id!=""))).all()
-                  posts=(await s.scalars(select(AdPost))).all()
-                  pays=(await s.scalars(select(Payment))).all()
-                  paymap={p.charge_id:p for p in pays}
-                  values=[]
-                  legacy=0
-                  for order in orders:
-                      pay=paymap.get("yk:"+order.yk_id)
-                      if not pay: continue
-                      own=[p for p in posts if p.order_id==order.id]
-                      if order.price and own and not sum(p.price for p in own):
-                          legacy+=1
-                      value=sum(p.price for p in own if not p.settled and p.status in ("queued","failed","deleted","canceled"))
-                      left=0 if pay.refunded else max(0,pay.amount-pay.refunded_amount)//100
-                      if min(value,left)>0: values.append(min(value,left))
-                  out["recorded_unsettled_unpublished_rub"]=sum(values)
-                  out["orders_with_recorded_unsettled_value"]=len(values)
-                  out["legacy_orders_without_price_split"]=legacy
-              semaphore=asyncio.Semaphore(4)
-              async def inspect(link):
-                  pid=link.yk_id
-                  if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",pid): return "error"
-                  async with semaphore:
-                      try: data=await asyncio.wait_for(payments._api("GET","/payments/"+pid),10)
-                      except Exception: return "error"
-                  if data.get("_http")!=200: return "error"
-                  return "paid_without_record" if data.get("status")=="succeeded" and data.get("paid") is True else str(data.get("status","unknown"))
-              statuses=Counter(await asyncio.gather(*(inspect(link) for link in links)))
-              out["checked_closed_links"]=len(links)
-              out["provider_states"]=dict(statuses)
-              print("CRM_PAYMENT_RECONCILIATION_READONLY:",json.dumps(out,ensure_ascii=False))
-          asyncio.run(run())
-          RECONCILE_PY
+                  review=await adposts.money_review(s)
+                  accounts=(await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled,ScoutAccount.can_post))).all()
+                  due=await adposts.due_checks(s,account_ids={a.id for a in accounts})
+                  inventory=await adposts.eligible_groups(s)
+                  default=await settings.get_int(s,"adpost_price")
+                  prices=[adposts.group_price(g,default) for g in inventory]
+                  assert not s.dirty, "Read-only money review changed records"
+                  print("CRM_AD_REVIEW:",json.dumps({"orders_to_review":len(review),"known_unpublished_rub":sum(value for _,value in review if value is not None),"unknown_price_splits":sum(value is None for _,value in review),"due_verifications":len(due),"visible_inventory":len(inventory),"default_price_rub":default,"min_price_rub":min(prices) if prices else None,"max_price_rub":max(prices) if prices else None},ensure_ascii=False))
+              row=SimpleNamespace(yk_id="synthetic-check",done=False,created_at=now()-timedelta(hours=5))
+              class FakeSession:
+                  async def scalars(self,query): return SimpleNamespace(all=lambda:[row])
+                  async def commit(self): pass
+              async def fake_provider(method,path):
+                  assert method=="GET" and path=="/payments/synthetic-check"
+                  return {"id":"synthetic-check","status":"succeeded","paid":True,"amount":{"value":"1.00","currency":"RUB"}}
+              paid=await payments.check_links(FakeSession(),api=fake_provider)
+              assert len(paid)==1 and paid[0][0] is row and not row.done
+              print("CRM_DELAYED_CHECKOUT_SMOKE: ok (in-memory stub, no provider request or DB write)")
+          asyncio.run(verify())
+          REVENUE_VERIFY_PY
           REMOTE
 # Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
 
@@ -295,8 +204,4 @@ jobs:
 
 # Verify task cities, route endpoints and source delivery uniqueness after release.
 
-# Read-only ad inventory, settings and revenue aggregates. No campaigns, charges or messages.
-
-# Provider audit uses GET only, no creates/captures/cancels/refunds or publication.
-
-# Reconcile closed invoices and recorded refund liabilities using SELECT and provider GET only.
+# Release verification restores aggregate-only checks: no real payment-provider calls.
