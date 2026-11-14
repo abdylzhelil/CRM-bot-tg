@@ -89,10 +89,10 @@ jobs:
           from app.services import geo,offers
           logging.disable(logging.CRITICAL)
           def redact(text):
-              text=re.sub(r"https?://\\S+|t\\.me/\\S+","[link]",text,flags=re.I)
-              text=re.sub(r"(?<!\\w)@[A-Za-z0-9_]+","[contact]",text)
-              text=re.sub(r"(?<!\\w)\\+?\\d[\\d ()-]{8,}\\d(?!\\w)","[phone]",text)
-              text=re.sub(r"\\b[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b","[email]",text)
+              text=re.sub(r"https?://\S+|t\.me/\S+","[link]",text,flags=re.I)
+              text=re.sub(r"(?<!\w)@[A-Za-z0-9_]+","[contact]",text)
+              text=re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)","[phone]",text)
+              text=re.sub(r"\b[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b","[email]",text)
               return text[:900]
           async def run():
               rows=[]
