@@ -161,6 +161,35 @@ jobs:
               print("PRODUCT_AGGREGATES:",json.dumps(out,ensure_ascii=False))
           asyncio.run(run())
           PRODUCT_PY
+          timeout 60 docker compose exec -T -i bot python - <<'REVENUE_PY'
+          import asyncio,json
+          from collections import Counter
+          from sqlalchemy import select,func
+          from app.db import Session
+          from app.models import Group,ScoutAccount,AdOrder,AdPost,Payment,User
+          from app.services import adposts,settings,geo,payments
+          async def audit():
+              out={}
+              async with Session() as s:
+                  keys=["adpost_enabled","adpost_auto_allow","adpost_auto_approve","adpost_auto_refund","adpost_price","adpost_daily_limit","adpost_group_daily","adpost_gap_min","adpost_require_erid","ad_leads","ad_days"]
+                  out["settings"]={k:await settings.get(s,k) for k in keys}
+                  out["payment_config"]={"telegram":payments.enabled(),"bank_links":payments.links_enabled()}
+                  accounts=(await s.scalars(select(ScoutAccount))).all()
+                  out["accounts"]={"total":len(accounts),"enabled":sum(a.enabled for a in accounts),"enabled_publishers":sum(a.enabled and a.can_post for a in accounts)}
+                  groups=(await s.scalars(select(Group).where(Group.status=="joined"))).all()
+                  eligible=await adposts.eligible_groups(s)
+                  prices=[adposts.group_price(g,await settings.get_int(s,"adpost_price")) for g in eligible]
+                  out["inventory"]={"joined":len(groups),"allowed":sum(g.ads_allowed for g in groups),"visible":len(eligible),"dagestan_visible":sum(g.region=="Дагестан" or g.city in geo.home_cities("Дагестан") for g in eligible),"with_photo":sum(not g.no_media for g in eligible),"zero_price":sum(p<=0 for p in prices),"min_price_rub":min(prices) if prices else None,"max_price_rub":max(prices) if prices else None,"visible_with_rules_requiring_agreement":sum(bool(adposts.rules_verdict(g.ad_rules)) and not g.ad_agreed for g in eligible)}
+                  orders=(await s.scalars(select(AdOrder))).all()
+                  posts=(await s.scalars(select(AdPost))).all()
+                  out["orders"]={"by_status":dict(Counter(o.status for o in orders)),"positive_price":sum(o.price>0 for o in orders),"paid_references":sum(bool(o.yk_id) for o in orders)}
+                  out["posts"]={"by_status":dict(Counter(p.status for p in posts)),"verified":sum(p.verified_at is not None for p in posts),"marked_checked_without_verification":sum(p.checked and p.status=="sent" and p.verified_at is None for p in posts)}
+                  pay=(await s.scalars(select(Payment).where(Payment.days==0,Payment.charge_id.like("yk:%")))).all()
+                  out["ad_money"]={"recorded_payments":len(pay),"gross_kop":sum(p.amount for p in pay),"refunded_kop":sum(p.refunded_amount for p in pay),"not_refunded_kop":sum(max(0,p.amount-p.refunded_amount) for p in pay)}
+                  out["audience"]={"registered_non_admin":await s.scalar(select(func.count()).select_from(User).where(~User.is_admin,User.onboarded,~User.blocked)) or 0}
+              print("CRM_AD_REVENUE_AUDIT:",json.dumps(out,ensure_ascii=False))
+          asyncio.run(audit())
+          REVENUE_PY
           REMOTE
 # Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
 
@@ -173,3 +202,5 @@ jobs:
 # Verify service-action release against live configured rules using invented examples only.
 
 # Verify task cities, route endpoints and source delivery uniqueness after release.
+
+# Read-only ad inventory, settings and revenue aggregates. No campaigns, charges or messages.
