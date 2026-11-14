@@ -71,6 +71,10 @@ jobs:
                   out["last_24h"]={"leads":await count(Lead,Lead.created_at>day),"matched_seen":await count(SeenMessage,SeenMessage.created_at>day),"filtered":await count(FilteredMessage,FilteredMessage.created_at>day)}
                   out["last_7d"]={"leads":await count(Lead,Lead.created_at>week),"deliveries":await count(Delivery,Delivery.created_at>week),"sent":await count(Delivery,Delivery.created_at>week,Delivery.sent),"clients_added":await count(Client,Client.created_at>week),"payments":await count(Payment,Payment.created_at>week,~Payment.refunded)}
                   out["delivery_status_7d"]=dict((await s.execute(select(Delivery.status,func.count()).where(Delivery.created_at>week).group_by(Delivery.status))).all())
+                  from app import config
+                  from app.services import distribute,settings
+                  out["pending_deliveries"]={"total":await count(Delivery,~Delivery.sent),"expired":await count(Delivery,~Delivery.sent,Delivery.deliver_after<=day),"future":await count(Delivery,~Delivery.sent,Delivery.deliver_after>now()),"ready_now_up_to_50":len(await distribute.due(s))}
+                  out["payment_configuration"]={"telegram_configured":bool(config.PAYMENT_PROVIDER_TOKEN),"link_configured":bool(config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY),"prices_rub":{str(days):await settings.get_int(s,"price_"+str(days)) for days in (30,90,365)}}
                   out["moderation_feed"]={"known_groups":await count(FeedChat),"enabled_groups":await count(FeedChat,FeedChat.enabled)}
               print("PRODUCT_AGGREGATES:",json.dumps(out,ensure_ascii=False))
           asyncio.run(run())
