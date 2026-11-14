@@ -1,4 +1,4 @@
-name: CRM scout recovery
+name: CRM scout diagnostics
 on:
   push:
     branches: [crm/scout-diagnostics]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   diagnose:
-    name: Verify and resume CRM scout
+    name: Read CRM scout state
     if: github.repository == 'abdylzhelil/CRM-bot-tg'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -15,7 +15,7 @@ jobs:
       group: crm-production
       cancel-in-progress: false
     steps:
-      - name: Guarded scout recovery over CRM SSH
+      - name: Read-only scout report over CRM SSH
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
@@ -50,39 +50,9 @@ jobs:
           set -euo pipefail
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
+          [[ "$(git rev-parse HEAD)" = "51212b8658f9d391267d9b989dc8e95abc9d1346" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
           printf 'CRM_COMMIT: '
           git rev-parse HEAD
-          timeout 120 docker compose exec -T -i bot python - <<'SCOUT_PY'
-          import asyncio,json
-          from sqlalchemy import select
-          from app.db import Session
-          from app.models import Group,ScoutAccount
-          from app.scout.joiner import joinable
-          from app.scout.search import stage
-          from app.services import settings
-          async def run():
-              async with Session() as s:
-                  keys=("scout_paused","scout_grow","mode","home_region","join_check")
-                  opts={k:await settings.get(s,k) for k in keys}
-                  print("SCOUT_SETTINGS:",json.dumps(opts,ensure_ascii=False))
-                  assert opts["home_region"]=="Дагестан", "Different home region; no change"
-                  assert opts["mode"]=="auto" and opts["scout_grow"]=="1", "Automatic growth is off; no change"
-                  assert opts["join_check"]=="1", "Quality checking is off; no change"
-                  accounts=(await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled,ScoutAccount.status=="ok"))).all()
-                  assert accounts, "No healthy enabled scout; no change"
-                  queue=(await s.scalars(select(Group).where(Group.status=="approved",Group.kind=="group"))).all()
-                  ready=joinable(queue,"Дагестан",await stage(s))
-                  print("QUEUE_READY:",len(ready))
-                  assert ready, "No eligible queue; no change"
-                  before=opts["scout_paused"]
-                  if before=="1":
-                      await settings.put(s,"scout_paused","0")
-                      await s.commit()
-                      print("SCOUT_RESUMED: pause 1 -> 0; region, quality filters, rejected groups and limits unchanged")
-                  else:
-                      print("SCOUT_ALREADY_RUNNING: no settings changed")
-          asyncio.run(run())
-          SCOUT_PY
-          sleep 45
           timeout 120 docker compose exec -T bot python -m app.scoutreport | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
           REMOTE
+# Read-only verification after the 2026-11-14 Dagestan queue fix.
