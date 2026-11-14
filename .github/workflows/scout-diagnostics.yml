@@ -54,5 +54,26 @@ jobs:
           printf 'CRM_COMMIT: '
           git rev-parse HEAD
           timeout 120 docker compose exec -T bot python -m app.scoutreport | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
+          timeout 120 docker compose exec -T -i bot python - <<'PRODUCT_PY'
+          import asyncio,json
+          from datetime import timedelta
+          from sqlalchemy import select,func
+          from app.db import Session
+          from app.models import User,Lead,Delivery,Client,Payment,FilteredMessage,SeenMessage,FeedChat,now
+          async def run():
+              out={}
+              async with Session() as s:
+                  async def count(model,*conditions):
+                      return await s.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
+                  day=now()-timedelta(days=1)
+                  week=now()-timedelta(days=7)
+                  out["users"]={"total":await count(User,~User.is_admin),"registered":await count(User,~User.is_admin,User.onboarded),"blocked":await count(User,~User.is_admin,User.blocked),"registered_dagestan":await count(User,~User.is_admin,User.onboarded,User.city.in_(["Дагестан","Махачкала","Дербент","Каспийск","Хасавюрт","Избербаш","Кизляр","Кизилюрт","Буйнакск"]))}
+                  out["last_24h"]={"leads":await count(Lead,Lead.created_at>day),"matched_seen":await count(SeenMessage,SeenMessage.created_at>day),"filtered":await count(FilteredMessage,FilteredMessage.created_at>day)}
+                  out["last_7d"]={"leads":await count(Lead,Lead.created_at>week),"deliveries":await count(Delivery,Delivery.created_at>week),"sent":await count(Delivery,Delivery.created_at>week,Delivery.sent),"clients_added":await count(Client,Client.created_at>week),"payments":await count(Payment,Payment.created_at>week,~Payment.refunded)}
+                  out["delivery_status_7d"]=dict((await s.execute(select(Delivery.status,func.count()).where(Delivery.created_at>week).group_by(Delivery.status))).all())
+                  out["moderation_feed"]={"known_groups":await count(FeedChat),"enabled_groups":await count(FeedChat,FeedChat.enabled)}
+              print("PRODUCT_AGGREGATES:",json.dumps(out,ensure_ascii=False))
+          asyncio.run(run())
+          PRODUCT_PY
           REMOTE
-# Read-only check of the next discovery pass and current queue, 2026-11-14.
+# Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
