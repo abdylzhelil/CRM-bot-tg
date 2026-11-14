@@ -239,7 +239,7 @@ async def test_link_payment_flow(maker, tgbot, monkeypatch):
     assert any("Оплата получена" in t for t in tgbot.texts(70)) and any("Оплата:" in t for t in tgbot.texts(ADMIN_ID))
 
 
-async def test_link_canceled_and_expired(maker, tgbot, monkeypatch):
+async def test_link_canceled_and_provider_expired(maker, tgbot, monkeypatch):
     monkeypatch.setattr(config, "YOOKASSA_SHOP_ID", "1")
     monkeypatch.setattr(config, "YOOKASSA_SECRET_KEY", "k")
     await set_price(maker, 30, 490)
@@ -260,8 +260,12 @@ async def test_link_canceled_and_expired(maker, tgbot, monkeypatch):
         await s.commit()
     assert await ph.process_links(yk) == 0
     async with maker() as s:
-        assert all(r.done for r in (await s.scalars(select(PendingLink))).all())  # просроченные закрыты
+        assert not (await s.get(PendingLink, 2)).done  # возраст не доказывает отмену провайдером
         assert (await s.get(User, 71)).plan == "free"
+    yk.payments["yk-2"]["status"] = "canceled"
+    assert await ph.process_links(yk) == 0
+    async with maker() as s:
+        assert all(r.done for r in (await s.scalars(select(PendingLink))).all())
 
 
 async def test_link_requires_keys_and_price(maker, tgbot, monkeypatch):

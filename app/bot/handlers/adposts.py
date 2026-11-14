@@ -442,7 +442,22 @@ async def adm_list(cb: CallbackQuery) -> None:
     rows = [[(f"№{o.id} · {adposts.STATUS[o.status]} · {o.price} ₽", f"apa:o:{o.id}")] for o in orders]
     head = "📣 Заказы рекламы" + ("" if enabled else " (⚠️ сервис выключен: ⚙️ → 📣 Реклама в группах)")
     await reply(cb, head + (":" if orders else "\n\nАктивных заказов нет."),
-                kb(rows + [[("📜 Завершённые и отменённые", "apa:hist")], [("◀️ Назад", "gr:menu")]]))
+                kb(rows + [[("💸 Незакрытые размещения", "apa:money")],
+                           [("📜 Завершённые и отменённые", "apa:hist")], [("◀️ Назад", "gr:menu")]]))
+
+
+@admin_router.callback_query(F.data == "apa:money")
+async def money_review(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        items = await adposts.money_review(s)
+    known = sum(value for _, value in items if value is not None)
+    text = (f"💸 <b>Незакрытые размещения</b>\nЗаказов: {len(items)}. "
+            f"Известная невышедшая часть: {known} ₽.\n\n"
+            "Это не свободная выручка: откройте заказ и разберите размещение или возврат. "
+            "Список сам деньги не возвращает. «Сверить цену» означает, что у старого заказа не сохранены доли площадок.")
+    rows = [[(f"№{order.id} · {str(value) + ' ₽' if value is not None else 'сверить цену'}", f"apa:o:{order.id}")]
+            for order, value in items[:20]]
+    await reply(cb, text, kb(rows + [[("◀️ Заказы", "apa:list")]]))
 
 
 @admin_router.callback_query(F.data == "apa:hist")

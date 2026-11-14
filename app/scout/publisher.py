@@ -674,9 +674,7 @@ async def check_posts(manager) -> int:
     отмечаем «удалён», выключаем рекламу в этой группе и сообщаем админу и заказчику. Возвращает число удалённых."""
     gone, retried = [], []
     async with Session() as s:
-        for post in await adposts.due_checks(s):
-            post.checks += 1
-            post.checked = post.checks >= len(adposts.CHECKS)
+        for post in await adposts.due_checks(s, account_ids=set(manager.clients)):
             g = await s.get(Group, post.group_id)
             acc_id = (g.ad_account_id or g.account_id) if g else None
             client = manager.clients.get(acc_id) if acc_id else None
@@ -687,6 +685,10 @@ async def check_posts(manager) -> int:
             except Exception:
                 log.warning("реклама: не удалось проверить пост %s в %s", post.id, g.title)
                 continue
+            # Этап проверки завершён только после ответа Telegram.
+            # Отключённый аккаунт и сетевой сбой ничего не доказывают о посте.
+            post.checks += 1
+            post.checked = post.checks >= len(adposts.CHECKS)
             if msg is not None:
                 post.verified_at = now()  # пост на месте
             if msg is None:

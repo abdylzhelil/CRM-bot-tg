@@ -5,6 +5,7 @@
 """
 import re
 import uuid
+from collections import deque
 from datetime import timedelta
 from pathlib import Path
 
@@ -84,6 +85,18 @@ async def availability(s: AsyncSession) -> list[str]:
     queue = await s.scalar(select(func.count()).select_from(Group).where(Group.status == "approved")) or 0
     lines = [f"👀 Покупатель видит сейчас: <b>{len(visible)}</b> (с картинкой — {sum(not g.no_media for g in visible)})",
              f"👥 Разведчик состоит в группах: {len(joined)}, из них реклама разрешена: {len(allowed)}"]
+    from app.services import geo
+
+    home = await settings.get(s, "home_region")
+    local = sum(geo.priority(g.city, g.region, g.title, home) == 0 for g in visible)
+    lines.append(f"🏠 Свой регион ({home}): {local} доступных площадок")
+    default = await settings.get_int(s, "adpost_price")
+    prices = [group_price(g, default) for g in visible]
+    if prices:
+        lines.append(f"💰 Цены доступных площадок: {min(prices)}–{max(prices)} ₽ за пост; общая цена: {default} ₽")
+        overrides = sum(g.ad_price > 0 for g in visible)
+        if overrides:
+            lines.append(f"Своя цена задана у {overrides} площадок — она заменяет общую. Меняется в карточке группы → «💰 Цена за пост».")
     if closed:
         lines.append(f"🔒 Закрыты для сообщений сейчас: {len(closed)} (бот перепроверяет каждые 2 ч)")
     if no_pub:
@@ -97,7 +110,7 @@ async def availability(s: AsyncSession) -> list[str]:
         lines.append(f"⏸ Выключены (вами или ботом после неудачной публикации): {rest} — «✅ Разрешить везде», "
                      "потом «🔎 Проверить все разрешённые»")
     if queue:
-        lines.append(f"⏳ Ещё {queue} групп ждут вступления разведчика (до 10 в день на аккаунт) — потом их можно разрешить")
+        lines.append(f"⏳ Ещё {queue} групп ждут вступления разведчика в пределах дневного лимита — потом их можно разрешить")
     return lines
 
 
@@ -535,13 +548,25 @@ def closed_now(post: AdPost) -> bool:
     return True
 
 
-async def due_checks(s: AsyncSession, limit: int = 3) -> list[AdPost]:
+async def due_checks(s: AsyncSession, limit: int = 3, account_ids: set[int] | None = None) -> list[AdPost]:
     """Опубликованные посты, которые пора проверить (не удалили ли их правила или бот группы): через 15 мин, 3 ч и сутки."""
-    rows = (await s.scalars(select(AdPost).where(
+    q = (select(AdPost, publisher_id()).join(Group, Group.id == AdPost.group_id).where(
         AdPost.status == "sent", ~AdPost.checked, AdPost.sent_at <= now() - CHECK_AFTER,
-        AdPost.sent_at > now() - timedelta(days=3)).order_by(AdPost.sent_at))).all()
-    due = [p for p in rows if p.checks < len(CHECKS) and now() - p.sent_at >= CHECKS[p.checks]]
-    return due[:limit]
+        AdPost.message_id > 0, AdPost.sent_at > now() - timedelta(days=3)).order_by(AdPost.sent_at))
+    if account_ids is not None:
+        q = q.where(publisher_id().in_(account_ids))
+    buckets = {}
+    for post, account_id in (await s.execute(q)).all():
+        if post.checks < len(CHECKS) and now() - post.sent_at >= CHECKS[post.checks]:
+            buckets.setdefault(account_id, deque()).append(post)
+    # По очереди между аккаунтами: три старые ошибки одного не вытесняют остальные.
+    pending, out = deque(buckets.values()), []
+    while pending and len(out) < limit:
+        bucket = pending.popleft()
+        out.append(bucket.popleft())
+        if bucket:
+            pending.append(bucket)
+    return out
 
 
 async def due_posts(s: AsyncSession) -> list[AdPost]:
@@ -579,6 +604,40 @@ async def unpublished_value(s: AsyncSession, order: AdOrder) -> int:
     pay = await order_payment(s, order)
     left = (pay.amount - pay.refunded_amount) // 100 if pay is not None and not pay.refunded else 0
     return max(0, min(value, left))
+
+
+async def money_review(s: AsyncSession) -> list[tuple[AdOrder, int | None]]:
+    """Завершённые оплаченные заказы с незакрытой невышедшей частью.
+
+    Только чтение сохранённых долей, без возвратов и пересчёта старых цен.
+    None — в старом заказе нет распределения цены, нужна отдельная сверка.
+    """
+    from app.models import Payment
+
+    orders = (await s.scalars(select(AdOrder).where(
+        AdOrder.status.in_(("done", "canceled")), AdOrder.yk_id != "").order_by(AdOrder.id.desc()))).all()
+    if not orders:
+        return []
+    pays = (await s.scalars(select(Payment).where(Payment.charge_id.in_([f"yk:{o.yk_id}" for o in orders])))).all()
+    by_charge = {p.charge_id: p for p in pays}
+    posts = (await s.scalars(select(AdPost).where(AdPost.order_id.in_([o.id for o in orders])))).all()
+    out = []
+    for order in orders:
+        pay = by_charge.get(f"yk:{order.yk_id}")
+        if pay is None or pay.refunded:
+            continue
+        left = max(0, pay.amount - pay.refunded_amount) // 100
+        own = [p for p in posts if p.order_id == order.id]
+        missing = [p for p in own if p.status in NOT_PUBLISHED and not p.settled]
+        if not left or not missing:
+            continue
+        if order.price and not sum(p.price for p in own):
+            out.append((order, None))
+        else:
+            value = min(left, sum(p.price for p in missing))
+            if value:
+                out.append((order, value))
+    return out
 
 
 async def published_count(s: AsyncSession, order: AdOrder) -> tuple[int, int]:

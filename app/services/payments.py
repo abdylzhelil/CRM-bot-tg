@@ -310,14 +310,15 @@ async def create_ad_link(s: AsyncSession, order, return_url: str, api=None) -> s
     return url
 
 
-async def check_links(s: AsyncSession, api=None, max_age_h: int = 3) -> list[tuple[PendingLink, dict]]:
-    """Опросить ЮKassa по ожидающим платежам; вернуть оплаченные (ещё не обработанные)."""
+async def check_links(s: AsyncSession, api=None) -> list[tuple[PendingLink, dict]]:
+    """Опросить ЮKassa; закрывать неоплаченный счёт только по ответу провайдера.
+
+    После простоя бот обязан увидеть уже проведённую оплату, даже если счёту
+    больше трёх часов. Возраст сам по себе не подтверждает отмену платежа.
+    """
     rows = (await s.scalars(select(PendingLink).where(~PendingLink.done))).all()
     paid = []
     for row in rows:
-        if row.created_at < now() - timedelta(hours=max_age_h):
-            row.done = True
-            continue
         try:
             data = await (api or _api)("GET", f"/payments/{row.yk_id}")
         except Exception:
