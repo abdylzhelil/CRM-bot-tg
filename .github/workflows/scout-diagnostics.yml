@@ -75,6 +75,34 @@ jobs:
                   from app.services import distribute,settings
                   out["pending_deliveries"]={"total":await count(Delivery,~Delivery.sent),"expired":await count(Delivery,~Delivery.sent,Delivery.deliver_after<=day),"future":await count(Delivery,~Delivery.sent,Delivery.deliver_after>now()),"ready_now_up_to_50":len(await distribute.due(s))}
                   out["payment_configuration"]={"telegram_configured":bool(config.PAYMENT_PROVIDER_TOKEN),"link_configured":bool(config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY),"prices_rub":{str(days):await settings.get_int(s,"price_"+str(days)) for days in (30,90,365)}}
+                  from collections import Counter
+                  from app.models import Category,UserCategory
+                  from app.services import geo
+                  cats={row.id:row for row in (await s.scalars(select(Category))).all()}
+                  def root(cid):
+                      seen=set()
+                      while cid in cats and cats[cid].parent_id and cid not in seen:
+                          seen.add(cid)
+                          cid=cats[cid].parent_id
+                      return cid
+                  choices={}
+                  for uid,cid in (await s.execute(select(UserCategory.user_id,UserCategory.category_id))).all():
+                      choices.setdefault(uid,set()).add(root(cid))
+                  audience=(await s.scalars(select(User).where(~User.is_admin,User.onboarded,~User.blocked,~User.paused))).all()
+                  totals=Counter()
+                  niche_totals=Counter()
+                  niche_fit=Counter()
+                  for lead in (await s.scalars(select(Lead).where(Lead.created_at>week))).all():
+                      cid=root(lead.category_id)
+                      niche_totals[cid]+=1
+                      interested=[u for u in audience if cid in choices.get(u.tg_id,set())]
+                      fit=[u for u in interested if geo.matches(u.city,u.only_city,lead.city,lead.region)]
+                      totals["leads"]+=1
+                      totals["has_niche_subscriber"]+=bool(interested)
+                      totals["has_niche_and_place_fit"]+=bool(fit)
+                      niche_fit[cid]+=bool(fit)
+                  out["coverage_7d"]=dict(totals)
+                  out["niche_coverage_7d"]=[{"niche":cats[cid].name if cid in cats else "none","leads":n,"with_niche_and_place_fit":niche_fit[cid]} for cid,n in niche_totals.most_common(10)]
                   out["moderation_feed"]={"known_groups":await count(FeedChat),"enabled_groups":await count(FeedChat,FeedChat.enabled)}
               print("PRODUCT_AGGREGATES:",json.dumps(out,ensure_ascii=False))
           asyncio.run(run())
