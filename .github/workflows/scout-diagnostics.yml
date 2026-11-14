@@ -50,7 +50,8 @@ jobs:
           set -euo pipefail
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
-          [[ "$(git rev-parse HEAD)" = "4bb36b2bf66e4299630b753791557cd9edc0e2bb" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
+          [[ "$(git rev-parse HEAD)" = "c2050029b544d894e39c92043ebd81e431c8fee8" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
+          python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("SERVER_STORAGE:",json.dumps({"total_gib":round(d.total/2**30,2),"free_gib":round(d.free/2**30,2)}))'
           printf 'CRM_COMMIT: '
           git rev-parse HEAD
           timeout 120 docker compose exec -T bot python -m app.scoutreport </dev/null | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
@@ -116,3 +117,5 @@ jobs:
 # Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
 
 # Final verification of the installed product usability and search package.
+
+# Verify missing-niche repair and Dagestan onboarding release after deployment.
