@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches-ignore: [crm/scout-diagnostics]  # separate read-only server workflow
   pull_request:
 
 permissions:
