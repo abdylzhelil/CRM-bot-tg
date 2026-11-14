@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
-          [[ "$(git rev-parse HEAD)" = "51212b8658f9d391267d9b989dc8e95abc9d1346" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
+          [[ "$(git rev-parse HEAD)" = "4bb36b2bf66e4299630b753791557cd9edc0e2bb" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
           printf 'CRM_COMMIT: '
           git rev-parse HEAD
           timeout 120 docker compose exec -T bot python -m app.scoutreport </dev/null | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
@@ -81,3 +81,5 @@ jobs:
           PRODUCT_PY
           REMOTE
 # Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
+
+# Final verification of the installed product usability and search package.
