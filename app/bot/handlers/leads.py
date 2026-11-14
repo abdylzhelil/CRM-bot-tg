@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from app.bot import notify
 from app.bot.common import COPY_MAX, ask, esc, kb, reply
 from app.db import Session
-from app.models import Category, Client, Delivery, Group, Lead, User, now
+from app.models import Category, Client, Delivery, Group, Lead, User, UserCategory, now
 from app.services import ai, draft, lead_actions, mute, referrals, settings
 from app.services.distribute import day_start, root_category
 
@@ -101,6 +101,10 @@ async def menu_view(user: User) -> tuple[str, object]:
             Delivery.deliver_after > now() - timedelta(days=1)))
         row = await s.get(User, user.tg_id)
         muted_n = await mute.accumulated(s, user.tg_id)
+        chosen = await s.scalar(select(func.count()).select_from(UserCategory).join(
+            Category, Category.id == UserCategory.category_id).where(
+                UserCategory.user_id == user.tg_id, Category.enabled, ~Category.pending)) or 0
+    needs_niches = not user.is_admin and not chosen
     markup = lists_keyboard(cnt)
     if muted_n:
         markup.inline_keyboard.append(kb([[(f"📥 Накопилось без уведомлений · {muted_n}", "ll:muted:0")]]).inline_keyboard[0])
@@ -109,7 +113,10 @@ async def menu_view(user: User) -> tuple[str, object]:
     text = ("📥 <b>Заявки</b> — выберите список, потом нишу; заявки откроются по одной, листайте «◀️ / ▶️»."
             + (f"\n⏳ Ещё придут: {waiting}" if waiting else "")
             + (f"\n🔕 Уведомления выключены {mute.until_text(row)} — заявки копятся без сообщений." if mute.is_muted(row) else "")
-            + ("" if cnt.get("new") or cnt.get("postponed") else "\nНовых заявок пока нет — пришлю, как только появятся."))
+            + ("\n⚠️ У вас не выбраны ниши. Выберите хотя бы одну, чтобы получать новые заявки." if needs_niches else
+               "" if cnt.get("new") or cnt.get("postponed") else "\nНовых заявок пока нет — пришлю, как только появятся."))
+    if needs_niches:
+        markup.inline_keyboard.append(kb([[("🎯 Выбрать ниши", "ob:secs")]]).inline_keyboard[0])
     if cnt.get("new") or cnt.get("postponed"):
         text += ("\n\n💡 Откройте подходящую заявку → «Ответить» → напишите клиенту. "
                  "Нажмите «✅ В работу», чтобы сохранить его в CRM и поставить напоминание. "

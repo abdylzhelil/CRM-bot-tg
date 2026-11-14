@@ -171,6 +171,21 @@ async def test_lead_menu_does_not_promise_expired_notifications(maker):
     assert "Ещё придут: 2" not in text
 
 
+async def test_lead_menu_shows_action_when_registered_user_loses_niches(maker):
+    from sqlalchemy import delete
+    from app.models import UserCategory
+
+    await make_user(maker, 992)
+    async with maker() as s:
+        await s.execute(delete(UserCategory).where(UserCategory.user_id == 992))
+        await s.commit()
+        user = await s.get(User, 992)
+    text, markup = await leads.menu_view(user)
+    assert "не выбраны ниши" in text
+    assert "пришлю, как только появятся" not in text
+    assert any(b.callback_data == "ob:secs" for row in markup.inline_keyboard for b in row)
+
+
 async def test_blocked_user_marked(maker, tgbot):
     await make_user(maker, 95, plan="full")
     tgbot.blocked.add(95)

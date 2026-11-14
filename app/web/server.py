@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 
 from app import config
 from app.db import Session
-from app.models import Client, Delivery, User, now
+from app.models import Category, Client, Delivery, User, UserCategory, now
 from app.services import settings
 from app.services.distribute import is_paid
 from app.web import admin_api, api
@@ -120,6 +120,9 @@ async def me(request: web.Request) -> web.Response:
         cnt = dict((await s.execute(select(Delivery.status, func.count()).where(mine, Delivery.sent).group_by(Delivery.status))).all())
         today = await s.scalar(select(func.count()).select_from(Delivery).where(mine, Delivery.sent, Delivery.created_at > day)) or 0
         clients = await s.scalar(select(func.count()).select_from(Client).where(Client.user_id == user.tg_id)) or 0
+        chosen = await s.scalar(select(func.count()).select_from(UserCategory).join(
+            Category, Category.id == UserCategory.category_id).where(
+                UserCategory.user_id == user.tg_id, Category.enabled, ~Category.pending)) or 0
         free_limit = await settings.get_int(s, "free_daily_limit")
         free_delay = await settings.get_int(s, "free_delay_min")
         from app.services import mute
@@ -139,6 +142,7 @@ async def me(request: web.Request) -> web.Response:
         },
         "city": user.city,
         "paused": user.paused,
+        "needs_niches": not user.is_admin and not chosen,
         "mute": {"on": mute.is_muted(row), "until": mute.until_text(row) if mute.is_muted(row) else "", "accumulated": muted_n,
                  "options": [{"code": c, "label": label} for c, label in mute.OPTIONS]},
         "stats": {

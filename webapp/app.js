@@ -109,6 +109,10 @@
       el("h1", { text: "Привет, " + (me.name || "друг") + "!" }),
       el("div", {}, [roleBadge(me)]),
       el("p", { class: "muted", text: planLine(me) }),
+      me.needs_niches ? el("div", { class: "card" }, [
+        el("p", { class: "warn", text: "⚠️ У вас не выбраны ниши — новые заявки не подбираются." }),
+        el("button", { class: "btn", text: "🎯 Выбрать ниши", onclick: function () { go("profile"); } })
+      ]) : null,
       me.paused ? el("div", { class: "error", text: "⏸ Заявки на паузе. Возобновить: вкладка «Профиль»." }) : null,
       me.mute && me.mute.on ? el("div", { class: "card" }, [
         el("p", { text: "🔕 Уведомления о заявках выключены " + me.mute.until + "." + (me.mute.accumulated ? " Накопилось: " + me.mute.accumulated + "." : "") }),
@@ -321,7 +325,8 @@
         niches: Object.keys(chosen).map(Number), city: city.value, only_city: only.checked, quiet_hours: quiet.value,
         negatives: negs.value.split(/[,\n]/).map(function (x) { return x.trim(); }).filter(Boolean),
         reply_template: tpl.value, prices: prices.value, paused: paused.checked
-      }).then(function () { toast("Сохранено"); state.me.paused = paused.checked; save.disabled = false; })
+      }).then(function () { return api("GET", "/api/me"); })
+        .then(function (me) { state.me = me; toast("Сохранено"); save.disabled = false; })
         .catch(function (e) { toast(e.message, true); save.disabled = false; });
     };
 

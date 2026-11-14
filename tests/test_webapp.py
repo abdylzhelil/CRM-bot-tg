@@ -87,6 +87,31 @@ async def test_role_comes_from_database_not_client(client, maker):
     assert (await client.get("/api/me", headers=tma(12))).status == 403
 
 
+async def test_me_flags_missing_niches_without_hiding_existing_crm(client, maker):
+    from sqlalchemy import delete
+    from app.models import User, UserCategory
+
+    await make_user(maker, 993)
+    before = await (await client.get("/api/me", headers=tma(993))).json()
+    assert before["needs_niches"] is False
+    async with maker() as s:
+        await s.execute(delete(UserCategory).where(UserCategory.user_id == 993))
+        await s.commit()
+    response = await client.get("/api/me", headers=tma(993))
+    assert response.status == 200
+    body = await response.json()
+    assert body["needs_niches"] is True
+    assert "clients" in [section["id"] for section in body["sections"]]
+    async with maker() as s:
+        assert (await s.get(User, 993)).onboarded is True
+    profile = await (await client.get("/api/profile", headers=tma(993))).json()
+    picked = profile["niches"][0]["id"]
+    saved = await client.put("/api/profile", json={"niches": [picked]}, headers=tma(993))
+    assert saved.status == 200
+    after = await (await client.get("/api/me", headers=tma(993))).json()
+    assert after["needs_niches"] is False
+
+
 async def test_rate_limit_and_static(client, maker, monkeypatch):
     await make_user(maker, 13)
     monkeypatch.setattr(web_server, "RATE_LIMIT", 3)
