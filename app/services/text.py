@@ -110,6 +110,56 @@ def _property_request(raw: list[str], lem: list[str]) -> bool:
     return False
 
 
+@lru_cache(maxsize=10_000)
+def _object_modifier(word: str) -> bool:
+    tag = _morph.parse(word)[0].tag
+    return word.isdigit() or "ADJF" in tag or "NUMR" in tag
+
+
+def _service_aliases(text: str) -> set[tuple[str, ...]]:
+    """Уточнения действующих ключевых слов, не новые категории/сильные фразы.
+
+    Пара действие–предмет должна быть рядом, в одной фразе. «Снять видео
+    про обои» и «собрать документы для шкафа» не означают демонтаж/сборку.
+    """
+    furniture = {"мебель", "стол", "шкаф", "комод", "кровать", "тумба", "кухня", "стеллаж", "диван"}
+    cargo = furniture | {"холодильник", "техника", "стиральный", "дрова", "доска", "мешок", "коробка",
+                         "стройматериал", "кирпич", "цемент", "песок", "щебень", "газоблок", "арматура",
+                         "вещь", "бутылка", "книга"}
+    loading = {"разгрузить", "разгружать", "разгрузка", "выгрузить", "выгрузка", "погрузить", "погрузка", "загрузить"}
+    variants = [
+        (("сборка", "мебель"), {"собрать", "собирать", "сборка"}, furniture),
+        (("грузчик",), loading | {"занести", "перенести", "вынести",
+                        "поднять", "спустить", "перетаскать"}, cargo),
+        (("грузчик",), loading, {"машина", "фура", "грузовик"}),
+        (("демонтаж",), {"снять", "снимать", "демонтировать", "удалить", "сбить", "разобрать"},
+         {"обои", "плитка", "плинтус", "штукатурка", "линолеум", "перегородка", "стена", "доска", "навес"}),
+        (("демонтаж",), {"демонтировать", "разобрать"}, {"сарай"}),
+    ]
+    found = set()
+    for clause in re.split(r"[.!?;\n]+", text):
+        raw = tokens(clause)
+        lem = [_lemma(t) for t in raw]
+        for key, actions, objects in variants:
+            for i, word in enumerate(lem):
+                if word not in actions or _first_person_verb(raw[i]):
+                    continue
+                for j in range(i + 1, min(i + 5, len(lem))):
+                    if lem[j] in objects and all(_object_modifier(t) for t in raw[i + 1:j]):
+                        found.add(key)
+    return found
+
+
+def _without_meal_perks(lem: list[str]) -> list[str]:
+    """«С меня обед» — бонус помощнику, а не заказ обедов."""
+    out = lem.copy()
+    for phrase in (("с", "я", "обед"), ("обед", "за", "мой", "счёт")):
+        for i in range(len(lem) - len(phrase) + 1):
+            if tuple(lem[i:i + len(phrase)]) == phrase:
+                out[i:i + len(phrase)] = [""] * len(phrase)
+    return out
+
+
 def match(text: str, rules: Rules, context: str = "") -> Match | None:
     """(слово-намерение + слово категории) ИЛИ сильная фраза категории, без минус-слов.
 
@@ -123,6 +173,8 @@ def match(text: str, rules: Rules, context: str = "") -> Match | None:
         return None
     has_intent = any(has_phrase(lem, p) for p in rules.intents)
     ctx = lemmas(context) if context else []
+    aliases = _service_aliases(text) if has_intent else set()
+    meal_lem = _without_meal_perks(lem)
 
     best: tuple[int, int, Match] | None = None
     for node in rules.nodes:
@@ -132,12 +184,21 @@ def match(text: str, rules: Rules, context: str = "") -> Match | None:
             continue
         if node.city and not (has_phrase(lem, node.city) or has_phrase(ctx, node.city)):
             continue
-        words = [p for p in node.words if has_phrase(lem, p)]
+        word_lem = meal_lem if node.name.split(" → ")[0] == "Еда на заказ" else lem
+        words = [p for p in node.words if has_phrase(word_lem, p)]
+        contextual = [p for p in node.words if tuple(p) in aliases
+                      and not negative_hit(p, p, rules.negatives)
+                      and not negative_hit(p, p, node.negatives)]
+        inferred = [p for p in contextual if p not in words]
         strong = [p for p in node.strong if has_phrase(lem, p)]
-        if not strong and not (has_intent and words):
+        if not strong and not (has_intent and (words or inferred)):
             continue
-        score = len(words) + 2 * len(strong)
+        # Действие с конкретным предметом точнее одного упоминания предмета.
+        score = len(words) + len(inferred) + 2 * len(contextual) + 2 * len(strong)
         key = (score, node.depth)
         if best is None or key > best[:2]:
-            best = (*key, Match(node.id, node.name, [" ".join(p) for p in words + strong]))
+            # Сохраняем канонические слова: статистика «Не моё» должна найти
+            # исходный Keyword и дать владельцу выключить его существующей кнопкой.
+            hits = [" ".join(p) for p in words + strong + inferred]
+            best = (*key, Match(node.id, node.name, hits))
     return best[2] if best else None
