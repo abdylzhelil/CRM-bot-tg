@@ -253,3 +253,27 @@ async def test_timer_lines(maker):
         await settings.put(s, "scout_paused", "1")
     assert "на паузе" in (await joiner.timer_lines())[0]
     joiner.TIMER.update(search_at=None, searching=False, join_at=None)
+
+
+async def test_small_dagestan_group_survives_large_outside_queue(maker, monkeypatch):
+    from app.scout import folders, joiner
+
+    monkeypatch.setattr(joiner, "_quality", AsyncMock(return_value=("", {})))
+    monkeypatch.setattr(folders, "mute", AsyncMock())
+    monkeypatch.setattr(folders, "sync_folders", AsyncMock())
+    async with maker() as s:
+        s.add(ScoutAccount(id=91, name="test", api_id=1, api_hash="x", daily_join_limit=10))
+        s.add_all([Group(tg_id=-80000-i, title=f"Москва объявления {i}", city="Москва",
+                         status="approved", members=10000+i) for i in range(301)])
+        s.add(Group(tg_id=-89999, username="derbent_test", title="Объявления Дербент", city="Дербент",
+                    region="Дагестан", status="approved", members=150))
+        await s.commit()
+        _, lines = await scoutdiag.join_diagnosis(s)
+        assert not any("все — из других мест" in line for line in lines)
+    client = AsyncMock()
+    assert await joiner.join_one(client, 91) is True
+    client.get_entity.assert_awaited_once_with("derbent_test")
+    async with maker() as s:
+        home = await s.scalar(select(Group).where(Group.tg_id == -89999))
+        assert home.status == "joined"
+        assert await s.scalar(select(Group.status).where(Group.tg_id == -80000)) == "approved"

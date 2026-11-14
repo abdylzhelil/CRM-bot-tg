@@ -57,7 +57,7 @@ async def join_diagnosis(s, manager=None) -> tuple[str, list[str]]:
         bad("поиск и вступление в новые группы выключены — 🔍 Группы → 🧹 Качество групп → 🧹 Навести порядок → "
             "«▶️ Включить поиск и вступление»")
     ready = len(joiner.joinable((await s.scalars(select(Group).where(
-        Group.status == "approved", Group.kind == "group").limit(300))).all(), home, st)) if queue else 0
+        Group.status == "approved", Group.kind == "group"))).all(), home, st)) if queue else 0
     if queue and not ready:
         warn(f"в очереди {queue}, но все — из других мест (не {home}) и ждут следующего этапа поиска")
     elif queue:

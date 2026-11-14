@@ -43,7 +43,7 @@ async def build() -> str:
         out += ["", f"== Найдено за 3 дня: {len(fresh)} =="] + [f"  {n} × {r}" for r, n in why.most_common(12)]
         home = await settings.get(s, "home_region")
         queue = (await s.scalars(select(Group).where(Group.status == "approved", Group.kind == "group")
-                                 .limit(300))).all()
+                                 )).all()
         ok = {g.id for g in joiner.joinable(queue, home, st)}
         out += ["", f"== Очередь: {len(queue)}, можно вступать сейчас: {len(ok)} =="]
         for g in queue[:20]:
