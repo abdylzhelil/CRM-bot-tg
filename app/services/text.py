@@ -85,6 +85,31 @@ def compile_phrases(words: list[str]) -> list[list[str]]:
     return [p for p in (lemmas(w) for w in words) if p]
 
 
+def _property_request(raw: list[str], lem: list[str]) -> bool:
+    """«Снять обои в квартире» — не поиск жилья или помещения.
+
+    Проверяем объект намерения, а не само присутствие адреса работ.
+    Это только ограничение совпадений: настроенные слова/минусы остаются обязательными.
+    """
+    objects = {"квартира", "помещение", "офис", "дом", "комната", "жильё", "жилье",
+               "склад", "участок", "гараж", "недвижимость", "студия"}
+    actions = {"снять", "арендовать", "купить", "сдать", "продать", "искать", "нужный"}
+    for i, word in enumerate(lem):
+        if word not in objects:
+            continue
+        # «в квартире», «из помещения» описывают место услуги.
+        if i and lem[i - 1] in {"в", "на", "из", "у", "по"}:
+            continue
+        # Объект сразу рядом с намерением, допускаем определения: «ищу небольшое помещение».
+        for j in range(max(0, i - 3), min(len(lem), i + 4)):
+            if lem[j] not in actions | {"аренда", "покупка", "продажа"}:
+                continue
+            between = raw[min(i, j) + 1:max(i, j)]
+            if all("ADJF" in _morph.parse(t)[0].tag or t.isdigit() for t in between):
+                return True
+    return False
+
+
 def match(text: str, rules: Rules, context: str = "") -> Match | None:
     """(слово-намерение + слово категории) ИЛИ сильная фраза категории, без минус-слов.
 
@@ -101,6 +126,8 @@ def match(text: str, rules: Rules, context: str = "") -> Match | None:
 
     best: tuple[int, int, Match] | None = None
     for node in rules.nodes:
+        if node.name.split(" → ")[0] == "Недвижимость" and not _property_request(raw, lem):
+            continue
         if negative_hit(lem, raw, node.negatives):
             continue
         if node.city and not (has_phrase(lem, node.city) or has_phrase(ctx, node.city)):
