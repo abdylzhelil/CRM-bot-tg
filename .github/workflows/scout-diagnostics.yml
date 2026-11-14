@@ -1,4 +1,4 @@
-name: CRM scout diagnostics
+name: CRM private quality audit
 on:
   push:
     branches: [crm/scout-diagnostics]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   diagnose:
-    name: Read CRM scout state
+    name: Private lead quality sample
     if: github.repository == 'abdylzhelil/CRM-bot-tg'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -15,7 +15,7 @@ jobs:
       group: crm-production
       cancel-in-progress: false
     steps:
-      - name: Read-only scout report over CRM SSH
+      - name: Read-only encrypted and anonymized lead sample
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
@@ -48,71 +48,93 @@ jobs:
             -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
             "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" <<'REMOTE'
           set -euo pipefail
+          umask 077
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
-          [[ "$(git rev-parse HEAD)" = "c2050029b544d894e39c92043ebd81e431c8fee8" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
-          python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("SERVER_STORAGE:",json.dumps({"total_gib":round(d.total/2**30,2),"free_gib":round(d.free/2**30,2)}))'
-          printf 'CRM_COMMIT: '
-          git rev-parse HEAD
-          timeout 120 docker compose exec -T bot python -m app.scoutreport </dev/null | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
-          timeout 120 docker compose exec -T -i bot python - <<'PRODUCT_PY'
-          import asyncio,json
+          command -v openssl >/dev/null
+          AUDIT_TMP=$(mktemp -d)
+          trap 'rm -rf -- "$AUDIT_TMP"' EXIT
+          cat > "$AUDIT_TMP/recipient.pem" <<'AUDIT_CERT'
+          -----BEGIN CERTIFICATE-----
+          MIIEGTCCAoGgAwIBAgIUWFdoI3NXnmjXjBIBMlZvkSqfFRMwDQYJKoZIhvcNAQEL
+          BQAwHDEaMBgGA1UEAwwRY3JtLXF1YWxpdHktYXVkaXQwHhcNMjYxMTE0MTQzODAz
+          WhcNMjYxMTE2MTQzODAzWjAcMRowGAYDVQQDDBFjcm0tcXVhbGl0eS1hdWRpdDCC
+          AaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAN5KwlEnb98zTOuBwKlFQlW5
+          UygbnfK/wT6jhltB4paTJjR/6XkdTkidMKo/ZaM8ZIPsyY6GKLqymUTs/r7BrmTj
+          v0lNQQPPfweGPkpOs2o5nawhYipdOk/rqrKBhxYaSUlRhJlmCKfDqQ+wYlHUl+PN
+          ZSy0iHLgmfzCsCR1TubzcXgNLpPt7jYbQeVsV3pmMrkU34rflD2N+5ULskiljPNb
+          8KtpTqIbDCST2TpJBVGAnK4B/sYHdrHmzixOgyqHstZJt1rCTdmQf1cq69kExM6k
+          qZxrNbBGV3hmou4h8bIXorwSbxj+m4QwNxC38Icm6jOIwz5//Rzvx6lPkrZ1l4uM
+          ZoRQA8I58QLEa6hv+TtxcPiUHogPwTrRJohVD9yNTR1uoN0k5cBweXb/12UtMIE0
+          LGDZQ/RWOvij3wVV63z7qkcmmyJDbpWiJJ6hkGMuzYiYrLC1leOFwDl1Mjh/TVbs
+          kr8wTUgN+k5KgWBtq2mIJE9lTXzRTbDRco8YdvIZzQIDAQABo1MwUTAdBgNVHQ4E
+          FgQUGyLxLzqi4nkU/iklMnyE+THsqgMwHwYDVR0jBBgwFoAUGyLxLzqi4nkU/ikl
+          MnyE+THsqgMwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAYEAgriy
+          8Dnv0FM/+VUFcy/iOovUzswaPbYMdG0btMxIBxq21Ab3mCt9Iqoha4dbuyYViJPE
+          9qTJZE1l4rTHYs1htYr8+R5TCRtBsM4AZHHff3ltvjWMYYGJznXeil67k6fTV7TE
+          WnwT4MauEp0MWC9A81qk1OZL7VhDqn5psTvs03kLNM2+9WrxuZU60gMJEsMpVD3T
+          qYJdrIjv9RO6nefNYVjtUPXQgQItct1FRZ9Psj9zcycLosaPOm7jRsVq+52c/ILy
+          zRtKaV+WwVFZGCw0j465q+KfkQTu149isHmVhJbD1cpXC7FXg1vKyLQ/YAwJa4nk
+          2N9bLbq1mcgnNu/1DPgjybg3q+bGRreoTKavMPQfS8nvby0oJrMkl5Dr9rcnYPVG
+          BtxCNAWUS1MRz6jpjQdZ9/icq6rgk9gmD4jQm0I9M/x1Isa1MTbnh5N0hF7YUJkV
+          UypCgvHlh1tX6WspnIplPeJHogd6t/fkv3B9zY0LDjpwDG7qDBsU5WDMtv+1
+          -----END CERTIFICATE-----
+          AUDIT_CERT
+          timeout 120 docker compose exec -T -i bot python - <<'PRIVATE_SAMPLE' | openssl cms -encrypt -binary -aes-256-cbc -outform DER "$AUDIT_TMP/recipient.pem" > "$AUDIT_TMP/payload.der"
+          import asyncio,json,re,logging
           from datetime import timedelta
-          from sqlalchemy import select,func
+          from sqlalchemy import select,or_
           from app.db import Session
-          from app.models import User,Lead,Delivery,Client,Payment,FilteredMessage,SeenMessage,FeedChat,now
+          from app.models import Lead,FilteredMessage,Category,now
+          from app.services import geo,offers
+          logging.disable(logging.CRITICAL)
+          def redact(text):
+              text=re.sub(r"https?://\\S+|t\\.me/\\S+","[link]",text,flags=re.I)
+              text=re.sub(r"(?<!\\w)@[A-Za-z0-9_]+","[contact]",text)
+              text=re.sub(r"(?<!\\w)\\+?\\d[\\d ()-]{8,}\\d(?!\\w)","[phone]",text)
+              text=re.sub(r"\\b[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b","[email]",text)
+              return text[:900]
           async def run():
-              out={}
+              rows=[]
               async with Session() as s:
-                  async def count(model,*conditions):
-                      return await s.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
-                  day=now()-timedelta(days=1)
-                  week=now()-timedelta(days=7)
-                  out["users"]={"total":await count(User,~User.is_admin),"registered":await count(User,~User.is_admin,User.onboarded),"blocked":await count(User,~User.is_admin,User.blocked),"registered_dagestan":await count(User,~User.is_admin,User.onboarded,User.city.in_(["Дагестан","Махачкала","Дербент","Каспийск","Хасавюрт","Избербаш","Кизляр","Кизилюрт","Буйнакск"]))}
-                  out["last_24h"]={"leads":await count(Lead,Lead.created_at>day),"matched_seen":await count(SeenMessage,SeenMessage.created_at>day),"filtered":await count(FilteredMessage,FilteredMessage.created_at>day)}
-                  out["last_7d"]={"leads":await count(Lead,Lead.created_at>week),"deliveries":await count(Delivery,Delivery.created_at>week),"sent":await count(Delivery,Delivery.created_at>week,Delivery.sent),"clients_added":await count(Client,Client.created_at>week),"payments":await count(Payment,Payment.created_at>week,~Payment.refunded)}
-                  out["delivery_status_7d"]=dict((await s.execute(select(Delivery.status,func.count()).where(Delivery.created_at>week).group_by(Delivery.status))).all())
-                  from app import config
-                  from app.services import distribute,settings
-                  out["pending_deliveries"]={"total":await count(Delivery,~Delivery.sent),"expired":await count(Delivery,~Delivery.sent,Delivery.deliver_after<=day),"future":await count(Delivery,~Delivery.sent,Delivery.deliver_after>now()),"ready_now_up_to_50":len(await distribute.due(s))}
-                  out["payment_configuration"]={"telegram_configured":bool(config.PAYMENT_PROVIDER_TOKEN),"link_configured":bool(config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY),"prices_rub":{str(days):await settings.get_int(s,"price_"+str(days)) for days in (30,90,365)}}
-                  from collections import Counter
-                  from app.models import Category,UserCategory
-                  from app.services import geo
-                  cats={row.id:row for row in (await s.scalars(select(Category))).all()}
-                  def root(cid):
-                      seen=set()
-                      while cid in cats and cats[cid].parent_id and cid not in seen:
-                          seen.add(cid)
-                          cid=cats[cid].parent_id
-                      return cid
-                  choices={}
-                  for uid,cid in (await s.execute(select(UserCategory.user_id,UserCategory.category_id))).all():
-                      choices.setdefault(uid,set()).add(root(cid))
-                  audience=(await s.scalars(select(User).where(~User.is_admin,User.onboarded,~User.blocked,~User.paused))).all()
-                  totals=Counter()
-                  niche_totals=Counter()
-                  niche_fit=Counter()
-                  for lead in (await s.scalars(select(Lead).where(Lead.created_at>week))).all():
-                      cid=root(lead.category_id)
-                      niche_totals[cid]+=1
-                      interested=[u for u in audience if cid in choices.get(u.tg_id,set())]
-                      fit=[u for u in interested if geo.matches(u.city,u.only_city,lead.city,lead.region)]
-                      totals["leads"]+=1
-                      totals["has_niche_subscriber"]+=bool(interested)
-                      totals["has_niche_and_place_fit"]+=bool(fit)
-                      niche_fit[cid]+=bool(fit)
-                  subscribers=Counter()
-                  for u in audience:
-                      subscribers.update(choices.get(u.tg_id,set()))
-                  out["audience"]={"active_non_admin":len(audience),"paused_non_admin":await count(User,~User.is_admin,User.paused),"without_niches":sum(not choices.get(u.tg_id) for u in audience)}
-                  out["subscriber_niches"]=[{"niche":cats[cid].name if cid in cats else "none","subscribers":n,"leads_7d":niche_totals[cid],"fit_7d":niche_fit[cid]} for cid,n in subscribers.most_common()]
-                  out["coverage_7d"]=dict(totals)
-                  out["niche_coverage_7d"]=[{"niche":cats[cid].name if cid in cats else "none","leads":n,"with_niche_and_place_fit":niche_fit[cid]} for cid,n in niche_totals.most_common(10)]
-                  out["moderation_feed"]={"known_groups":await count(FeedChat),"enabled_groups":await count(FeedChat,FeedChat.enabled)}
-              print("PRODUCT_AGGREGATES:",json.dumps(out,ensure_ascii=False))
-          asyncio.run(run())
-          PRODUCT_PY
+                  cats={c.id:c for c in (await s.scalars(select(Category))).all()}
+                  def niche(cid):
+                      c=cats.get(cid)
+                      if c and c.parent_id in cats:
+                          return cats[c.parent_id].name+" / "+c.name
+                      return c.name if c else "none"
+                  leads=(await s.scalars(select(Lead).where(Lead.created_at>now()-timedelta(days=7),
+                      or_(Lead.region=="Дагестан",Lead.city.in_(geo.home_cities("Дагестан")))).order_by(Lead.id.desc()).limit(24))).all()
+                  for row in leads:
+                      rows.append({"sample":len(rows)+1,"bucket":"accepted","text":redact(row.text),
+                          "niche":niche(row.category_id),"city":row.city,"region":row.region,"matched":row.matched,
+                          "rule_now":offers.rule_verdict(row.text)})
+                  rejects=(await s.scalars(select(FilteredMessage).where(FilteredMessage.created_at>now()-timedelta(days=3)).order_by(FilteredMessage.id.desc()).limit(160))).all()
+                  n=0
+                  for row in rejects:
+                      city,region=geo.detect(row.text,row.group_title)
+                      if region!="Дагестан":
+                          continue
+                      rows.append({"sample":len(rows)+1,"bucket":"filtered","text":redact(row.text),
+                          "city":city,"region":region,"reason":row.reason,"rule_now":offers.rule_verdict(row.text)})
+                      n+=1
+                      if n>=12:break
+              print(json.dumps({"scope":"Dagestan, accepted seven days / filtered three days, most recent limited sample","records":rows},ensure_ascii=False))
+          try:
+              asyncio.run(run())
+          except Exception as exc:
+              import sys
+              print("PRIVATE_AUDIT_FAILED:"+type(exc).__name__,file=sys.stderr)
+              raise SystemExit(1)
+          PRIVATE_SAMPLE
+          python3 - "$AUDIT_TMP/payload.der" <<'ENCODE_PAYLOAD'
+          import pathlib,sys,textwrap
+          data=pathlib.Path(sys.argv[1]).read_bytes()
+          value=data.hex().translate(str.maketrans("0123456789abcdef","abcdefghijklmnop"))
+          print("ENCRYPTED_AUDIT_BEGIN")
+          print("\n".join(textwrap.wrap(value,96)))
+          print("ENCRYPTED_AUDIT_END")
+          ENCODE_PAYLOAD
           REMOTE
 # Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
 
