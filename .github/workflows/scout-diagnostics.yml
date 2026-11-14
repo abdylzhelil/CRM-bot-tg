@@ -191,6 +191,27 @@ jobs:
               print("CRM_DELAYED_CHECKOUT_SMOKE: ok (in-memory stub, no provider request or DB write)")
           asyncio.run(verify())
           REVENUE_VERIFY_PY
+          timeout 60 docker compose exec -T -i bot python - <<'LOCAL_AD_PY'
+          import asyncio,json
+          from sqlalchemy import select
+          from app.db import Session
+          from app.models import Group
+          from app.services import geo,adposts
+          async def run():
+              async with Session() as s:
+                  joined=(await s.scalars(select(Group).where(Group.status=="joined"))).all()
+                  local=[g for g in joined if geo.priority(g.city,g.region,g.title,"Дагестан")==0]
+                  public=[g for g in local if g.username]
+                  public.sort(key=lambda g:(not g.ad_agreed,bool(adposts.rules_verdict(g.ad_rules)),g.ad_closed_at is not None,g.captcha_since is not None,-g.leads_count,-g.msgs_per_day,-g.members))
+                  out={"joined":len(joined),"dagestan_identified":len(local),"dagestan_public":len(public),"dagestan_ad_allowed":sum(g.ads_allowed for g in local),"candidates":[]}
+                  for g in public[:12]:
+                      out["candidates"].append({"title":g.title,"url":"https://t.me/"+g.username,"city":g.city,"region":g.region,"place_basis":"saved" if g.city or g.region else "title","members":g.members,"messages_per_day":round(g.msgs_per_day,1),"leads_observed":g.leads_count,"kind":g.kind,"ads_allowed":g.ads_allowed,"agreement_recorded":g.ad_agreed,"rules_present":bool(g.ad_rules),"rules_require_agreement":bool(adposts.rules_verdict(g.ad_rules)),"publication_closed":g.ad_closed_at is not None,"captcha_pending":g.captcha_since is not None})
+                  review=await adposts.money_review(s)
+                  out["money_review"]={"orders":len(review),"known_rub":sum(value for _,value in review if value is not None),"unknown_price_splits":sum(value is None for _,value in review)}
+                  assert not s.dirty
+              print("CRM_LOCAL_AD_CANDIDATES:",json.dumps(out,ensure_ascii=False))
+          asyncio.run(run())
+          LOCAL_AD_PY
           REMOTE
 # Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
 
@@ -205,3 +226,5 @@ jobs:
 # Verify task cities, route endpoints and source delivery uniqueness after release.
 
 # Release verification restores aggregate-only checks: no real payment-provider calls.
+
+# Read-only shortlist of existing public Dagestan groups; no contacts, messages or campaign changes.
