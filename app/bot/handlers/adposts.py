@@ -439,10 +439,11 @@ async def adm_list(cb: CallbackQuery) -> None:
         orders = (await s.scalars(select(AdOrder).where(AdOrder.status.in_(adposts.OPEN_STATUSES))
                                   .order_by(AdOrder.id.desc()).limit(20))).all()
         enabled = await adposts.enabled(s)
+        review_count = len(await adposts.money_review(s))
     rows = [[(f"№{o.id} · {adposts.STATUS[o.status]} · {o.price} ₽", f"apa:o:{o.id}")] for o in orders]
     head = "📣 Заказы рекламы" + ("" if enabled else " (⚠️ сервис выключен: ⚙️ → 📣 Реклама в группах)")
     await reply(cb, head + (":" if orders else "\n\nАктивных заказов нет."),
-                kb(rows + [[("💸 Незакрытые размещения", "apa:money")],
+                kb(rows + [[(f"💸 Незакрытые размещения · {review_count}", "apa:money")],
                            [("📜 Завершённые и отменённые", "apa:hist")], [("◀️ Назад", "gr:menu")]]))
 
 
