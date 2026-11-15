@@ -50,160 +50,59 @@ jobs:
           set -euo pipefail
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
-          [[ "$(git rev-parse HEAD)" = "8c5631b1551d3d9faacbfa907f476a13a2eb2600" ]] || { echo 'Expected scout fix is not installed'; exit 1; }
-          python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("SERVER_STORAGE:",json.dumps({"total_gib":round(d.total/2**30,2),"free_gib":round(d.free/2**30,2)}))'
-          expected_image=$(docker image inspect -f '{{.Id}}' 'crm-bot:8c5631b1551d3d9faacbfa907f476a13a2eb2600')
-          running_container=$(docker compose ps -q bot)
-          [[ -n "$running_container" ]]
-          [[ "$(docker inspect -f '{{.Image}}' "$running_container")" = "$expected_image" ]] || { echo 'CRM runtime image mismatch'; exit 1; }
-          timeout 30 docker compose exec -T bot python -c 'import json,urllib.request; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz" % config.WEBAPP_PORT,timeout=5); assert r.status==200 and json.load(r).get("ok") is True; print("CRM_HEALTH: 200 ok")' </dev/null
-          timeout 60 docker compose exec -T -i bot python - <<'MATCH_PY'
-          import asyncio,json
-          from datetime import timedelta
-          from sqlalchemy import select,func
-          from app.db import Session
-          from app.models import Lead,Delivery,now
-          from app.services.rules import load_rules
-          from app.services.text import match_tasks
-          from app.services import geo
-          async def verify():
-              async with Session() as s:
-                  rules=await load_rules(s)
-                  duplicate_groups=(select(Delivery.user_id,Lead.author_id,Lead.text_hash,Lead.created_at)
-                      .join(Lead,Lead.id==Delivery.lead_id).where(Lead.created_at>now()-timedelta(hours=1))
-                      .group_by(Delivery.user_id,Lead.author_id,Lead.text_hash,Lead.created_at).having(func.count()>1).subquery())
-                  duplicates=await s.scalar(select(func.count()).select_from(duplicate_groups)) or 0
-                  print("CRM_RECENT_SOURCE_DUPLICATES:",duplicates)
-                  assert duplicates==0, "Repeated deliveries for a source"
-              examples=[
-                  ("two_services","Нужно собрать шкаф и перенести диван в Махачкале",{"Мебель и интерьер","Перевозки и доставка"}),
-                  ("two_cities","В Махачкале нужен сантехник. В Каспийске нужны грузчики",{"Ремонт и строительство","Перевозки и доставка"}),
-                  ("already_found","Нужен сантехник. Грузчики уже пришли",{"Ремонт и строительство"}),
-                  ("meal_perk","Ищу помощника, с меня обед",set()),
-              ]
-              for label,text,expected in examples:
-                  tasks=match_tasks(text,rules,context="Махачкала")
-                  actual={task.match.category_name.split(" → ")[0] for task in tasks}
-                  print("CRM_TASK_SMOKE:",json.dumps({"case":label,"actual":sorted(actual),"ok":actual==expected},ensure_ascii=False))
-                  assert actual==expected, "Live rules differ: "+label
-                  if label=="two_cities":
-                      places={task.match.category_name.split(" → ")[0]:geo.detect(task.place_text)[0] for task in tasks}
-                      assert places=={"Ремонт и строительство":"Махачкала","Перевозки и доставка":"Каспийск"}
-                      print("CRM_TASK_CITIES: ok")
-              assert geo.detect("Нужен мастер, ответить до 18:00 по МСК","Махачкала")==("Махачкала","Дагестан")
-              assert geo.detect("В Дубае нужен сантехник","Махачкала")==("Дубай","ОАЭ")
-              route="Нужно перевезти диван из Махачкалы в Москву"
-              assert geo.detect(route)==("Москва","Москва")
-              assert geo.matches_request("Махачкала",False,"Москва","Москва",route,True)
-              assert geo.matches_request("Москва",False,"Москва","Москва",route,True)
-              assert not geo.matches_request("Каспийск",False,"Москва","Москва",route,True)
-              print("CRM_GEO_SMOKE: ok")
-          asyncio.run(verify())
-          MATCH_PY
-          printf 'CRM_COMMIT: '
+          [[ "$(git remote get-url origin)" = *abdylzhelil/CRM-bot-tg* ]]
+          printf 'CRM_SOURCE: '
           git rev-parse HEAD
-          timeout 120 docker compose exec -T bot python -m app.scoutreport </dev/null | python3 -c 'import re,sys; print(re.sub(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)", "[phone hidden]", sys.stdin.read()))'
-          timeout 120 docker compose exec -T -i bot python - <<'PRODUCT_PY'
+          timeout 90 docker compose exec -T -i bot python - <<'SCOUT_AUDIT_PY'
           import asyncio,json
+          from collections import Counter
           from datetime import timedelta
-          from sqlalchemy import select,func
+          from sqlalchemy import select,func,text
           from app.db import Session
-          from app.models import User,Lead,Delivery,Client,Payment,FilteredMessage,SeenMessage,FeedChat,now
-          async def run():
-              out={}
+          from app.models import Group,Lead,Delivery,ScoutAccount,FeedChat,SearchQuery,UserSearch,now
+          from app.services import settings,geo
+          from app.scout import search,joiner
+          
+          async def main():
+              out={'measured_at_utc':now().isoformat()}
               async with Session() as s:
-                  async def count(model,*conditions):
-                      return await s.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
-                  day=now()-timedelta(days=1)
-                  week=now()-timedelta(days=7)
-                  out["users"]={"total":await count(User,~User.is_admin),"registered":await count(User,~User.is_admin,User.onboarded),"blocked":await count(User,~User.is_admin,User.blocked),"registered_dagestan":await count(User,~User.is_admin,User.onboarded,User.city.in_(["Дагестан","Махачкала","Дербент","Каспийск","Хасавюрт","Избербаш","Кизляр","Кизилюрт","Буйнакск"]))}
-                  out["last_24h"]={"leads":await count(Lead,Lead.created_at>day),"matched_seen":await count(SeenMessage,SeenMessage.created_at>day),"filtered":await count(FilteredMessage,FilteredMessage.created_at>day)}
-                  out["last_7d"]={"leads":await count(Lead,Lead.created_at>week),"deliveries":await count(Delivery,Delivery.created_at>week),"sent":await count(Delivery,Delivery.created_at>week,Delivery.sent),"clients_added":await count(Client,Client.created_at>week),"payments":await count(Payment,Payment.created_at>week,~Payment.refunded)}
-                  out["delivery_status_7d"]=dict((await s.execute(select(Delivery.status,func.count()).where(Delivery.created_at>week).group_by(Delivery.status))).all())
-                  from app import config
-                  from app.services import distribute,settings
-                  out["pending_deliveries"]={"total":await count(Delivery,~Delivery.sent),"expired":await count(Delivery,~Delivery.sent,Delivery.deliver_after<=day),"future":await count(Delivery,~Delivery.sent,Delivery.deliver_after>now()),"ready_now_up_to_50":len(await distribute.due(s))}
-                  out["payment_configuration"]={"telegram_configured":bool(config.PAYMENT_PROVIDER_TOKEN),"link_configured":bool(config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY),"prices_rub":{str(days):await settings.get_int(s,"price_"+str(days)) for days in (30,90,365)}}
-                  from collections import Counter
-                  from app.models import Category,UserCategory
-                  from app.services import geo
-                  cats={row.id:row for row in (await s.scalars(select(Category))).all()}
-                  def root(cid):
-                      seen=set()
-                      while cid in cats and cats[cid].parent_id and cid not in seen:
-                          seen.add(cid)
-                          cid=cats[cid].parent_id
-                      return cid
-                  choices={}
-                  for uid,cid in (await s.execute(select(UserCategory.user_id,UserCategory.category_id))).all():
-                      choices.setdefault(uid,set()).add(root(cid))
-                  audience=(await s.scalars(select(User).where(~User.is_admin,User.onboarded,~User.blocked,~User.paused))).all()
-                  totals=Counter()
-                  niche_totals=Counter()
-                  niche_fit=Counter()
-                  for lead in (await s.scalars(select(Lead).where(Lead.created_at>week))).all():
-                      cid=root(lead.category_id)
-                      niche_totals[cid]+=1
-                      interested=[u for u in audience if cid in choices.get(u.tg_id,set())]
-                      fit=[u for u in interested if geo.matches(u.city,u.only_city,lead.city,lead.region)]
-                      totals["leads"]+=1
-                      totals["has_niche_subscriber"]+=bool(interested)
-                      totals["has_niche_and_place_fit"]+=bool(fit)
-                      niche_fit[cid]+=bool(fit)
-                  subscribers=Counter()
-                  for u in audience:
-                      subscribers.update(choices.get(u.tg_id,set()))
-                  out["audience"]={"active_non_admin":len(audience),"paused_non_admin":await count(User,~User.is_admin,User.paused),"without_niches":sum(not choices.get(u.tg_id) for u in audience)}
-                  out["subscriber_niches"]=[{"niche":cats[cid].name if cid in cats else "none","subscribers":n,"leads_7d":niche_totals[cid],"fit_7d":niche_fit[cid]} for cid,n in subscribers.most_common()]
-                  out["coverage_7d"]=dict(totals)
-                  out["niche_coverage_7d"]=[{"niche":cats[cid].name if cid in cats else "none","leads":n,"with_niche_and_place_fit":niche_fit[cid]} for cid,n in niche_totals.most_common(10)]
-                  out["moderation_feed"]={"known_groups":await count(FeedChat),"enabled_groups":await count(FeedChat,FeedChat.enabled)}
-              print("PRODUCT_AGGREGATES:",json.dumps(out,ensure_ascii=False))
-          asyncio.run(run())
-          PRODUCT_PY
-          timeout 60 docker compose exec -T -i bot python - <<'REVENUE_VERIFY_PY'
-          import asyncio,json
-          from datetime import timedelta
-          from types import SimpleNamespace
-          from sqlalchemy import select
-          from app.db import Session
-          from app.models import ScoutAccount,now
-          from app.services import adposts,payments,settings
-          async def verify():
-              async with Session() as s:
-                  review=await adposts.money_review(s)
-                  accounts=(await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled,ScoutAccount.can_post))).all()
-                  due=await adposts.due_checks(s,account_ids={a.id for a in accounts})
-                  inventory=await adposts.eligible_groups(s)
-                  default=await settings.get_int(s,"adpost_price")
-                  prices=[adposts.group_price(g,default) for g in inventory]
-                  assert not s.dirty, "Read-only money review changed records"
-                  print("CRM_AD_REVIEW:",json.dumps({"orders_to_review":len(review),"known_unpublished_rub":sum(value for _,value in review if value is not None),"unknown_price_splits":sum(value is None for _,value in review),"due_verifications":len(due),"visible_inventory":len(inventory),"default_price_rub":default,"min_price_rub":min(prices) if prices else None,"max_price_rub":max(prices) if prices else None},ensure_ascii=False))
-              row=SimpleNamespace(yk_id="synthetic-check",done=False,created_at=now()-timedelta(hours=5))
-              class FakeSession:
-                  async def scalars(self,query): return SimpleNamespace(all=lambda:[row])
-                  async def commit(self): pass
-              async def fake_provider(method,path):
-                  assert method=="GET" and path=="/payments/synthetic-check"
-                  return {"id":"synthetic-check","status":"succeeded","paid":True,"amount":{"value":"1.00","currency":"RUB"}}
-              paid=await payments.check_links(FakeSession(),api=fake_provider)
-              assert len(paid)==1 and paid[0][0] is row and not row.done
-              print("CRM_DELAYED_CHECKOUT_SMOKE: ok (in-memory stub, no provider request or DB write)")
-          asyncio.run(verify())
-          REVENUE_VERIFY_PY
+                  await s.execute(text('PRAGMA query_only=ON'))
+                  keys=('scout_paused','scout_grow','mode','home_region','scout_places','join_check','search_interval_h','min_members','min_msgs_per_day','min_members_home','min_msgs_home','rotation_days','join_retry_days','join_retry_max','group_audit','group_audit_leave','ai_classify','ai_check_leads','ai_decide','search_stage','search_offset_home','search_offset_near','search_offset','search_stage_found','search_stage_wrapped','search_last')
+                  out['settings']={k:await settings.get(s,k) for k in keys}
+                  home=await settings.get(s,'home_region');st=await search.stage(s)
+                  gs=(await s.scalars(select(Group).where(Group.kind=='group'))).all()
+                  out['groups_by_status']=dict(Counter(g.status for g in gs))
+                  out['groups_by_status_tier']=dict(Counter(g.status+':'+str(geo.tier(g.city,g.region,home) if g.city or g.region else geo.tier(*geo.title_place(g.title),home)) for g in gs))
+                  queue=[g for g in gs if g.status=='approved']
+                  out['queue']={'total':len(queue),'joinable_by_stage':len(joiner.joinable(queue,home,st)),'requested_due':sum(g.status=='requested' and g.join_retry_at is not None and g.join_retry_at<=now() for g in gs),'wanted':sum(bool(g.wanted_by) for g in queue)}
+                  out['accounts']=[{'enabled':a.enabled,'status':a.status,'has_session':bool(a.session),'daily_limit':a.daily_join_limit,'counter_date':a.joined_date,'daily_actions':a.joined_today,'max_groups':a.max_groups,'joined_db':sum(g.status=='joined' and g.account_id==a.id for g in gs),'assigned_queue':sum(g.account_id==a.id for g in queue)} for a in (await s.scalars(select(ScoutAccount))).all()]
+                  tiers=await search.tier_queries(s)
+                  out['query_pool_sizes']=[len(t) for t in tiers]
+                  manual=(await s.scalars(select(SearchQuery).where(SearchQuery.enabled))).all()
+                  out['manual_queries']={'total':len(manual),'dagestan_but_in_rest_tier':sum(geo.tier(*geo.find(q.text),home)==0 and q.text in tiers[2] for q in manual)}
+                  out['user_queries']={'total':await s.scalar(select(func.count()).select_from(UserSearch))}
+                  for days in (1,7):
+                      since=now()-timedelta(days=days)
+                      rows=(await s.execute(select(Lead.group_id,Lead.author_id,Lead.text_hash,Lead.created_at,Lead.city,Lead.region).where(Lead.created_at>since))).all()
+                      source_groups={}
+                      local_sources=set();sources=set()
+                      for gid,author,h,at,city,region in rows:
+                          key=(author,h,at)
+                          sources.add(key)
+                          source_groups.setdefault(gid,set()).add(key)
+                          if geo.tier(city,region,home)==0:local_sources.add(key)
+                      joined=[g for g in gs if g.status=='joined' and g.account_id is not None]
+                      local=[g for g in joined if geo.tier(g.city,g.region,home)==0]
+                      out[str(days)+'d']={'unique_sources_all_inputs':len(sources),'unique_local_sources_all_inputs':len(local_sources),'scout_joined_groups':len(joined),'scout_groups_with_sources':sum(bool(source_groups.get(g.id)) for g in joined),'scout_local_joined':len(local),'scout_local_with_sources':sum(bool(source_groups.get(g.id)) for g in local),'new_group_records':sum(g.found_at is not None and g.found_at>since for g in gs),'new_joined_records':sum(g.joined_at is not None and g.joined_at>since for g in joined),'deliveries_nonadmin_not_measured':True}
+                  joined=[g for g in gs if g.status=='joined' and g.account_id is not None]
+                  out['joined_quality']={'no_leads_flag':sum(g.no_leads for g in joined),'no_last_lead':sum(g.last_lead_at is None for g in joined),'captcha':sum(g.captcha_since is not None for g in joined),'audit_verdicts':dict(Counter(g.audit_verdict or 'not_checked' for g in joined)),'watch_at_least_40':sum((g.watch_seen or 0)>=40 for g in joined)}
+                  feed=(await s.scalars(select(FeedChat))).all()
+                  out['feed']={'known':len(feed),'enabled':sum(f.enabled for f in feed),'disabled_groups_marked_covered':sum(g.status=='covered' and any(f.tg_id==g.tg_id and not f.enabled for f in feed) for g in gs)}
+                  assert not s.dirty and not s.new and not s.deleted
+              print('SCOUT_AUDIT_AGGREGATES:',json.dumps(out,ensure_ascii=False))
+          
+          asyncio.run(main())
+          SCOUT_AUDIT_PY
+          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))'
           REMOTE
-# Read-only product funnel aggregates without user texts, IDs, contacts or secrets, 2026-11-14.
-
-# Final verification of the installed product usability and search package.
-
-# Verify missing-niche repair and Dagestan onboarding release after deployment.
-
-# Verify installed quality fix, image and health after deployment.
-
-# Verify service-action release against live configured rules using invented examples only.
-
-# Verify task cities, route endpoints and source delivery uniqueness after release.
-
-# Release verification restores aggregate-only checks: no real payment-provider calls.
-
-# Restore aggregate diagnostics after public Dagestan inventory review.
+# Scout-only audit: SQLite query_only; aggregate database reads; no Telegram session or API calls.
