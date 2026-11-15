@@ -1,0 +1,56 @@
+"""Audit reproductions: assertions describe observed defects, not desired behavior."""
+from datetime import timedelta
+from unittest.mock import AsyncMock
+from sqlalchemy import select, func
+from app.models import Client, Reminder, PendingLink, Payment, User, CreditTx, now
+from app.services import credits, payments, erase
+from tests.conftest import make_user
+
+async def test_observed_reminder_lost_after_temporary_send_failure(maker, tgbot, monkeypatch):
+    from app import main
+    await make_user(maker, 70)
+    async with maker() as s:
+        c = Client(user_id=70, name='audit synthetic')
+        s.add(c)
+        await s.flush()
+        s.add(Reminder(client_id=c.id, due_at=now()-timedelta(minutes=1)))
+        await s.commit()
+    failed = AsyncMock(side_effect=TimeoutError('synthetic temporary outage'))
+    monkeypatch.setattr(tgbot, 'send_message', failed)
+    assert await main.reminders_once() == 1
+    assert await main.reminders_once() == 0
+    assert failed.await_count == 1
+    async with maker() as s:
+        assert (await s.scalar(select(Reminder))).sent is True
+
+async def test_observed_pending_refund_recorded_as_complete(maker, tgbot, monkeypatch):
+    await make_user(maker, 71, plan='full', plan_until=now()+timedelta(days=30))
+    monkeypatch.setattr(payments, 'refunds_enabled', lambda: True)
+    async with maker() as s:
+        p = Payment(user_id=71, days=30, amount=10000, currency='RUB', charge_id='synthetic-audit', provider_id='synthetic-provider')
+        s.add(p)
+        await s.commit()
+        result = await payments.refund(s, p, True, call=AsyncMock(return_value={'status':'pending'}))
+        assert p.refunded is True
+        assert 'возвращены' in result
+
+async def test_observed_account_erasure_drops_unsettled_payment_tracking(maker):
+    await make_user(maker, 72)
+    async with maker() as s:
+        s.add(PendingLink(user_id=72, yk_id='synthetic-unsettled', days=30, amount=10000))
+        await s.commit()
+        assert await erase.erase_user(s, 72)
+        assert await s.scalar(select(func.count()).select_from(PendingLink)) == 0
+
+async def test_observed_stale_balances_allow_two_spends_for_one_debit(maker):
+    await make_user(maker, 73, credits=100)
+    async with maker() as first, maker() as second:
+        a = await first.get(User, 73)
+        b = await second.get(User, 73)
+        await credits.add(first, a, -80, 'days', 'synthetic first')
+        await first.commit()
+        await credits.add(second, b, -80, 'days', 'synthetic second')
+        await second.commit()
+    async with maker() as s:
+        assert (await s.get(User, 73)).credits == 20
+        assert await s.scalar(select(func.sum(CreditTx.amount)).where(CreditTx.user_id==73)) == -160
