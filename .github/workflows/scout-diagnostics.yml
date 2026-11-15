@@ -1,4 +1,4 @@
-name: CRM partner condition inquiries
+name: CRM partner reply check
 on:
   push:
     branches: [crm/scout-diagnostics]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   diagnose:
-    name: Approved partner condition inquiries
+    name: Read replies to approved inquiries
     if: github.repository == 'abdylzhelil/CRM-bot-tg'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -15,7 +15,7 @@ jobs:
       group: crm-production
       cancel-in-progress: false
     steps:
-      - name: Send approved single inquiries over CRM SSH
+      - name: Read private partner replies over CRM SSH
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
@@ -79,181 +79,54 @@ jobs:
           PARTNER_CERT
           set +e
           timeout 110 docker compose exec -T -i bot python - <<'PARTNER_INQUIRY_PY' | openssl cms -encrypt -binary -aes-256-cbc -outform DER -out "$ciphertext" "$certificate"
-          """One approved condition inquiry per published contact. Never buys placements."""
-          import asyncio
-          import hashlib
-          import json
-          import logging
-          import os
-          from datetime import datetime, timezone, timedelta
+          import asyncio,json,logging,os
           from pathlib import Path
-          
-          CAMPAIGN = "partner-terms-2026-11-15-v1"
-          ALLOWED = {"managerAdel": False, "Tut_Admin_Bot": True}
-          EXPIRES = datetime(2026, 11, 17, tzinfo=timezone.utc)
-          QUESTION = (
-              "Здравствуйте! Уточняем условия для сервиса «КлиентРадар» — бота для местных специалистов Дагестана. "
-              "Интересует размещение объявлений ремонта, перевозок и красоты в группе «Барахолка Махачкала | Объявления».\n\n"
-              "Подскажите, пожалуйста:\n"
-              "1. Стоимость одного поста и пакета размещений.\n"
-              "2. Кто публикует: администратор или можно согласовать наш аккаунт?\n"
-              "3. Срок размещения, требования к фото/ссылкам и маркировке, условия при удалении поста.\n"
-              "4. Возможны ли партнёрские условия для нескольких объявлений от мастеров?\n\n"
-              "Сейчас только запрос условий. Заказ и оплату пока не подтверждаем. Спасибо!"
-          )
-          BOT_QUESTION = QUESTION.replace(
-              "группе «Барахолка Махачкала | Объявления».",
-              "группе «Объявления Махачкала | Дагестан» (https://t.me/Mahachkala_obyavleniya).",
-          )
-          
-          
-          def utcnow():
-              return datetime.now(timezone.utc)
-          
-          
-          def save(path, state):
-              temp = path.with_suffix(".tmp")
-              with temp.open("w", encoding="utf-8") as f:
-                  json.dump(state, f, ensure_ascii=False)
-                  f.flush()
-                  os.fsync(f.fileno())
-              os.chmod(temp, 0o600)
-              os.replace(temp, path)
-          
-          
-          def random_id(username, stage):
-              value = hashlib.sha256(f"{CAMPAIGN}:{username}:{stage}".encode()).digest()[:8]
-              return int.from_bytes(value, "big") & ((1 << 63) - 1)
-          
-          
-          async def send_once(client, username, stage, text, path, state):
-              from telethon import functions
-          
-              if username not in ALLOWED or stage not in {"inquiry", "start", "question"}:
-                  raise ValueError("Not an approved contact or stage")
-              if stage == "start" and (not ALLOWED[username] or text != "/start"):
-                  raise ValueError("Only the published admin bot may be started")
-              if stage == "inquiry" and (ALLOWED[username] or text != QUESTION):
-                  raise ValueError("Only the approved human inquiry is permitted in this run")
-              if stage == "question" and (username != "Tut_Admin_Bot" or text != BOT_QUESTION):
-                  raise ValueError("Only the condition question to the published admin bot is permitted")
-              key = username + ":" + stage
-              if key in state["actions"]:
-                  return state["actions"][key]
-              if stage == "question":
-                  started = state["actions"].get("Tut_Admin_Bot:start", {})
-                  prompts = state.get("replies", {}).get("Tut_Admin_Bot:start", [])
-                  if started.get("status") != "sent" or not isinstance(prompts, list) or not any(
-                      "задайте" in p.get("text", "").lower() and "вопрос" in p.get("text", "").lower() for p in prompts
-                  ):
-                      raise ValueError("Admin bot has not invited a question")
-              if utcnow() >= EXPIRES:
-                  raise ValueError("Outreach authorization window expired")
-              entity = await client.get_entity(username)
-              if getattr(entity, "username", "").lower() != username.lower() or bool(getattr(entity, "bot", False)) != ALLOWED[username]:
-                  raise ValueError("Published recipient could not be verified")
-              entry = {"status": "reserved", "time": utcnow().isoformat(), "random_id": random_id(username, stage)}
-              state["actions"][key] = entry
-              save(path, state)  # reserve before Telegram; uncertainty never triggers a resend
-              try:
-                  result = await client(functions.messages.SendMessageRequest(
-                      peer=await client.get_input_entity(entity), message=text,
-                      random_id=entry["random_id"], no_webpage=True))
-                  message_id = getattr(result, "id", None)
-                  for update in getattr(result, "updates", []):
-                      message_id = getattr(getattr(update, "message", None), "id", None) or message_id
-                      if getattr(update, "random_id", None) == entry["random_id"]:
-                          message_id = getattr(update, "id", None) or message_id
-                  entry.update(status="sent", message_id=message_id)
-              except Exception as exc:
-                  entry.update(status="uncertain_or_failed", error_type=type(exc).__name__)
-              save(path, state)
-              return entry
-          
-          
-          async def collect(client, username, entry):
-              after = datetime.fromisoformat(entry["time"]) - timedelta(seconds=2)
-              out = []
-              for msg in await client.get_messages(username, limit=15):
-                  if getattr(msg, "out", False) or msg.date < after:
-                      continue
-                  buttons = []
-                  for row in getattr(getattr(msg, "reply_markup", None), "rows", []) or []:
-                      for button in row.buttons:
-                          data = getattr(button, "data", b"")
-                          buttons.append({"text": button.text, "url": getattr(button, "url", None),
-                                          "data_hex": data.hex() if isinstance(data, bytes) else None})
-                  out.append({"id": msg.id, "date": msg.date.isoformat(),
-                              "text": (msg.message or "")[:4000], "buttons": buttons})
-              return out
-          
-          
+          from datetime import datetime,timedelta
+          from sqlalchemy import select
+          from telethon import TelegramClient
+          from telethon.sessions import StringSession
+          from app.db import Session
+          from app.models import ScoutAccount
           async def main():
-              from sqlalchemy import select
-              from telethon import TelegramClient
-              from telethon.sessions import StringSession
-              from app.db import Session
-              from app.models import ScoutAccount
-          
-              os.umask(0o077)
-              folder = Path("/srv/data/partner_inquiries") / CAMPAIGN
-              folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-              import fcntl
-              lock = (folder / "lock").open("a")
-              fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-              path = folder / "state.json"
-              state = json.loads(path.read_text()) if path.exists() else {"campaign": CAMPAIGN, "actions": {}}
-              if state.get("campaign") != CAMPAIGN:
-                  raise ValueError("Ledger belongs to another task")
+              path=Path("/srv/data/partner_inquiries/partner-terms-2026-11-15-v1/state.json")
+              state=json.loads(path.read_text())
               async with Session() as s:
-                  accounts = list((await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled, ScoutAccount.can_post))).all())
-              if len(accounts) != 1 or accounts[0].status != "ok" or not accounts[0].session:
-                  raise ValueError("Need one healthy CRM publisher; no account switching or new login")
-              acc = accounts[0]
-              client = TelegramClient(StringSession(acc.session), acc.api_id, acc.api_hash,
-                                      auto_reconnect=False, connection_retries=0, request_retries=0,
-                                      flood_sleep_threshold=0, receive_updates=False, catch_up=False,
-                                      device_model="Desktop")
+                  acc=await s.scalar(select(ScoutAccount).where(ScoutAccount.tg_user_id==state["sender_id"],ScoutAccount.enabled))
+              if acc is None or acc.status!="ok":
+                  raise ValueError("Original CRM sender is not available for reading replies")
+              client=TelegramClient(StringSession(acc.session),acc.api_id,acc.api_hash,auto_reconnect=False,
+                  connection_retries=0,request_retries=0,flood_sleep_threshold=0,receive_updates=False,catch_up=False,device_model="Desktop")
+              result={"actions":state["actions"],"replies":{}}
               try:
-                  await asyncio.wait_for(client.connect(), 15)
-                  if not await client.is_user_authorized():
-                      raise ValueError("Existing CRM session is not authorized; no login attempted")
-                  me = await client.get_me()
-                  if me.bot or (acc.tg_user_id and me.id != acc.tg_user_id):
-                      raise ValueError("Unexpected sender")
-                  if state.get("sender_id") not in (None, me.id):
-                      raise ValueError("Do not change sender for this inquiry")
-                  state["sender_id"] = me.id
-                  save(path, state)
-                  for username, stage, text in (("managerAdel", "inquiry", QUESTION), ("Tut_Admin_Bot", "start", "/start"),
-                                                ("Tut_Admin_Bot", "question", BOT_QUESTION)):
-                      entry = await send_once(client, username, stage, text, path, state)
-                      if entry.get("error_type") in {"PeerFloodError", "FloodWaitError", "AuthKeyDuplicatedError"}:
-                          break
-                  await asyncio.sleep(8)
-                  replies = {}
-                  for key, entry in state["actions"].items():
-                      try:
-                          replies[key] = await collect(client, key.split(":")[0], entry)
-                      except Exception as exc:
-                          replies[key] = {"error_type": type(exc).__name__}
-                  state["replies"] = replies
-                  save(path, state)
-                  return {"campaign": CAMPAIGN, "actions": state["actions"], "replies": replies}
+                  await asyncio.wait_for(client.connect(),15)
+                  if not await client.is_user_authorized() or (await client.get_me()).id!=state["sender_id"]:
+                      raise ValueError("Original session is not available")
+                  await asyncio.sleep(40)
+                  for username in ("managerAdel","Tut_Admin_Bot"):
+                      entries=[v for k,v in state["actions"].items() if k.startswith(username+":") and v.get("status")=="sent"]
+                      if not entries: continue
+                      after=min(datetime.fromisoformat(v["time"]) for v in entries)-timedelta(seconds=2)
+                      rows=[]
+                      for message in await client.get_messages(username,limit=20):
+                          if message.out or message.date<after: continue
+                          buttons=[]
+                          for row in getattr(getattr(message,"reply_markup",None),"rows",[]) or []:
+                              for button in row.buttons:
+                                  buttons.append({"text":button.text,"url":getattr(button,"url",None)})
+                          rows.append({"id":message.id,"date":message.date.isoformat(),"text":(message.message or "")[:5000],"buttons":buttons})
+                      result["replies"][username]=rows
+                  return result
               finally:
                   await client.disconnect()
-                  lock.close()
+          logging.disable(logging.CRITICAL)
+          try:
+              result=asyncio.run(asyncio.wait_for(main(),100))
+              code=0
+          except Exception as exc:
+              result,code={"fatal_type":type(exc).__name__},1
+          print(json.dumps(result,ensure_ascii=True))
+          raise SystemExit(code)
           
-          
-          if __name__ == "__main__":
-              logging.disable(logging.CRITICAL)
-              try:
-                  result = asyncio.run(asyncio.wait_for(main(), 90))
-                  code = 0
-              except Exception as exc:
-                  result, code = {"fatal_type": type(exc).__name__}, 1
-              print(json.dumps(result, ensure_ascii=True))
-              raise SystemExit(code)
           PARTNER_INQUIRY_PY
           result=$?
           set -e
