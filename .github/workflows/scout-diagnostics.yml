@@ -101,6 +101,10 @@ jobs:
               "4. Возможны ли партнёрские условия для нескольких объявлений от мастеров?\n\n"
               "Сейчас только запрос условий. Заказ и оплату пока не подтверждаем. Спасибо!"
           )
+          BOT_QUESTION = QUESTION.replace(
+              "группе «Барахолка Махачкала | Объявления».",
+              "группе «Объявления Махачкала | Дагестан» (https://t.me/Mahachkala_obyavleniya).",
+          )
           
           
           def utcnow():
@@ -125,15 +129,24 @@ jobs:
           async def send_once(client, username, stage, text, path, state):
               from telethon import functions
           
-              if username not in ALLOWED or stage not in {"inquiry", "start"}:
+              if username not in ALLOWED or stage not in {"inquiry", "start", "question"}:
                   raise ValueError("Not an approved contact or stage")
               if stage == "start" and (not ALLOWED[username] or text != "/start"):
                   raise ValueError("Only the published admin bot may be started")
               if stage == "inquiry" and (ALLOWED[username] or text != QUESTION):
                   raise ValueError("Only the approved human inquiry is permitted in this run")
+              if stage == "question" and (username != "Tut_Admin_Bot" or text != BOT_QUESTION):
+                  raise ValueError("Only the condition question to the published admin bot is permitted")
               key = username + ":" + stage
               if key in state["actions"]:
                   return state["actions"][key]
+              if stage == "question":
+                  started = state["actions"].get("Tut_Admin_Bot:start", {})
+                  prompts = state.get("replies", {}).get("Tut_Admin_Bot:start", [])
+                  if started.get("status") != "sent" or not isinstance(prompts, list) or not any(
+                      "задайте" in p.get("text", "").lower() and "вопрос" in p.get("text", "").lower() for p in prompts
+                  ):
+                      raise ValueError("Admin bot has not invited a question")
               if utcnow() >= EXPIRES:
                   raise ValueError("Outreach authorization window expired")
               entity = await client.get_entity(username)
@@ -212,7 +225,8 @@ jobs:
                       raise ValueError("Do not change sender for this inquiry")
                   state["sender_id"] = me.id
                   save(path, state)
-                  for username, stage, text in (("managerAdel", "inquiry", QUESTION), ("Tut_Admin_Bot", "start", "/start")):
+                  for username, stage, text in (("managerAdel", "inquiry", QUESTION), ("Tut_Admin_Bot", "start", "/start"),
+                                                ("Tut_Admin_Bot", "question", BOT_QUESTION)):
                       entry = await send_once(client, username, stage, text, path, state)
                       if entry.get("error_type") in {"PeerFloodError", "FloodWaitError", "AuthKeyDuplicatedError"}:
                           break
@@ -254,3 +268,5 @@ jobs:
           
           REMOTE
 # User approved inquiries to two published business contacts on 2026-11-15. No purchases, group posts, callbacks or payments.
+
+# Admin bot requested a question; send approved terms question once, without resending prior inquiries.
