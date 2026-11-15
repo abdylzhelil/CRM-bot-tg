@@ -68,7 +68,7 @@ jobs:
               async with Session() as s:
                   await s.execute(text('PRAGMA query_only=ON'))
                   keys=('scout_paused','scout_grow','mode','home_region','scout_places','join_check','search_interval_h','min_members','min_msgs_per_day','min_members_home','min_msgs_home','rotation_days','join_retry_days','join_retry_max','group_audit','group_audit_leave','ai_classify','ai_check_leads','ai_decide','search_stage','search_offset_home','search_offset_near','search_offset','search_stage_found','search_stage_wrapped','search_last')
-                  out['settings']={k:await settings.get(s,k) for k in keys}
+                  out['settings']={k:(await settings.get(s,k) if k in settings.DEFAULTS else await settings.raw(s,k)) for k in keys}
                   home=await settings.get(s,'home_region');st=await search.stage(s)
                   gs=(await s.scalars(select(Group).where(Group.kind=='group'))).all()
                   out['groups_by_status']=dict(Counter(g.status for g in gs))
