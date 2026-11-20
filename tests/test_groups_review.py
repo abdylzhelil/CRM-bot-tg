@@ -44,7 +44,7 @@ async def test_review_one_and_all(maker):
 
 async def test_shared_base_scout_does_not_join_where_our_bot_is(maker):
     async with maker() as s:
-        s.add(FeedChat(tg_id=-555, title="Группа с ботом модерации"))
+        s.add(FeedChat(tg_id=-555, title="Группа с ботом модерации", enabled=True))
         s.add(Group(tg_id=-555, title="Группа с ботом модерации", status="approved"))
         s.add(ScoutAccount(id=1, name="scout1", api_id=1, api_hash="x", daily_join_limit=10))
         await s.commit()

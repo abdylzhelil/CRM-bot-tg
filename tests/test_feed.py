@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app import config
 from app.feed import server
-from app.models import FeedChat, Lead
+from app.models import FeedChat, Lead, Group
 from tests.conftest import ADMIN_ID
 
 TOKEN = "secret-token"
@@ -62,3 +62,20 @@ async def test_new_group_after_first_sync_notifies(env):
     other = {"id": -1005550002, "title": "Аренда МХК", "own": False}
     await client.post("/feed/chats", json={"chats": [dict(CHAT, own=True), other]}, headers=H)
     assert "Аренда МХК" in sent.texts(ADMIN_ID)[-1]
+
+
+async def test_disabled_feed_sync_does_not_hide_scout_queue(env):
+    client, maker, _ = env
+    async with maker() as s:
+        s.add(Group(tg_id=CHAT['id'],title='local',status='approved'))
+        await s.commit()
+    for _ in range(2):
+        await client.post('/feed/chats',json={'chats':[CHAT]},headers=H)
+    async with maker() as s:
+        group=await s.scalar(select(Group).where(Group.tg_id==CHAT['id']))
+        assert group.status=='approved'
+        (await s.get(FeedChat,CHAT['id'])).enabled=True
+        await s.commit()
+    await client.post('/feed/chats',json={'chats':[CHAT]},headers=H)
+    async with maker() as s:
+        assert await s.scalar(select(Group.status).where(Group.tg_id==CHAT['id']))=='covered'

@@ -133,7 +133,8 @@ async def join_one(client: TelegramClient, acc_id: int) -> bool:
         if not g:
             await s.commit()
             return False
-        if await s.get(FeedChat, g.tg_id) is not None or await is_covered_by_other(s, g):
+        feed = await s.get(FeedChat, g.tg_id)
+        if (feed is not None and feed.enabled) or await is_covered_by_other(s, g):
             g.status = "covered"  # там уже есть наш бот — второй не заходит
             await s.commit()
             return False
@@ -237,7 +238,8 @@ async def timer_lines(manager=None) -> list[str]:
         queue = await s.scalar(select(func.count()).select_from(Group).where(
             Group.status == "approved", Group.kind == "group")) or 0
     out = []
-    if TIMER["searching"]:
+    from app.scout import search as search_
+    if TIMER["searching"] or search_.is_searching():
         out.append("⏱ Поиск новых групп: идёт сейчас")
     elif TIMER["search_at"] is not None:
         out.append(f"⏱ Следующий поиск новых групп: {_until(TIMER['search_at'])}")
@@ -280,11 +282,14 @@ async def rotate(client: TelegramClient, acc_id: int, limit: int = 10) -> int:
             select(Group).where(
                 Group.account_id == acc_id, Group.status == "joined", Group.joined_at < cutoff,
                 (Group.last_lead_at.is_(None)) | (Group.last_lead_at < cutoff),
-                ~Group.ads_allowed,  # в группах, где продаём рекламу, остаёмся, даже если заявок нет
-            ).limit(limit)
+                ~Group.ads_allowed, ~Group.catalog, Group.submitted_by == 0, Group.wanted_by == 0,
+            ).order_by(Group.joined_at, Group.id).limit(limit)
         )).all()
         left = 0
         for g in stale:
+            from app.services import groupcheck
+            if groupcheck.protected(g):
+                continue
             try:
                 await client(functions.channels.LeaveChannelRequest(await client.get_entity(g.tg_id)))
                 g.status = "left"
@@ -299,12 +304,12 @@ async def rotate(client: TelegramClient, acc_id: int, limit: int = 10) -> int:
 
 
 async def search_loop(manager) -> None:
-    from app.scout.search import discover
+    from app.scout.search import discover, SearchDeferred
 
     TIMER["search_at"] = _later(180)
     await asyncio.sleep(180)  # после запуска даём разведчикам спокойно подключиться
     while True:
-        hours, offline = 6, False
+        hours, offline, deferred = 6, False, 0
         TIMER["searching"] = True
         try:
             for acc_id, client in list(manager.clients.items()):
@@ -312,6 +317,8 @@ async def search_loop(manager) -> None:
                     break
                 try:
                     await discover(client)
+                except SearchDeferred as exc:
+                    deferred = max(deferred, exc.seconds)
                 except ConnectionError:
                     offline = True
                     log.warning("search_loop #%s: нет связи с Telegram — повторю через 10 мин", acc_id)
@@ -322,9 +329,10 @@ async def search_loop(manager) -> None:
         except Exception:
             log.exception("search_loop")
         TIMER["searching"] = False
-        TIMER["search_at"] = _later(600 if offline else max(hours, 1) * 3600)
+        delay = max(deferred, 600 if offline else (60 if deferred else max(hours, 1) * 3600))
+        TIMER["search_at"] = _later(delay)
         # оборвалась связь — не ждём 6 часов, пробуем снова через 10 минут
-        await _wait_or_user_search(manager, 600 if offline else max(hours, 1) * 3600)
+        await _wait_or_user_search(manager, delay)
 
 
 TICK = 120  # как часто между проходами проверять новые запросы пользователей («🔎 Найти группы для меня»)

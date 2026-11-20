@@ -5,7 +5,7 @@ from app.models import ScoutAccount
 
 
 def make_client(acc: ScoutAccount, session: str | None = None) -> TelegramClient:
-    return TelegramClient(
+    client = TelegramClient(
         StringSession(acc.session if session is None else session),
         acc.api_id,
         acc.api_hash,
@@ -14,6 +14,8 @@ def make_client(acc: ScoutAccount, session: str | None = None) -> TelegramClient
         retry_delay=5,
         device_model="Desktop",
     )
+    client._crm_account_id = acc.id
+    return client
 
 
 async def ensure_connected(client, timeout: float = 30) -> bool:

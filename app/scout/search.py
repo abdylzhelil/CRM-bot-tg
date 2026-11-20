@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import random
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from telethon import TelegramClient, functions, utils
@@ -26,6 +27,8 @@ async def _sample(client: TelegramClient, entity: Channel) -> tuple[float, list[
     """(сообщений в сутки по последним 100, их тексты); (-1, []) если прочитать нельзя."""
     try:
         msgs = [m async for m in client.iter_messages(entity, limit=100)]
+    except FloodWaitError:
+        raise
     except Exception:
         return -1, []
     texts = [m.message for m in msgs if getattr(m, "message", None)]
@@ -40,6 +43,42 @@ async def _activity(client: TelegramClient, entity: Channel) -> float:
 
 
 _stop_requested = False
+_search_lock = asyncio.Lock()
+
+
+def is_searching() -> bool:
+    return _search_lock.locked()
+
+
+class SearchDeferred(ConnectionError):
+    """Telegram postponed this account's search; the query remains unfinished."""
+
+    def __init__(self, seconds: float):
+        self.seconds = max(1, seconds)
+        super().__init__("поиск отложен Telegram")
+
+
+async def _check_deferred(client) -> None:
+    until = getattr(client, "_crm_search_retry_at", None)
+    account_id = getattr(client, "_crm_account_id", None)
+    if account_id is not None:
+        async with Session() as s:
+            raw = await settings.raw(s, f"search_retry_{account_id}")
+        if raw:
+            until = datetime.fromisoformat(raw)
+    if until and until > now():
+        raise SearchDeferred((until - now()).total_seconds())
+
+
+async def _defer(client, seconds: float) -> None:
+    until = now() + timedelta(seconds=seconds + 5)
+    client._crm_search_retry_at = until
+    account_id = getattr(client, "_crm_account_id", None)
+    if account_id is not None:
+        async with Session() as s:
+            await settings.put(s, f"search_retry_{account_id}", until.isoformat())
+            await s.commit()
+    raise SearchDeferred(seconds + 5)
 
 
 def request_stop() -> None:
@@ -50,7 +89,8 @@ def request_stop() -> None:
 
 async def is_covered(s, tg_id: int) -> bool:
     """Общая база: в группе уже есть наш бот (CRM-бот, бот модерации или другой разведчик)."""
-    if await s.get(FeedChat, tg_id) is not None:
+    feed = await s.get(FeedChat, tg_id)
+    if feed is not None and feed.enabled:
         return True
     g = await s.scalar(select(Group).where(Group.tg_id == tg_id))
     return g is not None and g.status == "joined"
@@ -129,7 +169,13 @@ async def tier_queries(s) -> list[list[str]]:
     if home_places:
         home_q += [f"{w} {home_places[0]}" for w in words] + [f"{w} {home}" for w in words]
     near_q = [p.format(c=c) for c in near_places for p in _PLACES] + ideas[1]
-    rest = manual + [p.format(c=c) for c in rest_places[:30] for p in _PLACES] + words + ideas[2]
+    rest = [p.format(c=c) for c in rest_places[:30] for p in _PLACES] + words + ideas[2]
+    from app.services import geo
+
+    for q in reversed(manual):
+        city, region = geo.find(q)
+        target = geo.tier(city, region, home) if city or region else 2
+        (home_q, near_q, rest)[target].insert(0, q)
     if not home_places and rest_places:
         rest += [f"{w} {rest_places[0]}" for w in words]
 
@@ -262,8 +308,7 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
             res = await client(functions.contacts.SearchRequest(q=q, limit=30))
     except FloodWaitError as e:
         log.warning("FloodWait %ss на поиске", e.seconds)
-        await asyncio.sleep(e.seconds + 5)
-        return c
+        await _defer(client, e.seconds)
     except Exception:
         log.exception("поиск «%s»", q)
         c["errors"] += 1
@@ -276,11 +321,14 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
         tg_id = utils.get_peer_id(chat)
         async with Session() as s:
             old = await s.scalar(select(Group).where(Group.tg_id == tg_id))
+            feed = await s.get(FeedChat, tg_id)
+            revisit_covered = (old is not None and old.status == "covered" and old.account_id is None
+                               and feed is not None and not feed.enabled)
             if old is not None and _recheck_small(old):
                 await s.delete(old)  # была маленькой/тихой месяц назад — посмотрим заново (могла вырасти)
                 await s.commit()
                 old = None
-            if old is not None or await is_covered(s, tg_id):
+            if (old is not None and not revisit_covered) or await is_covered(s, tg_id):
                 c["known"] += 1
                 continue
         try:
@@ -288,8 +336,7 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
             members = full.full_chat.participants_count or 0
             msgs_day, texts = await _sample(client, chat)
         except FloodWaitError as e:
-            await asyncio.sleep(e.seconds + 5)
-            continue
+            await _defer(client, e.seconds)
         except Exception:
             log.exception("данные группы %s", chat.title)
             continue
@@ -307,7 +354,7 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
             min_members, min_msgs = opt.get("min_members_home", min_members), opt.get("min_msgs_home", min_msgs)
         ok = not reason and members >= min_members and (msgs_day < 0 or msgs_day >= min_msgs)
         async with Session() as s:
-            g = Group(
+            values = dict(
                 tg_id=tg_id, username=public_username(chat), title=chat.title or "",
                 members=members, msgs_per_day=msgs_day, lang=detect_lang(chat.title or ""),
                 status=("approved" if opt["auto"] or owner is not None else "candidate") if ok else "skipped",
@@ -315,6 +362,12 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
                 wanted_by=owner.user_id if owner is not None and ok else 0,
                 wanted_search=owner.id if owner is not None and ok else 0,
             )
+            if revisit_covered and owner is None:
+                values.pop("wanted_by")
+                values.pop("wanted_search")
+            g = await s.get(Group, old.id) if revisit_covered else Group()
+            for key, value in values.items():
+                setattr(g, key, value)
             groupcheck.apply_place(g, res)
             s.add(g)
             await s.commit()
@@ -367,10 +420,23 @@ async def requeue_small_home(s) -> int:
 
 
 async def user_pass(client: TelegramClient) -> int:
+    """Use the same single search slot as manual and background discovery."""
+    global _stop_requested
+    if _search_lock.locked():
+        return 0
+    async with _search_lock:
+        _stop_requested = False
+        try:
+            await _check_deferred(client)
+            return await _user_pass(client)
+        except SearchDeferred as exc:
+            await save_last(f"Telegram отложил поиск на {int(exc.seconds) + 1} сек.; запрос пользователя сохранён")
+            raise
+
+
+async def _user_pass(client: TelegramClient) -> int:
     """Запросы пользователей («🔎 Найти группы для меня»): новые — сразу, остальные — раз в user_search_days.
     Каждому — сообщение с итогом. Возвращает число новых групп. ConnectionError — связь потеряна."""
-    global _stop_requested
-    _stop_requested = False  # прошлое «⏹ Остановить поиск» не должно навсегда выключать поиск для пользователей
     async with Session() as s:
         if await settings.get(s, "scout_grow") != "1":
             return 0  # владелец остановил поиск и вступление (⚙️ «Новые группы»)
@@ -408,9 +474,22 @@ async def user_pass(client: TelegramClient) -> int:
 
 
 async def discover(client: TelegramClient, report: bool = False) -> int:
+    if _search_lock.locked():
+        if report:
+            await notify._send("🔍 Поиск уже идёт. Прогресс — 🔍 Группы → 🔍 Поиск и вступление. Второй проход не запущен.")
+        return 0
+    async with _search_lock:
+        return await _guarded_discover(client, report)
+
+
+async def _guarded_discover(client: TelegramClient, report: bool = False) -> int:
     """Публичный запуск: неожиданный сбой тоже виден владельцу в последнем поиске."""
     try:
+        await _check_deferred(client)
         return await _discover(client, report)
+    except SearchDeferred as exc:
+        await save_last(f"Telegram отложил поиск на {int(exc.seconds) + 1} сек.; недоделанный запрос сохранён")
+        raise
     except ConnectionError:
         raise  # подробный результат и откат смещений уже сохранены
     except asyncio.CancelledError:
@@ -445,7 +524,9 @@ async def _discover(client: TelegramClient, report: bool = False) -> int:
         raise ConnectionError("разведчик без связи")
     await save_last("поиск начат — проверяю запросы пользователей и готовлю запросы своего региона")
     try:
-        await user_pass(client)
+        await _user_pass(client)
+    except SearchDeferred:
+        raise
     except ConnectionError:
         await save_last("поиск прервался на запросах пользователей: нет связи с Telegram — повторю через 10 мин")
         raise
@@ -464,31 +545,42 @@ async def _discover(client: TelegramClient, report: bool = False) -> int:
     lost = False
     done = completed = 0
     in_stage = 0
+    deferred = None
     stage_part = sum(_last_parts[:st]), sum(_last_parts[:st + 1])  # запросы круга текущего этапа в пачке
-    for q in queries:
-        if _stop_requested:
-            break
-        done += 1
-        c = await _run_query(client, q, opt)
-        if c is None:
-            lost = True
-            break
-        if not _stop_requested:
-            completed += 1
-        if stage_part[0] < done <= stage_part[1]:
-            in_stage += c["found"]
-        found += c["found"]
-        known += c["known"]
-        small += c["small"]
-        junked += c["junked"]
-        errors += c["errors"]
-        await save_last(f"поиск идёт: этап «{STAGE_LABELS[st]}», запросов {done} из {len(queries)}, "
-                        f"новых {found}, уже знали {known}, мелких или тихих {small}, реклама/флуд {junked}")
-        await asyncio.sleep(random.uniform(10, 30))
-    if lost or _stop_requested:  # не терять недоделанные запросы при обрыве ИЛИ кнопке «стоп»
+    try:
+        for q in queries:
+            if _stop_requested:
+                break
+            done += 1
+            try:
+                c = await _run_query(client, q, opt)
+            except SearchDeferred as exc:
+                deferred = exc
+                break
+            if c is None:
+                lost = True
+                break
+            if not _stop_requested:
+                completed += 1
+            if stage_part[0] < done <= stage_part[1]:
+                in_stage += c["found"]
+            found += c["found"]
+            known += c["known"]
+            small += c["small"]
+            junked += c["junked"]
+            errors += c["errors"]
+            await save_last(f"поиск идёт: этап «{STAGE_LABELS[st]}», запросов {done} из {len(queries)}, "
+                            f"новых {found}, уже знали {known}, мелких или тихих {small}, реклама/флуд {junked}")
+            await asyncio.sleep(random.uniform(10, 30))
+    except BaseException:
         await rewind_tiers(completed)
-    await stage_after_pass(in_stage, completed=not lost and not _stop_requested)
-    summary = (f"этап «{STAGE_LABELS[st]}», запросов {done - lost} из {total}, новых {found}, уже знали {known}, "
+        raise
+    if lost or deferred or _stop_requested:
+        await rewind_tiers(completed)
+    await stage_after_pass(in_stage, completed=not lost and not deferred and not _stop_requested)
+    if deferred:
+        raise deferred
+    summary = (f"этап «{STAGE_LABELS[st]}», запросов {completed} из {len(queries)} за проход (всего {total}), новых {found}, уже знали {known}, "
                f"мелких или тихих {small}" + (f", реклама/флуд {junked}" if junked else "")
                + (f", ошибок {errors}" if errors else "")
                + (" — остановлен пользователем, недоделанные запросы сохранены" if _stop_requested else "")
@@ -522,6 +614,8 @@ async def rewind_tiers(completed: int) -> None:
             row = await s.get(Setting, TIER_KEYS[i])
             if undone > 0 and row and tiers[i] and row.value.isdigit():
                 row.value = str((int(row.value) - undone) % len(tiers[i]))
+                if i == await stage(s):
+                    await settings.put(s, STAGE_WRAP_KEY, "0")
         await s.commit()
 
 

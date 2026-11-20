@@ -1,6 +1,7 @@
 """Разведчики: читают сообщения групп (только чтение!), следят за здоровьем сессий."""
 import asyncio
 import logging
+from collections import defaultdict
 
 from sqlalchemy import select
 from telethon import TelegramClient, events
@@ -39,33 +40,44 @@ def public_username(chat) -> str:
 class ScoutManager:
     def __init__(self) -> None:
         self.clients: dict[int, TelegramClient] = {}
+        self._attach_locks = defaultdict(asyncio.Lock)
 
     async def start(self) -> None:
         async with Session() as s:
-            accounts = (await s.scalars(select(ScoutAccount).where(ScoutAccount.enabled))).all()
+            accounts = (await s.scalars(select(ScoutAccount).where(
+                ScoutAccount.enabled, ScoutAccount.status.in_(("new", "ok"))))).all()
         for acc in accounts:
             if acc.session:
                 await self.attach(acc)
 
     async def attach(self, acc: ScoutAccount) -> None:
+        async with self._attach_locks[acc.id]:
+            await self._attach(acc)
+
+    async def _attach(self, acc: ScoutAccount) -> None:
         """Запустить (или перезапустить) аккаунт: можно вызывать из бота без правки кода."""
         old = self.clients.pop(acc.id, None)
         if old:
             await old.disconnect()
         client = make_client(acc)
         try:
-            await client.connect()
-            if not await client.is_user_authorized():
+            await asyncio.wait_for(client.connect(), 45)
+            if not await asyncio.wait_for(client.is_user_authorized(), 20):
                 raise AuthKeyUnregisteredError(request=None)
         except DEAD as e:
+            await self._disconnect_failed(client)
             await self._mark(acc.id, "dead", f"Сессия разведчика «{acc.name}» не авторизована: {type(e).__name__}")
             return
         except Exception:
+            await self._disconnect_failed(client)
             log.exception("не удалось подключить %s", acc.name)
             await notify.alert(f"Не удалось подключить разведчика «{acc.name}» (см. логи). Повторю при следующей проверке.")
             return
+        except asyncio.CancelledError:
+            await self._disconnect_failed(client)
+            raise
         try:  # запоминаем Telegram ID аккаунта: его рекламные посты в группах не должны стать «заявками»
-            me = await client.get_me()
+            me = await asyncio.wait_for(client.get_me(), 20)
             async with Session() as s:
                 row = await s.get(ScoutAccount, acc.id)
                 if row is not None and me is not None and row.tg_user_id != me.id:
@@ -78,6 +90,13 @@ class ScoutManager:
         await self._mark(acc.id, "ok")
         asyncio.create_task(self._tidy(client, acc.id))
         log.info("разведчик %s запущен", acc.name)
+
+    @staticmethod
+    async def _disconnect_failed(client) -> None:
+        try:
+            await asyncio.wait_for(client.disconnect(), 10)
+        except Exception:
+            log.warning("не удалось закрыть неудачное подключение разведчика")
 
     async def _tidy(self, client: TelegramClient, acc_id: int) -> None:
         """При запуске разложить уже вступленные группы по папкам."""
@@ -145,14 +164,32 @@ class ScoutManager:
         """Каждые 5 минут проверяет сессии; при обрыве — переподключает, при бане — шлёт алерт."""
         while True:
             await asyncio.sleep(300)
+            try:
+                await self.recover_missing()
+            except Exception:
+                log.exception("восстановление отсутствующих разведчиков")
             for acc_id, client in list(self.clients.items()):
                 try:
                     try:
                         if not client.is_connected():
-                            await client.connect()
-                        await client.get_me()
+                            await asyncio.wait_for(client.connect(), 45)
+                        await asyncio.wait_for(client.get_me(), 20)
                     except DEAD as e:
                         await self.detach(acc_id)
                         await self._mark(acc_id, "dead", f"Аккаунт-разведчик #{acc_id} вылетел: {type(e).__name__}. Нужен повторный вход.")
                 except Exception:  # в том числе ошибка базы в _mark — сторож не должен остановиться
                     log.exception("проверка разведчика #%s", acc_id)
+
+    async def recover_missing(self) -> None:
+        """Retry temporary initial failures, leaving disabled/revoked accounts alone."""
+        async with Session() as s:
+            accounts = (await s.scalars(select(ScoutAccount))).all()
+        for acc in accounts:
+            if not acc.enabled or acc.status in ("dead", "limited"):
+                if acc.id in self.clients:
+                    await self.detach(acc.id)
+                continue
+            if acc.session and acc.id not in self.clients:
+                async with self._attach_locks[acc.id]:
+                    if acc.id not in self.clients:
+                        await self._attach(acc)
