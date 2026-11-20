@@ -185,9 +185,13 @@ class ScoutManager:
         async with Session() as s:
             accounts = (await s.scalars(select(ScoutAccount))).all()
         for acc in accounts:
-            if not acc.enabled or acc.status in ("dead", "limited"):
+            if not acc.enabled or acc.status == "dead":
                 if acc.id in self.clients:
                     await self.detach(acc.id)
+                continue
+            if acc.status == "limited":
+                # Posting restrictions do not revoke an existing reading session.
+                # Do not reconnect it automatically or disconnect healthy intake.
                 continue
             if acc.session and acc.id not in self.clients:
                 async with self._attach_locks[acc.id]:

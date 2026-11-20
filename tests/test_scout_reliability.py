@@ -113,6 +113,18 @@ async def test_recovery_skips_revoked_and_limited_accounts(maker,monkeypatch):
     attach.assert_not_awaited()
 
 
+async def test_posting_limit_does_not_disconnect_existing_reader(maker):
+    async with maker() as s:
+        acc=ScoutAccount(name='reader',api_id=1,api_hash='test',session='synthetic',status='limited')
+        s.add(acc);await s.commit()
+    m=manager_mod.ScoutManager()
+    reader=SimpleNamespace(disconnect=AsyncMock())
+    m.clients[acc.id]=reader
+    await m.recover_missing()
+    assert m.clients[acc.id] is reader
+    reader.disconnect.assert_not_awaited()
+
+
 async def test_floodwait_persists_cooldown_and_does_not_sleep(maker,monkeypatch):
     class Client:
         _crm_account_id=99
