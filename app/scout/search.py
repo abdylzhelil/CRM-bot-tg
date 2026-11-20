@@ -93,7 +93,10 @@ async def is_covered(s, tg_id: int) -> bool:
     if feed is not None and feed.enabled:
         return True
     g = await s.scalar(select(Group).where(Group.tg_id == tg_id))
-    return g is not None and g.status == "joined"
+    if g is None or g.status != "joined":
+        return False
+    # A Group created by feed.message is not a scout or CRM-bot membership.
+    return bool(g.bot_member or g.account_id is not None or feed is None)
 
 
 PER_PASS = 20          # запросов за один проход (больше — Telegram начнёт притормаживать поиск)
@@ -322,7 +325,8 @@ async def _run_query(client: TelegramClient, q: str, opt: dict, owner=None) -> d
         async with Session() as s:
             old = await s.scalar(select(Group).where(Group.tg_id == tg_id))
             feed = await s.get(FeedChat, tg_id)
-            revisit_covered = (old is not None and old.status == "covered" and old.account_id is None
+            revisit_covered = (old is not None and old.status in ("covered", "joined")
+                               and old.account_id is None and not old.bot_member
                                and feed is not None and not feed.enabled)
             if old is not None and _recheck_small(old):
                 await s.delete(old)  # была маленькой/тихой месяц назад — посмотрим заново (могла вырасти)

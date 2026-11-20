@@ -185,12 +185,14 @@ async def test_duplicate_search_and_user_pass_do_not_overlap(monkeypatch):
 
 
 @pytest.mark.parametrize('mode,expected',[('auto','approved'),('semi','candidate')])
-async def test_covered_group_is_rechecked_after_feed_disabled(maker,monkeypatch,mode,expected):
+@pytest.mark.parametrize('old_status',['covered','joined'])
+async def test_covered_group_is_rechecked_after_feed_disabled(maker,monkeypatch,mode,expected,old_status):
     from app.services import settings
     async with maker() as s:
-        g=Group(tg_id=-98709,title='old title',status='covered',wanted_by=77,wanted_search=7)
+        g=Group(tg_id=-98709,title='old title',status=old_status,wanted_by=77,wanted_search=7)
         s.add_all([g,FeedChat(tg_id=-98709,title='local',enabled=False)])
         await s.commit();gid=g.id
+        assert not await search.is_covered(s,-98709)
         await settings.put(s,'mode',mode)
         options=await search._options(s)
     class Client:
@@ -207,6 +209,14 @@ async def test_covered_group_is_rechecked_after_feed_disabled(maker,monkeypatch,
         rows=(await s.scalars(select(Group).where(Group.tg_id==-98709))).all()
         assert len(rows)==1 and rows[0].id==gid and rows[0].status==expected
         assert rows[0].wanted_by==77 and rows[0].wanted_search==7
+
+
+async def test_disabled_feed_does_not_duplicate_active_crm_bot(maker):
+    async with maker() as s:
+        s.add_all([Group(tg_id=-98710,title='own bot',status='joined',bot_member=True),
+                   FeedChat(tg_id=-98710,title='own bot',enabled=False)])
+        await s.commit()
+        assert await search.is_covered(s,-98710)
 
 
 async def test_interrupted_wrapped_batch_does_not_complete_region(maker,monkeypatch,tgbot):
