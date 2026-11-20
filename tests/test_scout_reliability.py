@@ -39,6 +39,7 @@ async def test_disabled_feed_allows_approved_group_to_join(maker,monkeypatch):
     from app.scout import folders
     async with maker() as s:
         s.add(ScoutAccount(id=97,name='join',api_id=1,api_hash='test'))
+        await s.flush()
         s.add_all([Group(tg_id=-98708,username='synthetic',title='Каспийск',city='Каспийск',
                          region='Дагестан',status='approved'),
                    FeedChat(tg_id=-98708,title='Каспийск',enabled=False)])
@@ -56,6 +57,7 @@ async def test_disabled_feed_allows_approved_group_to_join(maker,monkeypatch):
 async def test_rotation_keeps_every_protected_source(maker,monkeypatch,protection):
     async with maker() as s:
         s.add(ScoutAccount(id=99,name='synthetic',api_id=1,api_hash='test'))
+        await s.flush()
         s.add_all([Group(tg_id=-98702,title='protected',account_id=99,status='joined',
                          joined_at=now()-timedelta(days=60),**protection),
                    Group(tg_id=-98703,title='ordinary',account_id=99,status='joined',
