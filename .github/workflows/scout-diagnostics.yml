@@ -57,3 +57,5 @@ jobs:
           timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))'
           REMOTE
 # Read-only CRM preflight for scout reliability update.
+
+# Verify live CRM after successful scout reliability deployment, 2026-11-21.
