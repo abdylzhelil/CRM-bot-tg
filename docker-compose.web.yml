@@ -1,0 +1,13 @@
+# Дополнение для мини-приложения (подключается строкой COMPOSE_FILE в .env, см. docs/MINIAPP_SETUP.md).
+# Бот модерации уже держит HTTPS на портах 80/443 (его Caddy). Мы не ставим второй: подключаем CRM к сети этого Caddy,
+# а в его Caddyfile добавляется один блок про адрес CRM. Без этого файла CRM работает как раньше.
+services:
+  bot:
+    networks:
+      webproxy:
+        aliases: [crm-web]
+
+networks:
+  webproxy:
+    external: true
+    name: tg-group-bot_default

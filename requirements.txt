@@ -1,0 +1,11 @@
+aiogram>=3.14,<4  # 3.14+: кнопка «скопировать» (CopyTextButton)
+anthropic>=1.13,<2
+telethon>=1.36,<2
+sqlalchemy[asyncio]>=2.0,<3
+aiosqlite>=0.19
+asyncpg>=0.29
+pymorphy3>=2.0
+pymorphy3-dicts-ru
+python-dotenv>=1.0
+python-socks[asyncio]>=2.4
+tzdata
