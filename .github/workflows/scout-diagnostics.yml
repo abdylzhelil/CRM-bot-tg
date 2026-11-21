@@ -60,19 +60,18 @@ jobs:
           from datetime import timedelta
           from sqlalchemy import select,func,text
           from app.db import Session
-          from app.models import User,Lead,Delivery,Client,Group,ScoutAccount,now
+          from app.models import User,Delivery,Client,Group,ScoutAccount,now
           from app.services import settings
           async def main():
               async with Session() as s:
                   await s.execute(text("PRAGMA query_only=ON"))
                   week=now()-timedelta(days=7)
-                  async def count(model,*conditions):
-                      return await s.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
-                  out={"measured_at_utc":now().isoformat(),"active_users":await count(User,~User.is_admin,User.onboarded,~User.blocked),"scout_joined_groups":await count(Group,Group.status=="joined",Group.account_id.is_not(None)),"queue":await count(Group,Group.status=="approved"),"search_interval_h":await settings.get(s,"search_interval_h"),"last_search":await settings.raw(s,"search_last"),"accounts":dict((await s.execute(select(ScoutAccount.status,func.count()).where(ScoutAccount.enabled).group_by(ScoutAccount.status))).all())}
+                  out={"measured_at_utc":now().isoformat(),"search_interval_h":await settings.get(s,"search_interval_h"),"last_search":await settings.raw(s,"search_last")}
+                  out["scout_joined_groups"]=await s.scalar(select(func.count()).select_from(Group).where(Group.status=="joined",Group.account_id.is_not(None)))
+                  out["queue"]=await s.scalar(select(func.count()).select_from(Group).where(Group.status=="approved"))
                   out["nonadmin_deliveries_7d"]=dict((await s.execute(select(Delivery.status,func.count()).join(User,User.tg_id==Delivery.user_id).where(~User.is_admin,Delivery.created_at>week).group_by(Delivery.status))).all())
                   out["nonadmin_clients_added_7d"]=await s.scalar(select(func.count()).select_from(Client).join(User,User.tg_id==Client.user_id).where(~User.is_admin,Client.created_at>week)) or 0
-                  out["all_lead_task_rows_7d"]=await count(Lead,Lead.created_at>week)
-                  assert not s.dirty
+                  out["accounts"]=dict((await s.execute(select(ScoutAccount.status,func.count()).where(ScoutAccount.enabled).group_by(ScoutAccount.status))).all())
                   print("TECHNICAL_PILOT_LIVE:",json.dumps(out,ensure_ascii=False))
           asyncio.run(main())
           PILOT_PY
