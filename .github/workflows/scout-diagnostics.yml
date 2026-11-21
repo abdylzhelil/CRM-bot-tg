@@ -54,27 +54,7 @@ jobs:
           printf 'CRM_SOURCE: '
           git rev-parse HEAD
           python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("CRM_STORAGE:",json.dumps({"free_gib":round(d.free/2**30,2)}))'
-          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))' </dev/null
-          timeout 60 docker compose exec -T -i bot python - <<'PILOT_PY'
-          import asyncio,json
-          from datetime import timedelta
-          from sqlalchemy import select,func,text
-          from app.db import Session
-          from app.models import User,Delivery,Client,Group,ScoutAccount,now
-          from app.services import settings
-          async def main():
-              async with Session() as s:
-                  await s.execute(text("PRAGMA query_only=ON"))
-                  week=now()-timedelta(days=7)
-                  out={"measured_at_utc":now().isoformat(),"search_interval_h":await settings.get(s,"search_interval_h"),"last_search":await settings.raw(s,"search_last")}
-                  out["scout_joined_groups"]=await s.scalar(select(func.count()).select_from(Group).where(Group.status=="joined",Group.account_id.is_not(None)))
-                  out["queue"]=await s.scalar(select(func.count()).select_from(Group).where(Group.status=="approved"))
-                  out["nonadmin_deliveries_7d"]=dict((await s.execute(select(Delivery.status,func.count()).join(User,User.tg_id==Delivery.user_id).where(~User.is_admin,Delivery.created_at>week).group_by(Delivery.status))).all())
-                  out["nonadmin_clients_added_7d"]=await s.scalar(select(func.count()).select_from(Client).join(User,User.tg_id==Client.user_id).where(~User.is_admin,Client.created_at>week)) or 0
-                  out["accounts"]=dict((await s.execute(select(ScoutAccount.status,func.count()).where(ScoutAccount.enabled).group_by(ScoutAccount.status))).all())
-                  print("TECHNICAL_PILOT_LIVE:",json.dumps(out,ensure_ascii=False))
-          asyncio.run(main())
-          PILOT_PY
+          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))'
           REMOTE
 # Read-only CRM preflight for scout reliability update.
 
