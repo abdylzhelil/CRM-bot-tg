@@ -1,0 +1,133 @@
+"""Администратор: проверка групп, добавленных пользователями."""
+from aiogram import F, Router
+from aiogram.types import CallbackQuery
+from sqlalchemy import select
+
+from app.bot.common import esc, kb, reply
+from app.bot.handlers.catalog import KIND
+from app.db import Session
+from app.models import Category, Group, User
+from app.services import ads, catalog, settings
+
+router = Router()
+
+
+async def card(g: Group) -> tuple[str, object]:
+    async with Session() as s:
+        cat = await s.get(Category, g.category_id) if g.category_id else None
+        who = await s.get(User, g.submitted_by)
+    name = (who.name or str(who.tg_id)) if who else str(g.submitted_by)
+    text = (
+        f"{KIND.get(g.kind, '')} <b>{esc(g.title)}</b> — <a href=\"https://t.me/{esc(g.username)}\">@{esc(g.username)}</a>\n"
+        f"Участников: {g.members} · {'канал' if g.kind == 'channel' else 'группа'}\n"
+        f"Ниша: {esc(cat.name) if cat else '—'} · город: {esc(g.city or 'вся Россия')}\n"
+        f"Добавил(а): {esc(name)}"
+    )
+    return text, kb([[("✅ Одобрить", f"up:ok:{g.id}"), ("❌ Отклонить", f"up:no:{g.id}")]])
+
+
+@router.callback_query(F.data == "up:list")
+async def pending_list(cb: CallbackQuery) -> None:
+    async with Session() as s:
+        groups = (await s.scalars(select(Group).where(Group.status == "pending").order_by(Group.submitted_at).limit(5))).all()
+        total = await catalog.pending_count(s)
+        rejected = await catalog.rejected_count(s)
+    rej_row = [(f"❌ Отклонённые {rejected}", "up:rej")]
+    if not groups:
+        return await reply(cb, "📝 Новых групп от пользователей нет.", kb([rej_row, [("◀️ Назад", "gr:menu")]]))
+    await cb.answer()
+    await cb.message.answer(f"📝 Группы на проверке: {total} (показаны первые {len(groups)})", reply_markup=kb([rej_row]))
+    for g in groups:
+        text, markup = await card(g)
+        await cb.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+
+
+@router.callback_query(F.data.regexp(r"^up:(ok|no):\d+$"))
+async def decide(cb: CallbackQuery) -> None:
+    _, action, gid = cb.data.split(":")
+    async with Session() as s:
+        g = await s.get(Group, int(gid))
+        if g is None or g.status != "pending":
+            return await cb.answer("Уже обработано", show_alert=True)
+        title, owner = g.title, g.submitted_by
+        if action == "ok":
+            await catalog.approve(s, g)
+        else:
+            await catalog.reject(s, g)
+    done = [("✔ Одобрена", "noop")] if action == "ok" else [("✔ Отклонена", "noop"), ("↩️ Всё-таки одобрить", f"up:rok:{gid}")]
+    await cb.message.edit_reply_markup(reply_markup=kb([done]))
+    await cb.answer()
+    text = (f"✅ Ваша группа «{esc(title)}» одобрена и добавлена в каталог. За заявки из неё вы получите бонусы 🎁"
+            if action == "ok" else f"❌ Группа «{esc(title)}» не прошла проверку. Если что-то было не так (ниша, город) — "
+            "исправьте и подайте снова: 🌐 Каталог → 📂 Мои группы → 🔄 Подать снова.")
+    try:
+        await cb.bot.send_message(owner, text)
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "up:rej")
+async def rejected_list(cb: CallbackQuery) -> None:
+    """Отклонённые группы пользователей: можно передумать и одобрить."""
+    async with Session() as s:
+        groups = (await s.scalars(select(Group).where(Group.status == "rejected", Group.submitted_by != 0)
+                                  .order_by(Group.submitted_at.desc()).limit(10))).all()
+    if not groups:
+        return await reply(cb, "❌ Отклонённых групп нет.", kb([[("◀️ Назад", "up:list")]]))
+    await cb.answer()
+    await cb.message.answer(f"❌ Отклонённые группы (последние {len(groups)}). Пользователь может исправить и подать снова; "
+                            "вы — одобрить сразу:")
+    for g in groups:
+        text, _ = await card(g)
+        await cb.message.answer(text, reply_markup=kb([[("↩️ Одобрить", f"up:rok:{g.id}")]]), disable_web_page_preview=True)
+
+
+@router.callback_query(F.data.regexp(r"^up:rok:\d+$"))
+async def restore(cb: CallbackQuery) -> None:
+    """Передумал: отклонённая группа всё-таки идёт в каталог."""
+    async with Session() as s:
+        g = await s.get(Group, int(cb.data.split(":")[2]))
+        if g is None or g.status != "rejected" or not g.submitted_by:
+            return await cb.answer("Уже обработано", show_alert=True)
+        title, owner = g.title, g.submitted_by
+        await catalog.approve(s, g)
+    await cb.message.edit_reply_markup(reply_markup=kb([[("✔ Одобрена", "noop")]]))
+    await cb.answer()
+    try:
+        await cb.bot.send_message(owner, f"✅ Ваша группа «{esc(title)}» одобрена и добавлена в каталог. "
+                                  "За заявки из неё вы получите бонусы 🎁")
+    except Exception:
+        pass
+
+
+# ---------- реклама групп ----------
+async def ad_card(g: Group, user: User):
+    async with Session() as s:
+        cost, days = await settings.get_int(s, "ad_leads"), await settings.get_int(s, "ad_days")
+    text = (f"{KIND.get(g.kind, '')} <b>{esc(g.title)}</b> — <a href=\"https://t.me/{esc(g.username)}\">@{esc(g.username)}</a>\n"
+            f"Просит рекламу на {days} дн. за {cost} заявок (доступно {ads.available(g)})\n"
+            f"Заказал(а): {esc(user.name or str(user.tg_id))}")
+    return text, kb([[("✅ Подтвердить", f"adm_ad:ok:{g.id}"), ("❌ Отклонить", f"adm_ad:no:{g.id}")]])
+
+
+@router.callback_query(F.data.regexp(r"^adm_ad:(ok|no):\d+$"))
+async def ad_decide(cb: CallbackQuery) -> None:
+    _, action, gid = cb.data.split(":")
+    async with Session() as s:
+        g = await s.get(Group, int(gid))
+        if g is None or not g.ad_pending:
+            return await cb.answer("Уже обработано", show_alert=True)
+        title, owner = g.title, g.submitted_by
+        if action == "ok":
+            await ads.approve(s, g)
+            until = g.ad_until
+        else:
+            await ads.reject(s, g)
+    await cb.message.edit_reply_markup(reply_markup=kb([[("✔ Подтверждена" if action == "ok" else "✔ Отклонена", "noop")]]))
+    await cb.answer()
+    text = (f"📢 Реклама группы «{esc(title)}» запущена до {until:%d.%m.%Y}!" if action == "ok"
+            else f"❌ Заказ рекламы группы «{esc(title)}» отклонён, заявки не списаны.")
+    try:
+        await cb.bot.send_message(owner, text)
+    except Exception:
+        pass

@@ -1,0 +1,42 @@
+"""Synthetic local-service pilot. No real Telegram messages or AI/provider calls."""
+import pytest
+from sqlalchemy import select
+from app.models import Delivery,User,Client,Group
+from app.services import intake,lead_actions,settings
+from app.services.pipeline import Incoming
+from app.services.antispam import AuthorInfo
+from tests.conftest import make_user
+
+@pytest.mark.parametrize('niche,lead_text',[
+    ('Ремонт и строительство','В Каспийске нужен сантехник починить кран'),
+    ('Перевозки и доставка','В Каспийске нужны грузчики перевезти шкаф'),
+    ('Красота','В Каспийске ищу мастера маникюра'),
+])
+async def test_local_specialist_receives_request_and_saves_client(maker,tgbot,niche,lead_text):
+    await make_user(maker,901,niches=(niche,),city='Каспийск',plan='full',only_city=True)
+    await make_user(maker,902,niches=(niche,),city='Москва',plan='full',only_city=True)
+    await make_user(maker,903,niches=('Сайты',),city='Каспийск',plan='full',only_city=True)
+    async with maker() as s:
+        await settings.put(s,'ai_classify','0')
+        s.add(Group(tg_id=-99001,title='Объявления Каспийск',status='joined',city='Каспийск',region='Дагестан'))
+        await s.commit()
+    incoming=Incoming(text=lead_text,author=AuthorInfo(user_id=99010,username='synthetic_client',first_name='Тест'),
+                      group_tg_id=-99001,group_title='Объявления Каспийск',message_id=10)
+    lead=await intake.handle(incoming)
+    assert lead is not None,'Matching request lost'
+    async with maker() as s:
+        deliveries=(await s.scalars(select(Delivery).where(Delivery.lead_id==lead.id))).all()
+        mine=next(d for d in deliveries if d.user_id==901)
+        assert mine.sent
+        assert not any(d.user_id in (902,903) for d in deliveries)
+        user=await s.get(User,901)
+        d,owned=await lead_actions.own_delivery(s,user,mine.id)
+        assert d is not None
+        draft=await lead_actions.rule_draft(s,user,owned)
+        assert draft
+        client=await lead_actions.take(s,user,d,owned)
+        await s.commit()
+        assert client.user_id==901 and client.tg_id==99010
+    assert tgbot.texts(901) and not tgbot.texts(902) and not tgbot.texts(903)
+    assert await intake.handle(incoming) is None
+    assert len(tgbot.texts(901))==1

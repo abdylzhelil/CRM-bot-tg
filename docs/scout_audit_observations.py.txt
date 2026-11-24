@@ -1,0 +1,84 @@
+"""Assertions prove current scout defects on synthetic fixtures, not fixes."""
+import asyncio
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import pytest
+from sqlalchemy import select
+from app.models import Group, FeedChat, ScoutAccount, SearchQuery, now
+from app.scout import search, joiner, manager as manager_mod
+from app.services import settings, groupcheck
+
+async def test_observed_local_manual_query_delayed_until_russia_tier(maker):
+    async with maker() as s:
+        s.add(SearchQuery(text='ремонт квартир Каспийск',enabled=True))
+        await s.commit()
+        tiers=await search.tier_queries(s)
+        assert 'ремонт квартир Каспийск' not in tiers[0]
+        assert 'ремонт квартир Каспийск' in tiers[2]
+        batch,stage,_=await search.next_batch(s)
+        assert stage==0 and 'ремонт квартир Каспийск' not in batch
+
+async def test_observed_disabled_feed_still_blocks_scout(maker):
+    async with maker() as s:
+        s.add(FeedChat(tg_id=-98701,title='synthetic local',enabled=False))
+        await s.commit()
+        assert await search.is_covered(s,-98701) is True
+
+async def test_observed_rotation_leaves_protected_catalog_group(maker,monkeypatch):
+    async with maker() as s:
+        s.add(ScoutAccount(id=99,name='synthetic',api_id=1,api_hash='test'))
+        g=Group(tg_id=-98702,title='synthetic catalog',account_id=99,status='joined',catalog=True,joined_at=now()-timedelta(days=60))
+        s.add(g)
+        await s.commit()
+        assert groupcheck.protected(g)
+    class Client:
+        async def get_entity(self,gid):return gid
+        async def __call__(self,request):pass
+    monkeypatch.setattr(joiner.asyncio,'sleep',AsyncMock())
+    assert await joiner.rotate(Client(),99)==1
+    async with maker() as s:
+        assert (await s.scalar(select(Group).where(Group.tg_id==-98702))).status=='left'
+
+async def test_observed_failed_initial_attach_never_retried_by_watchdog(maker,monkeypatch):
+    async with maker() as s:
+        acc=ScoutAccount(id=98,name='synthetic retry',api_id=1,api_hash='test',session='synthetic')
+        s.add(acc);await s.commit()
+    client=SimpleNamespace(connect=AsyncMock(side_effect=ConnectionError('synthetic outage')))
+    monkeypatch.setattr(manager_mod,'make_client',lambda acc:client)
+    monkeypatch.setattr(manager_mod.notify,'alert',AsyncMock())
+    m=manager_mod.ScoutManager()
+    await m.attach(acc)
+    assert not m.clients
+    calls=0
+    async def tick(delay):
+        nonlocal calls
+        calls+=1
+        if calls>1:raise asyncio.CancelledError()
+    monkeypatch.setattr(manager_mod.asyncio,'sleep',tick)
+    with pytest.raises(asyncio.CancelledError):await m.watchdog()
+    assert client.connect.await_count==1
+
+async def test_observed_floodwait_consumes_search_query_as_completed(monkeypatch):
+    from telethon.errors import FloodWaitError
+    class Client:
+        async def __call__(self,request):raise FloodWaitError(request=request,capture=5)
+    monkeypatch.setattr(search.asyncio,'sleep',AsyncMock())
+    counters=await search._run_query(Client(),'Махачкала',{})
+    assert counters=={'found':0,'known':0,'small':0,'junked':0,'errors':0}
+
+async def test_observed_two_manual_or_background_searches_overlap(monkeypatch):
+    entered=0
+    max_active=0
+    release=asyncio.Event()
+    async def operation(client,report=False):
+        nonlocal entered,max_active
+        entered+=1
+        max_active=max(max_active,entered)
+        if entered==2:release.set()
+        await release.wait()
+        entered-=1
+        return 0
+    monkeypatch.setattr(search,'_discover',operation)
+    await asyncio.wait_for(asyncio.gather(search.discover(object()),search.discover(object())),2)
+    assert max_active==2
