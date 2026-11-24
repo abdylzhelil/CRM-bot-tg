@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app import config
 from app.db import Session
 from app.models import Delivery, Group, Lead, User
-from app.services import mute, quiet, geo, lead_sources
+from app.services import mute, quiet, geo, lead_sources, lead_time
 
 log = logging.getLogger(__name__)
 _bot: Bot | None = None
@@ -100,7 +100,7 @@ def lead_text(lead: Lead, category: str) -> str:
     if lead.suspicious:
         head = "⚠️ Подозрительный"
     else:
-        head = "🔥 Горячий клиент" if quiet.is_hot(lead.text) else "🆕 Новый клиент"
+        head = "🔥 Горячий клиент" if quiet.is_hot(lead.text) else "📋 Заявка"
     who = html.escape(lead.name or "—")
     if lead.username:
         who += f" (@{html.escape(lead.username)})"
@@ -117,7 +117,7 @@ def lead_text(lead: Lead, category: str) -> str:
 
     warn = scam.warning(lead.text)  # «реальное или схема?» — честно пишем, что насторожило
     return (
-        f"{head} | {html.escape(category)}\nКто: {who}\nГруппа: {html.escape(lead.group_title)}\n"
+        f"{head} | {html.escape(category)}\n<b>{lead_time.found_label(lead)}</b>\n{lead_time.PUBLICATION_NOTE}\nКто: {who}\nГруппа: {html.escape(lead.group_title)}\n"
         f"Суть: {text}{place}{link}{spam}" + (f"\n\n{warn}" if warn else "")
     )
 

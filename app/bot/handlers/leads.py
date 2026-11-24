@@ -113,7 +113,7 @@ async def menu_view(user: User) -> tuple[str, object]:
         markup.inline_keyboard.append(kb([[(f"📥 Накопилось без уведомлений · {muted_n}", "ll:muted:0")]]).inline_keyboard[0])
     markup.inline_keyboard.append(kb([[(f"🔕 Уведомления выключены {mute.until_text(row)} — включить" if mute.is_muted(row)
                                         else "🔕 Выключить уведомления на время", "mt:menu")]]).inline_keyboard[0])
-    text = ("📥 <b>Заявки</b> — выберите список, потом нишу; заявки откроются по одной, листайте «◀️ / ▶️»."
+    text = ("📥 <b>Заявки</b> — выберите список, потом нишу; заявки откроются по одной, листайте «◀️ / ▶️».\n«Новые» — ещё не разобранные вами заявки, а не обязательно свежие. В карточке показано, когда бот их нашёл (МСК)."
             + (f"\n⏳ Ещё придут: {waiting}" if waiting else "")
             + (f"\n🔕 Уведомления выключены {mute.until_text(row)} — заявки копятся без сообщений." if mute.is_muted(row) else "")
             + ("\n⚠️ У вас не выбраны ниши. Выберите хотя бы одну, чтобы получать новые заявки." if needs_niches else

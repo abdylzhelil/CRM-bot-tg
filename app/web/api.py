@@ -36,7 +36,7 @@ def _plain(html_text: str) -> str:
 
 
 async def lead_item(s, d: Delivery, lead: Lead) -> dict:
-    from app.services import lead_sources
+    from app.services import lead_sources, lead_time
     return {
         "id": d.id,
         "status": d.status,
@@ -55,6 +55,8 @@ async def lead_item(s, d: Delivery, lead: Lead) -> dict:
         "contact": lead_actions.contact_url(lead),
         "from_colleague": bool(d.from_user),
         "created_at": lead.created_at.isoformat(),
+        "found_at_label": lead_time.found_label(lead),
+        "publication_note": lead_time.PUBLICATION_NOTE,
     }
 
 

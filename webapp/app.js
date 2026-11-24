@@ -180,7 +180,7 @@
       return el("button", { class: "chip" + (t[0] === state.leadsStatus ? " on" : ""), text: t[1], onclick: function () { state.leadsStatus = t[0]; state.leadsCat = 0; state.leadsPlace = ""; renderLeads(); } });
     }));
     var filters = el("div", {});
-    show(el("h1", { text: "Заявки" }), tabs, filters, list, more);
+    show(el("h1", { text: "Заявки" }), el("p", { class: "muted", text: "«Новые» — ещё не разобранные заявки, а не обязательно свежие. Время обнаружения указано по МСК." }), tabs, filters, list, more);
     var lastId = 0;
     function fetchPage() {
       var q = "/api/leads?status=" + state.leadsStatus + (lastId ? "&before=" + lastId : "")
@@ -224,7 +224,7 @@
 
   function leadCard(it) {
     var card = el("div", { class: "card lead" });
-    var head = it.suspicious ? "⚠️ Подозрительный" : (it.hot ? "🔥 Горячий" : "🆕 Новый");
+    var head = it.suspicious ? "⚠️ Подозрительный" : (it.hot ? "🔥 Горячий" : "📋 Заявка");
     var who = (it.name || "—") + (it.username ? " (@" + it.username + ")" : "");
     var reply = el("div", { class: "reply", hidden: "" });
 
@@ -254,6 +254,8 @@
     }
 
     card.appendChild(el("div", { class: "lead-head" }, [el("b", { text: head }), el("span", { class: "muted", text: it.category })]));
+    if (it.found_at_label) card.appendChild(el("b", { text: it.found_at_label }));
+    if (it.publication_note) card.appendChild(el("div", { class: "muted", text: it.publication_note }));
     card.appendChild(el("div", { class: "muted", text: "Кто: " + who }));
     card.appendChild(el("div", { class: "muted", text: "Группа: " + it.group + (it.place ? " · " + it.place : "") }));
     if (it.place_note) card.appendChild(el("div", { class: "muted", text: "📍 " + it.place_note }));
