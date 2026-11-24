@@ -51,26 +51,11 @@ jobs:
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
           [[ "$(git remote get-url origin)" = *abdylzhelil/CRM-bot-tg* ]]
-          timeout 90 docker compose exec -T -i bot python - <<'PARTNER_REVIEW_PY'
-          import asyncio,json,re
-          from sqlalchemy import select,text
-          from app.db import Session
-          from app.models import Group,now
-          from app.services import settings
-          async def main():
-              out=[]
-              async with Session() as s:
-                  await s.execute(text("PRAGMA query_only=ON"))
-                  for g in (await s.scalars(select(Group).where(Group.status=="joined",Group.kind=="group",Group.username!=""))).all():
-                      contacts={}
-                      for line in (g.ad_rules or "").splitlines():
-                          if not re.search(r"администратор|админ[уы:]|по рекламе|сотрудничеств|связ[ьи]|вопрос",line,re.I):continue
-                          if re.search(r"модератор|список ботов|боты:",line,re.I):continue
-                          for match in re.finditer(r"@([A-Za-z][A-Za-z0-9_]{3,31})",line):
-                              contacts[match.group(1)]=line[:200]
-                      out.append({"group":g.title,"public_url":"https://t.me/"+g.username,"city":g.city,"region":g.region,"status":g.offer_status,"contacts":contacts,"cached_rules_available":bool(g.ad_rules)})
-                  print("PARTNER_CONTACT_REVIEW:",json.dumps({"time_utc":now().isoformat(),"percent":await settings.get(s,"board_percent"),"groups":out},ensure_ascii=False))
-          asyncio.run(main())
-          PARTNER_REVIEW_PY
+          printf 'CRM_SOURCE: '
+          git rev-parse HEAD
+          python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("CRM_STORAGE:",json.dumps({"free_gib":round(d.free/2**30,2)}))'
+          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))'
           REMOTE
-# Public contact candidates from cached rules only; query_only, no Telegram API or messages.
+# Read-only CRM preflight for scout reliability update.
+
+# Verify live CRM after successful scout reliability deployment, 2026-11-21.
