@@ -74,15 +74,16 @@ async def test_partial_refund_releases_only_remaining_commission(maker):
         assert (u.credits,u.credits_hold)==(0,0)
 
 
-async def test_released_spent_credits_do_not_go_negative(maker):
+@pytest.mark.parametrize("remaining", [0, 20])
+async def test_released_spent_credits_do_not_go_negative(maker, remaining):
     await sale(maker)
     async with maker() as s:
         tx=await s.scalar(select(CreditTx).where(CreditTx.kind=='board'))
         tx.hold_until=now()-timedelta(days=1)
         await credits.release_due(s)
         u=await s.get(User,81)
-        u.credits=20
-        assert await credits.reverse_payment(s,'yk:partner-ad')==20
+        u.credits=remaining
+        assert await credits.reverse_payment(s,'yk:partner-ad')==remaining
         u.credits=50
         assert await credits.reverse_payment(s,'yk:partner-ad')==0
         assert u.credits==50

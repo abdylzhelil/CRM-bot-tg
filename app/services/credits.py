@@ -291,8 +291,6 @@ async def reverse_payment(s: AsyncSession, charge_id: str, refund_kop=None, paid
                 amount = min(amount, user.credits or 0)
                 user.credits = (user.credits or 0) - amount
                 taken += amount
-        if not amount:
-            continue
         s.add(CreditTx(user_id=tx.user_id, amount=-amount, kind="reverse",
                        note="оплату приглашённого вернули", ref=ref, applied=tx.applied))
     return taken
