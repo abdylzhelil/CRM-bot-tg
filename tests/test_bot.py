@@ -54,7 +54,7 @@ async def test_report_and_notify_text(maker):
     lead = Lead(id=1, author_id=1, username="u", name="N", text="<b>x</b>", text_hash="h", group_title="G",
                 link="https://t.me/g/1", city="Каспийск")
     text = notify.lead_text(lead, "💻 Сайты")
-    assert "&lt;b&gt;" in text and "Новый клиент" in text and "Каспийск" in text
+    assert "&lt;b&gt;" in text and "📋 Заявка" in text and "Каспийск" in text
 
 
 async def test_template_admin_falls_back_to_category_prices(maker):

@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from app.models import now
 
 MOSCOW = timezone(timedelta(hours=3))
-PUBLICATION_NOTE = 'Дата публикации не сохранена — смотрите оригинал сообщения.'
+PUBLICATION_NOTE = 'Дата публикации не сохранена. Если оригинал доступен, посмотрите дату в нём.'
 
 
 def found_label(lead, reference=None):
