@@ -1,21 +1,21 @@
-name: Move retired CRM archive off VPS
+name: Remove verified offsite CRM originals
 on:
   push:
     branches: [crm/scout-diagnostics]
     paths: [.github/workflows/scout-diagnostics.yml]
 permissions:
-  contents: write
+  contents: read
 jobs:
   diagnose:
-    name: Encrypt and export CRM backups
+    name: Free retired CRM disk space
     if: github.repository == 'abdylzhelil/CRM-bot-tg'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 12
     concurrency:
       group: crm-production
       cancel-in-progress: false
     steps:
-      - name: Owner-authorized encrypted offsite export
+      - name: Owner-authorized cleanup after verified encrypted transfer
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
@@ -24,7 +24,6 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.CRM_DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.CRM_DEPLOY_KNOWN_HOSTS }}
           DEPLOY_PATH: ${{ vars.CRM_DEPLOY_PATH }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           : "${DEPLOY_HOST:?Set DEPLOY_HOST}"
@@ -49,156 +48,104 @@ jobs:
             -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
             "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" <<'REMOTE'
           set -euo pipefail
-          umask 077
-          cat > /root/crm-retired/offsite-recipient.pem <<'CERTIFICATE'
-          -----BEGIN CERTIFICATE-----
-          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
-          -----END CERTIFICATE-----
-          CERTIFICATE
-          python3 - <<'PY_PLAN'
-          import pathlib,json,subprocess,hashlib,os,shutil
+          python3 - 7255be714ef7bc0d7cc712c613e567caf049484ad0f5706efb89743399e32035 <<'VERIFIED_CLEANUP'
+          """Remove only the verified retired CRM originals and exclusive unused CRM images."""
+          import pathlib,json,subprocess,hashlib,shutil,os,sys
+          EXPECTED_MANIFEST=sys.argv[1]
+          assert len(EXPECTED_MANIFEST)==64 and all(x in '0123456789abcdef' for x in EXPECTED_MANIFEST)
           root=pathlib.Path('/root/crm-retired').resolve()
-          archive=pathlib.Path((root/'latest-path').read_text().strip()).resolve()
-          assert archive.parent==root and archive.name.startswith('CRM-bot-tg-') and archive.is_dir()
+          plan=json.loads((root/'offsite-export-plan.json').read_text())
+          archive=pathlib.Path(plan['archive'])
+          assert archive==archive.resolve() and archive.parent==root and archive.name.startswith('CRM-bot-tg-') and archive.is_dir()
           assert not pathlib.Path('/root/CRM-bot-tg').exists()
-          ids=subprocess.check_output(['docker','ps','-aq'],text=True).split()
-          containers=json.loads(subprocess.check_output(['docker','inspect',*ids],text=True)) if ids else []
-          assert not any('CRM-bot-tg' in (r.get('Config',{}).get('Labels') or {}).get('com.docker.compose.project.working_dir','') for r in containers)
-          used={r['Image'] for r in containers}
-          rows=[json.loads(line) for line in subprocess.check_output(['docker','image','ls','--no-trunc','--format','{{json .}}'],text=True).splitlines()]
-          candidates=sorted({r['ID'] for r in rows if r['Repository'] in ('crm-bot','crm-rollback')})
-          images=json.loads(subprocess.check_output(['docker','image','inspect',*candidates],text=True)) if candidates else []
-          eligible=[]
-          for image in images:
-              tags=image.get('RepoTags') or []
-              if image['Id'] not in used and tags and all(t.startswith(('crm-bot:','crm-rollback:')) for t in tags):
-                  eligible.append({'id':image['Id'],'tags':tags,'size':image['Size']})
-          plan={'archive':str(archive),'images':eligible,'other_containers':{r['Id']:{'image':r['Image'],'running':r['State']['Running'],'started':r['State']['StartedAt']} for r in containers}}
-          (archive/'offsite-export-plan.json').write_text(json.dumps(plan))
-          manifest={}
-          for p in sorted(archive.rglob('*')):
+          assert (root/'latest-path').read_text().strip()==str(archive)
+          manifest_file=archive/'offsite-manifest.json'
+          assert hashlib.sha256(manifest_file.read_bytes()).hexdigest()==EXPECTED_MANIFEST==plan['manifest_sha256']
+          manifest=json.loads(manifest_file.read_text())
+          actual={}
+          for p in archive.rglob('*'):
               name=p.relative_to(archive).as_posix()
               if name=='offsite-manifest.json':continue
-              if p.is_symlink():manifest[name]={'type':'symlink','target':os.readlink(p)}
+              if p.is_symlink():actual[name]={'type':'symlink','target':os.readlink(p)}
               elif p.is_file():
                   h=hashlib.sha256()
                   with p.open('rb') as f:
                       while chunk:=f.read(1024*1024):h.update(chunk)
-                  manifest[name]={'type':'file','sha256':h.hexdigest(),'size':p.stat().st_size}
-          (archive/'offsite-manifest.json').write_text(json.dumps(manifest,sort_keys=True))
-          plan['manifest_sha256']=hashlib.sha256((archive/'offsite-manifest.json').read_bytes()).hexdigest()
-          (root/'offsite-export-plan.json').write_text(json.dumps(plan))
-          print('CRM_EXPORT_PREPARED:',json.dumps({'files':sum(x['type']=='file' for x in manifest.values()),'images':len(eligible),'image_refs':sum(len(x['tags']) for x in eligible),'image_logical_bytes':sum(x['size'] for x in eligible),'archive_bytes':int(subprocess.check_output(['du','-sb',str(archive)],text=True).split()[0]),'free_bytes':shutil.disk_usage(root).free}))
-          PY_PLAN
+                  actual[name]={'type':'file','sha256':h.hexdigest(),'size':p.stat().st_size}
+          assert actual==manifest, 'Server archive changed since offsite verification; originals preserved'
+          
+          
+          def containers():
+              ids=subprocess.check_output(['docker','ps','-aq'],text=True).split()
+              return json.loads(subprocess.check_output(['docker','inspect',*ids],text=True)) if ids else []
+          
+          
+          def snapshot(rows):
+              return {r['Id']:{'image':r['Image'],'running':r['State']['Running'],'started':r['State']['StartedAt']} for r in rows}
+          
+          
+          def image(ref):
+              r=subprocess.run(['docker','image','inspect',ref],capture_output=True,text=True)
+              if r.returncode:
+                  if 'No such image' in r.stderr or 'No such object' in r.stderr:return None
+                  raise RuntimeError('Docker inspection failed; no further removal')
+              return json.loads(r.stdout)[0]
+          
+          
+          rows=containers();before=snapshot(rows)
+          assert not any('CRM-bot-tg' in (r.get('Config',{}).get('Labels') or {}).get('com.docker.compose.project.working_dir','') for r in rows)
+          for r in rows:
+              for mount in r.get('Mounts',[]):
+                  if mount.get('Type')=='bind':
+                      p=pathlib.Path(mount['Source']).resolve()
+                      assert p!=archive and not p.is_relative_to(archive), 'An existing container uses this archive; removal stopped'
+          used={r['Image'] for r in rows}
+          free_before=shutil.disk_usage(root).free
+          removed_tags=0;refused=0;skipped=0
+          eligible=[]
+          for candidate in plan['images']:
+              current=image(candidate['id'])
+              if current is None:continue
+              tags=current.get('RepoTags') or []
+              if current['Id'] in used or not set(tags)<=set(candidate['tags']) or not all(t.startswith(('crm-bot:','crm-rollback:')) for t in tags):
+                  skipped+=1;continue
+              eligible.append(candidate['id'])
+              for tag in tags:
+                  live=image(tag)
+                  if live is None:continue
+                  if live['Id']!=candidate['id']:
+                      skipped+=1;continue
+                  result=subprocess.run(['docker','image','rm',tag],capture_output=True,text=True)
+                  if result.returncode:refused+=1
+                  elif image(tag) is None:removed_tags+=1
+          # Some parents can only be removed after their children. Retry only the exact
+          # backed-up IDs, with no force and no broad cache/image prune.
+          for _ in range(len(eligible)+1):
+              progress=False
+              used={r['Image'] for r in containers()}
+              for iid in eligible:
+                  current=image(iid)
+                  if current is None or iid in used or current.get('RepoTags'):continue
+                  result=subprocess.run(['docker','image','rm',iid],capture_output=True,text=True)
+                  if result.returncode==0:progress=True
+              if not progress:break
+          remaining=sum(image(iid) is not None for iid in eligible)
+          removed_images=len(eligible)-remaining
+          shutil.rmtree(archive)
+          assert not archive.exists()
+          if (root/'latest-path').read_text().strip()==str(archive):(root/'latest-path').unlink()
+          (root/'offsite-export-plan.json').unlink()
+          cert=root/'offsite-recipient.pem'
+          if cert.exists():cert.unlink()
+          after=snapshot(containers());unchanged=before==after
+          free_after=shutil.disk_usage(root).free
+          result={'server_archive_removed':True,'image_tags_removed':removed_tags,'image_ids_removed':removed_images,
+                  'eligible_image_ids_remaining':remaining,'skipped_images':skipped,'removal_refusals':refused,
+                  'other_containers_unchanged':unchanged,'other_containers':len(after),
+                  'free_bytes_before':free_before,'free_bytes_after':free_after,'free_bytes_gained':free_after-free_before}
+          try:root.rmdir()
+          except OSError:pass
+          print('CRM_OFFSITE_CLEANUP:',json.dumps(result))
+          assert unchanged, 'Other container state changed independently; inspect without modifying it'
+          VERIFIED_CLEANUP
           REMOTE
-          # The remaining SSH calls stream ciphertext only; plaintext stays on the VPS.
-          OUT="$RUNNER_TEMP/crm-offsite"
-          install -m 700 -d "$OUT"
-          crm_ssh() {
-            ssh -T -p "$DEPLOY_PORT" -i "$RUNNER_TEMP/crm-ssh/key" \
-              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-              -o UserKnownHostsFile="$RUNNER_TEMP/crm-ssh/known_hosts" \
-              -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-              "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command"
-          }
-          crm_ssh <<'EXPORT_FILES' > "$OUT/crm-retired-20261124.tar.gz.cms"
-          set -euo pipefail
-          ARCHIVE=$(cat /root/crm-retired/latest-path)
-          [[ "$ARCHIVE" = /root/crm-retired/CRM-bot-tg-* && -d "$ARCHIVE" && ! -e /root/CRM-bot-tg ]]
-          tar -C "$ARCHIVE" -czf - . | openssl cms -encrypt -stream -binary -aes-256-cbc -outform DER /root/crm-retired/offsite-recipient.pem
-          EXPORT_FILES
-          IMAGE_COUNT=$(crm_ssh <<'COUNT_IMAGES'
-          python3 -c 'import json,pathlib; print(len(json.loads(pathlib.Path("/root/crm-retired/offsite-export-plan.json").read_text())["images"]))'
-          COUNT_IMAGES
-          )
-          [[ "$IMAGE_COUNT" =~ ^[0-9]+$ ]]
-          if ((IMAGE_COUNT > 0)); then
-          crm_ssh <<'EXPORT_IMAGES' > "$OUT/crm-images-20261124.docker.tar.gz.cms"
-          set -euo pipefail
-          python3 - <<'SAVE_IMAGES' | gzip -1 | openssl cms -encrypt -stream -binary -aes-256-cbc -outform DER /root/crm-retired/offsite-recipient.pem
-          import json,pathlib,subprocess
-          plan=json.loads(pathlib.Path('/root/crm-retired/offsite-export-plan.json').read_text())
-          refs=[tag for image in plan['images'] for tag in image['tags']]
-          assert refs and all(x.startswith(('crm-bot:','crm-rollback:')) for x in refs)
-          subprocess.run(['docker','image','save',*refs],check=True)
-          SAVE_IMAGES
-          EXPORT_IMAGES
-          fi
-          cat > "$OUT/recipient-cert.pem" <<'PUBLIC_CERT'
-          -----BEGIN CERTIFICATE-----
-          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
-          -----END CERTIFICATE-----
-          PUBLIC_CERT
-          cat > "$OUT/RESTORE.txt" <<'RESTORE'
-          CRM retired backup, 24.11.2026. Encrypted files only.
-          The private recovery key is stored in the owner's private Notion draft, separately from GitHub.
-          First verify SHA256SUMS against the checksums recorded in that private Notion page.
-          Decrypt files: openssl cms -decrypt -binary -inform DER -in crm-retired-20261124.tar.gz.cms -recip recipient-cert.pem -inkey CRM-recovery-key-20261124.txt -out crm-retired-20261124.tar.gz
-          Decrypt images similarly, choosing crm-images-20261124.docker.tar.gz.cms and output crm-images-20261124.docker.tar.gz.
-          The file archive includes offsite-manifest.json for content checks and offsite-export-plan.json for image tags.
-          Do not publish decrypted data, .env, container/Compose snapshots, or Telegram sessions.
-          Restoration and starting CRM require a NEW explicit request by the owner. Modexa must remain unchanged.
-          RESTORE
-          (cd "$OUT" && sha256sum *.cms recipient-cert.pem > SHA256SUMS)
-          assets=("$OUT/crm-retired-20261124.tar.gz.cms" "$OUT/recipient-cert.pem" "$OUT/RESTORE.txt" "$OUT/SHA256SUMS")
-          if [[ -s "$OUT/crm-images-20261124.docker.tar.gz.cms" ]]; then assets+=("$OUT/crm-images-20261124.docker.tar.gz.cms"); fi
-          gh release create crm-retired-backup-20261124 "${assets[@]}" --repo abdylzhelil/CRM-bot-tg \
-            --target ccr-a042c0a9-cjx9fv --title "Encrypted CRM retirement backup · 2026-11-24" --notes-file "$OUT/RESTORE.txt"
-          gh release download crm-retired-backup-20261124 --repo abdylzhelil/CRM-bot-tg --dir "$OUT/readback"
-          (cd "$OUT/readback" && sha256sum -c SHA256SUMS)
-          echo 'CRM_ENCRYPTED_OFFSITE_UPLOAD: verified'
-          du -b "$OUT/"*.cms
