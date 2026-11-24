@@ -10,7 +10,7 @@ from app.bot import notify
 from app.bot.common import COPY_MAX, ask, esc, kb, reply
 from app.db import Session
 from app.models import Category, Client, Delivery, Group, Lead, User, UserCategory, now
-from app.services import ai, draft, lead_actions, mute, referrals, settings, lead_sources
+from app.services import ai, draft, lead_actions, mute, referrals, settings, lead_sources, lead_order
 from app.services.distribute import day_start, root_category
 
 router = Router()
@@ -98,6 +98,7 @@ async def _niches(s, user_id: int, status: str) -> list[tuple[int, str, int]]:
 
 async def menu_view(user: User) -> tuple[str, object]:
     async with Session() as s:
+        order = await lead_order.get(s, user.tg_id)
         cnt = await status_counts(s, user.tg_id)
         waiting = await s.scalar(select(func.count()).select_from(Delivery).where(
             Delivery.user_id == user.tg_id, ~Delivery.sent,
@@ -109,6 +110,8 @@ async def menu_view(user: User) -> tuple[str, object]:
                 UserCategory.user_id == user.tg_id, Category.enabled, ~Category.pending)) or 0
     needs_niches = not user.is_admin and not chosen
     markup = lists_keyboard(cnt)
+    other = "asc" if order == "desc" else "desc"
+    markup.inline_keyboard.append(kb([[(f"↕ {lead_order.ORDERS[order]} — сменить", f"lo:menu:{other}")]]).inline_keyboard[0])
     if muted_n:
         markup.inline_keyboard.append(kb([[(f"📥 Накопилось без уведомлений · {muted_n}", "ll:muted:0")]]).inline_keyboard[0])
     markup.inline_keyboard.append(kb([[(f"🔕 Уведомления выключены {mute.until_text(row)} — включить" if mute.is_muted(row)
@@ -227,24 +230,22 @@ async def leads_view(cb: CallbackQuery, user: User) -> None:
 
 
 async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: int, way: str, place: int = 0) -> None:
-    """Одна заявка. way: c — эта (или следующая, если её уже убрали из списка), n — следующая (старше), p — предыдущая.
-    Листаем по номеру доставки, а не по позиции: после «Не моё»/«В работу» «▶️» ведёт к следующей, а не перескакивает."""
+    """Одна заявка. way: c — эта (или следующая, если её уже убрали из списка), n — следующая в выбранном порядке, p — предыдущая.
+    Листаем по времени обнаружения и номеру доставки, а не по позиции: после «Не моё»/«В работу» «▶️» ведёт к следующей, а не перескакивает."""
     async with Session() as s:
         q = _filter(select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id), user.tg_id, status)
         where = _place_name(place)
         ids = await _niche_ids(s, cat) if cat else None
         if cat or where:
             q = q.where(lead_sources.filter_tasks(ids, where))
-        if way == "p":
-            row = (await s.execute(q.where(Delivery.id > did).order_by(Delivery.id).limit(1))).first()
-        else:
-            if did:
-                q2 = q.where(Delivery.id < did) if way == "n" else q.where(Delivery.id <= did)
-            else:
-                q2 = q
-            row = (await s.execute(q2.order_by(Delivery.id.desc()).limit(1))).first()
-            if row is None and did:  # дошли до конца — показываем последнюю (самую старую)
-                row = (await s.execute(q.order_by(Delivery.id).limit(1))).first()
+        order = await lead_order.get(s, user.tg_id)
+        key = await lead_order.cursor(s, user.tg_id, did) if did else None
+        q2 = q
+        if key:
+            q2 = q2.where(lead_order.boundary(key, order, after=way != "p", inclusive=way == "c"))
+        row = (await s.execute(q2.order_by(*lead_order.columns(order, reverse=way == "p")).limit(1))).first()
+        if row is None and did:
+            row = (await s.execute(q.order_by(*lead_order.columns(order, reverse=way != "p")).limit(1))).first()
         count_q = select(func.count()).select_from(Delivery).join(Lead, Lead.id == Delivery.lead_id)
         count_q = _filter(count_q, user.tg_id, status)
         if cat or where:
@@ -255,19 +256,20 @@ async def show_one(cb: CallbackQuery, user: User, status: str, cat: int, did: in
         if row is None:
             return await reply(cb, f"{label}: пусто.", kb([[("◀️ Списки", "ll:menu")]]))
         d, lead = row
-        pos = (await s.scalar(count_q.where(Delivery.id > d.id)) or 0) + 1
+        pos = (await s.scalar(count_q.where(lead_order.boundary((lead.created_at, d.id), order, after=False))) or 0) + 1
         client_id = None
         if d.status == "taken":
             client_id = await s.scalar(select(Client.id).where(Client.user_id == user.tg_id, Client.tg_id == lead.author_id))
-        text = f"<b>{esc(label)}</b> — {pos} из {total}\n\n" + notify.lead_text(lead, await lead_sources.category_label(s, lead))
+        text = f"<b>{esc(label)}</b> — {pos} из {total}\n↕ {lead_order.ORDERS[order]} (по обнаружению)\n\n" + notify.lead_text(lead, await lead_sources.category_label(s, lead))
     card = card_keyboard(lead, d, user, client_id)
-    await reply(cb, text, with_nav(card, nav_rows(status, cat, d.id, pos, total, place)))
+    await reply(cb, text, with_nav(card, nav_rows(status, cat, d.id, pos, total, place, order)))
 
 
-def nav_rows(status: str, cat: int, did: int, pos: int, total: int, place: int = 0) -> list:
+def nav_rows(status: str, cat: int, did: int, pos: int, total: int, place: int = 0, order: str = "desc") -> list:
     base = f"lv:{status}:{cat}:{place}:{did}"
     row = ([("◀️ Предыдущая", f"{base}:p")] if pos > 1 else []) + ([("Следующая ▶️", f"{base}:n")] if pos < total else [])
-    return kb(([row] if row else []) + [[("📋 Списки", "ll:menu"), ("📂 Ниши", f"ll:{status}:0"),
+    other = "asc" if order == "desc" else "desc"
+    return kb(([row] if row else []) + [[(f"↕ {lead_order.ORDERS[order]} — сменить", f"lo:set:{status}:{cat}:{place}:{other}")]] + [[("📋 Списки", "ll:menu"), ("📂 Ниши", f"ll:{status}:0"),
                                           ("📍 Место", f"lp:{status}:{cat}")]]).inline_keyboard
 
 
@@ -281,7 +283,7 @@ def _nav_of(cb: CallbackQuery) -> list:
     """Строки «◀️ / ▶️ / Списки» из сообщения, где нажали кнопку (заявка открыта в просмотре по одной)."""
     markup = getattr(cb.message, "reply_markup", None) if cb.message else None
     rows = getattr(markup, "inline_keyboard", None) or []
-    return [r for r in rows if r and all((b.callback_data or "").startswith(("lv:", "ll:", "lp:")) for b in r)]
+    return [r for r in rows if r and all((b.callback_data or "").startswith(("lv:", "ll:", "lp:", "lo:")) for b in r)]
 
 
 async def edit_markup(cb: CallbackQuery, markup) -> None:
@@ -448,3 +450,19 @@ async def send_ai_draft(cb: CallbackQuery, s, lead: Lead, user: User, delivery_i
         f"✨ <b>Черновик ответа</b> (поправьте под себя):\n\n<code>{esc(text)}</code>{reply_hint(lead, text)}",
         reply_markup=kb(reply_rows(lead, text) + [[("🔄 Другой вариант", f"lead:ai:{delivery_id}")]]),
         disable_web_page_preview=True)
+
+
+@router.callback_query(F.data.regexp(r"^lo:menu:(asc|desc)$"))
+async def order_menu(cb: CallbackQuery, user: User) -> None:
+    async with Session() as s:
+        await lead_order.put(s, user.tg_id, cb.data.split(":")[-1])
+    text, markup = await menu_view(user)
+    await reply(cb, text, markup)
+
+
+@router.callback_query(F.data.regexp(r"^lo:set:(new|postponed|taken|rejected|spam|muted):\d{1,18}:\d{1,4}:(asc|desc)$"))
+async def order_card(cb: CallbackQuery, user: User) -> None:
+    _, _, status, cat, place, order = cb.data.split(":")
+    async with Session() as s:
+        await lead_order.put(s, user.tg_id, order)
+    await show_one(cb, user, status, int(cat), 0, "c", int(place))

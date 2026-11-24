@@ -174,19 +174,31 @@
   var TABS = [["new", "Новые"], ["postponed", "Отложено"], ["taken", "В работе"], ["rejected", "Не моё"], ["spam", "Спам"], ["muted", "🔕 Накопилось"]];
 
   function renderLeads() {
+    var generation = (state.leadsGeneration || 0) + 1; state.leadsGeneration = generation;
     var list = el("div", { id: "leadlist" });
     var more = el("button", { class: "btn ghost", text: "Показать ещё", hidden: "" });
     var tabs = el("div", { class: "tabs" }, TABS.map(function (t) {
       return el("button", { class: "chip" + (t[0] === state.leadsStatus ? " on" : ""), text: t[1], onclick: function () { state.leadsStatus = t[0]; state.leadsCat = 0; state.leadsPlace = ""; renderLeads(); } });
     }));
+    var sort = el("select", { "aria-label": "Сортировка по времени обнаружения", onchange: function () {
+      sort.disabled = true; more.disabled = true;
+      var changeGeneration = ++state.leadsGeneration;
+      api("POST", "/api/lead-order", { sort: sort.value }).then(function () {
+        if (state.leadsGeneration === changeGeneration && state.tab === "leads") renderLeads();
+      }).catch(function (e) { if (state.leadsGeneration !== changeGeneration || state.tab !== "leads") return; toast(e.message, true); renderLeads(); });
+    } }, [el("option", { value: "desc", text: "Сначала свежие" }), el("option", { value: "asc", text: "Сначала старые" })]);
+    sort.disabled = true;
     var filters = el("div", {});
-    show(el("h1", { text: "Заявки" }), el("p", { class: "muted", text: "«Новые» — ещё не разобранные заявки, а не обязательно свежие. Время обнаружения указано по МСК." }), tabs, filters, list, more);
-    var lastId = 0;
+    show(el("h1", { text: "Заявки" }), el("p", { class: "muted", text: "«Новые» — ещё не разобранные заявки, а не обязательно свежие. Время обнаружения указано по МСК." }), el("label", { text: "↕ По времени обнаружения" }), sort, tabs, filters, list, more);
+    var lastId = 0, pageOrder = null;
     function fetchPage() {
-      var q = "/api/leads?status=" + state.leadsStatus + (lastId ? "&before=" + lastId : "")
+      var q = "/api/leads?status=" + state.leadsStatus + (lastId ? "&before=" + lastId : "") + (pageOrder ? "&sort=" + pageOrder : "")
         + (state.leadsCat ? "&cat=" + state.leadsCat : "") + (state.leadsPlace ? "&place=" + encodeURIComponent(state.leadsPlace) : "");
       more.disabled = true;
       api("GET", q).then(function (res) {
+        if (state.leadsGeneration !== generation || state.tab !== "leads") return;
+        pageOrder = res.sort || "desc";
+        sort.value = pageOrder; sort.disabled = false;
         if (!lastId) drawFilters(filters, res);
         if (!lastId && !res.items.length) {
           var filtered = Boolean(state.leadsCat || state.leadsPlace);
@@ -198,7 +210,7 @@
         }
         res.items.forEach(function (it) { list.appendChild(leadCard(it)); lastId = it.id; });
         more.hidden = !res.has_more; more.disabled = false;
-      }).catch(function (e) { toast(e.message, true); more.disabled = false; });
+      }).catch(function (e) { if (state.leadsGeneration !== generation || state.tab !== "leads") return; toast(e.message, true); more.disabled = false; sort.disabled = false; });
     }
     more.onclick = fetchPage;
     fetchPage();

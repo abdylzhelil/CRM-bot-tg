@@ -8,7 +8,7 @@ from app.services import (
     ads, autosetup, catalog, crm, geo, lead_actions, levels, payments, profile_edit, quiet, referrals, scam, settings,
 )
 from app.services.distribute import is_paid
-from app.services import lead_sources
+from app.services import lead_sources, lead_order
 from app.bot.handlers import leads as leads_h
 from app.bot.handlers.leads import category_name
 from app.web.keys import USER_KEY
@@ -69,7 +69,11 @@ async def leads_list(request: web.Request) -> web.Response:
         before = _bounded(request.query.get("before", "0"))
     except ValueError:
         return err("bad_request", "Некорректный запрос")
+    requested_order = request.query.get("sort")
+    if requested_order is not None and requested_order not in lead_order.ORDERS:
+        return err("bad_sort", "Неизвестная сортировка")
     async with Session() as s:
+        order = requested_order or await lead_order.get(s, user.tg_id)
         q = (select(Delivery, Lead).join(Lead, Lead.id == Delivery.lead_id)
              .where(Delivery.user_id == user.tg_id, Delivery.sent))
         q = q.where(Delivery.muted, Delivery.status == "new") if status == "muted" else q.where(Delivery.status == status)
@@ -79,10 +83,13 @@ async def leads_list(request: web.Request) -> web.Response:
         if cat or place in geo.KNOWN_PLACES:
             q = q.where(lead_sources.filter_tasks(ids, place if place in geo.KNOWN_PLACES else ""))
         if before:
-            q = q.where(Delivery.id < before)
-        rows = (await s.execute(q.order_by(Delivery.id.desc()).limit(PAGE + 1))).all()
+            key = await lead_order.cursor(s, user.tg_id, before)
+            if key is None:
+                return err("bad_cursor", "Список изменился — откройте его заново")
+            q = q.where(lead_order.boundary(key, order))
+        rows = (await s.execute(q.order_by(*lead_order.columns(order)).limit(PAGE + 1))).all()
         items = [await lead_item(s, d, lead) for d, lead in rows[:PAGE]]
-        out = {"items": items, "has_more": len(rows) > PAGE}
+        out = {"items": items, "has_more": len(rows) > PAGE, "sort": order}
         if not before:  # на первой странице — из чего можно выбрать: ниши и места с числом заявок (как в боте)
             out["niches"] = [{"id": cid, "name": name, "n": n} for cid, name, n in await leads_h._niches(s, user.tg_id, status)]
             out["places"] = [{"name": name, "n": n} for _, name, n in await leads_h._places(s, user.tg_id, status, cat)][:12]
@@ -539,3 +546,13 @@ async def mute_set(request: web.Request) -> web.Response:
         await s.commit()
         row = await s.get(User, user.tg_id)
         return web.json_response({"ok": True, "on": True, "until": mute.until_text(row)})
+
+
+async def lead_sort(request: web.Request) -> web.Response:
+    user = request[USER_KEY]
+    data = await read_json(request)
+    if data is None or not isinstance(data.get("sort"), str) or data["sort"] not in lead_order.ORDERS:
+        return err("bad_sort", "Выберите: сначала свежие или сначала старые")
+    async with Session() as s:
+        await lead_order.put(s, user.tg_id, data["sort"])
+    return web.json_response({"sort": data["sort"]})

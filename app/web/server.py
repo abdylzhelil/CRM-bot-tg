@@ -173,6 +173,7 @@ def make_app() -> web.Application:
     app.router.add_get("/healthz", health)
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/leads", api.leads_list)
+    app.router.add_post("/api/lead-order", api.lead_sort)
     app.router.add_post("/api/leads/{id}/{action}", api.lead_act)
     app.router.add_get("/api/leads/{id}/reply", api.lead_reply)
     app.router.add_get("/api/profile", api.profile_get)
