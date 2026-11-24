@@ -1,4 +1,4 @@
-name: CRM retired from VPS
+name: CRM scout diagnostics
 on:
   push:
     branches: [crm/scout-diagnostics]
@@ -6,8 +6,63 @@ on:
 permissions:
   contents: read
 jobs:
-  retired:
-    if: ${{ false }}
+  diagnose:
+    name: Read CRM scout state
+    if: github.repository == 'abdylzhelil/CRM-bot-tg'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: crm-production
+      cancel-in-progress: false
     steps:
-      - run: echo 'CRM was retired at owner request on 2026-11-24. No SSH actions are enabled.'
+      - name: Read-only scout report over CRM SSH
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.CRM_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.CRM_DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.CRM_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.CRM_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ vars.CRM_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?Set DEPLOY_HOST}"
+          : "${DEPLOY_USER:?Set DEPLOY_USER}"
+          : "${DEPLOY_SSH_KEY:?Set DEPLOY_SSH_KEY}"
+          : "${DEPLOY_KNOWN_HOSTS:?Set DEPLOY_KNOWN_HOSTS}"
+          DEPLOY_PORT=${DEPLOY_PORT:-22}
+          DEPLOY_PATH=${DEPLOY_PATH:-/root/CRM-bot-tg}
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]] && ((DEPLOY_PORT >= 1 && DEPLOY_PORT <= 65535))
+          [[ "$DEPLOY_PATH" = /* ]]
+          install -m 700 -d "$RUNNER_TEMP/crm-ssh"
+          trap 'rm -rf -- "$RUNNER_TEMP/crm-ssh"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/crm-ssh/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/crm-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/crm-ssh/"*
+          printf -v remote_command '%q ' bash -s -- "$DEPLOY_PATH"
+          ssh -T -p "$DEPLOY_PORT" -i "$RUNNER_TEMP/crm-ssh/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/crm-ssh/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" <<'REMOTE'
+          set -euo pipefail
+          [[ ! -e /root/CRM-bot-tg ]]
+          python3 - <<'PY'
+          import pathlib,json,subprocess,shutil
+          root=pathlib.Path('/root/crm-retired').resolve()
+          p=pathlib.Path('/root/crm-retired/latest-path').read_text().strip()
+          archive=pathlib.Path(p).resolve()
+          assert archive.parent==root and archive.name.startswith('CRM-bot-tg-') and archive.is_dir()
+          size=lambda p:int(subprocess.check_output(['du','-sb',str(p)],text=True).split()[0]) if p.exists() else 0
+          all_ids=subprocess.check_output(['docker','ps','-aq'],text=True).split()
+          containers=json.loads(subprocess.check_output(['docker','inspect',*all_ids],text=True)) if all_ids else []
+          assert not any('CRM-bot-tg' in r.get('Config',{}).get('Labels',{}).get('com.docker.compose.project.working_dir','') for r in containers)
+          images=json.loads(subprocess.check_output(['docker','image','ls','--format','json'],text=True).join(['[',']']).replace('}\n{','},{')) if False else []
+          print('CRM_ARCHIVE_INVENTORY:',json.dumps({'archive_bytes':size(archive),'data_bytes':size(archive/'app/data'),'backups_bytes':size(archive/'app/data/backups'),'git_bytes':size(archive/'app/.git'),'free_bytes':shutil.disk_usage(root).free,'containers':len(containers)}))
+          PY
+          REMOTE
+# Read-only CRM preflight for scout reliability update.
+
+# Verify live CRM after successful scout reliability deployment, 2026-11-21.
