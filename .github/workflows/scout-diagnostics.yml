@@ -1,4 +1,4 @@
-name: CRM scout diagnostics
+name: Retire CRM from VPS
 on:
   push:
     branches: [crm/scout-diagnostics]
@@ -7,15 +7,15 @@ permissions:
   contents: read
 jobs:
   diagnose:
-    name: Read CRM scout state
+    name: Archive and remove CRM deployment
     if: github.repository == 'abdylzhelil/CRM-bot-tg'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     concurrency:
       group: crm-production
       cancel-in-progress: false
     steps:
-      - name: Read-only scout report over CRM SSH
+      - name: Owner-authorized CRM retirement over dedicated SSH
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets.CRM_DEPLOY_HOST }}
@@ -47,14 +47,113 @@ jobs:
             -o UserKnownHostsFile="$RUNNER_TEMP/crm-ssh/known_hosts" \
             -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
             "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" <<'REMOTE'
-          set -euo pipefail
-          cd -- "$1"
-          [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
+          set -Eeuo pipefail
+          umask 077
+          REPO=${1:?Expected CRM path}
+          [[ "$REPO" = /root/CRM-bot-tg ]] || { echo 'Unexpected CRM path'; exit 1; }
+          if [[ ! -d "$REPO" ]]; then
+              echo 'CRM active path already absent; no removal attempted'
+              exit 0
+          fi
+          cd -- "$REPO"
           [[ "$(git remote get-url origin)" = *abdylzhelil/CRM-bot-tg* ]]
-          printf 'CRM_SOURCE: '
-          git rev-parse HEAD
-          python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("CRM_STORAGE:",json.dumps({"free_gib":round(d.free/2**30,2)}))'
-          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))'
+          [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
+          [[ "$(docker compose config --services)" = bot ]]
+          exec 9>"$(git rev-parse --git-path crm-deploy.lock)"
+          flock -n 9 || { echo 'CRM operation already running'; exit 1; }
+          CID=$(docker compose ps -aq bot)
+          [[ -n "$CID" && "$CID" != *$'\n'* ]]
+          [[ "$(docker inspect -f '{{.State.Running}}' "$CID")" = true ]]
+          PROJECT=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$CID")
+          WORKDIR=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$CID")
+          [[ "$PROJECT" = *crm* && "$PROJECT" != tg-group-bot && "$WORKDIR" = "$REPO" ]]
+          TAG=$(date -u +%Y%m%dT%H%M%SZ)
+          ARCHIVE="/root/crm-retired/CRM-bot-tg-$TAG"
+          install -m 700 -d /root/crm-retired "$ARCHIVE"
+          printf '%s\n' "$ARCHIVE" > /root/crm-retired/latest-path
+          chmod 600 /root/crm-retired/latest-path
+          ENV_STATE=$(sha256sum .env | cut -d' ' -f1)
+          docker compose config --format json > "$ARCHIVE/compose.json"
+          docker inspect "$CID" > "$ARCHIVE/container.json"
+          python3 - "$CID" "$REPO" "$ARCHIVE" <<'PY'
+          import json,subprocess,sys,pathlib
+          cid,repo,archive=sys.argv[1:]
+          info=json.loads((pathlib.Path(archive)/'container.json').read_text())[0]
+          assert any(m.get('Type')=='bind' and m.get('Destination')=='/srv/data' and pathlib.Path(m['Source']).resolve()==pathlib.Path(repo,'data').resolve() for m in info['Mounts']), 'Unexpected CRM data mount'
+          ids=subprocess.check_output(['docker','ps','-aq'],text=True).split()
+          all_info=json.loads(subprocess.check_output(['docker','inspect',*ids],text=True))
+          others={r['Id']:{'image':r['Image'],'running':r['State']['Running'],'started':r['State']['StartedAt']} for r in all_info if r['Id']!=info['Id']}
+          p=pathlib.Path(archive)
+          (p/'others-before.json').write_text(json.dumps(others))
+          (p/'manifest.json').write_text(json.dumps({'original_path':repo,'container':info['Id'],'project':info['Config']['Labels']['com.docker.compose.project'],'image':info['Image']}))
+          PY
+          if command -v gh >/dev/null && gh auth status --hostname github.com >/dev/null 2>&1; then
+              if gh variable set CRM_AUTO_DEPLOY_ENABLED --repo abdylzhelil/CRM-bot-tg --body false >/dev/null 2>&1; then
+                  [[ "$(gh variable get CRM_AUTO_DEPLOY_ENABLED --repo abdylzhelil/CRM-bot-tg)" = false ]]
+                  echo 'CRM_AUTO_DEPLOY_VARIABLE: false'
+              else
+                  echo 'CRM_AUTO_DEPLOY_VARIABLE: unchanged; GitHub workflow already explicitly disabled'
+              fi
+          else
+              echo 'CRM_AUTO_DEPLOY_VARIABLE: unavailable; GitHub workflow already explicitly disabled'
+          fi
+          # Snapshot is checked before stopping; then refreshed after shutdown.
+          timeout 180 docker exec -i "$CID" python - "$TAG" <<'PY'
+          import json,pathlib,sqlite3,os,sys
+          from app import config
+          from sqlalchemy.engine import make_url
+          os.umask(0o077)
+          u=make_url(config.DATABASE_URL)
+          assert u.get_backend_name()=='sqlite', 'Retirement needs native backup for this DB'
+          root=pathlib.Path('/srv/data').resolve()
+          src=pathlib.Path(u.database).resolve()
+          assert src.is_file() and src.is_relative_to(root), 'Unexpected CRM database path'
+          folder=root/'backups'/'retirement'
+          folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+          dest=folder/('before_retire_'+sys.argv[1]+'.db')
+          with sqlite3.connect(src.as_uri()+'?mode=ro',uri=True,timeout=30) as source,sqlite3.connect(dest) as target:
+              source.backup(target)
+              assert target.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
+              tables={x[0] for x in target.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+              assert {'users','payments','settings'} <= tables
+          os.chmod(dest,0o600)
+          (folder/(sys.argv[1]+'.json')).write_text(json.dumps({'database':str(src.relative_to(root)),'snapshot':str(dest.relative_to(root))}))
+          print('CRM_BACKUP_BEFORE_STOP: verified')
+          PY
+          # Only this exact CRM container is stopped and removed. No compose down/prune.
+          docker update --restart=no "$CID" >/dev/null
+          timeout 60 docker stop --time 30 "$CID" >/dev/null
+          [[ "$(docker inspect -f '{{.State.Running}}' "$CID")" = false ]]
+          python3 - "$REPO/data" "$TAG" <<'PY'
+          import pathlib,json,sqlite3,sys,hashlib
+          root=pathlib.Path(sys.argv[1]);tag=sys.argv[2]
+          meta=json.loads((root/'backups'/'retirement'/(tag+'.json')).read_text())
+          src=(root/meta['database']).resolve();dest=(root/meta['snapshot']).resolve()
+          assert src.is_relative_to(root.resolve()) and dest.is_relative_to(root.resolve())
+          with sqlite3.connect(src.as_uri()+'?mode=ro',uri=True,timeout=30) as source,sqlite3.connect(dest) as target:
+              source.backup(target)
+              assert target.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
+          (dest.with_suffix('.sha256')).write_text(hashlib.sha256(dest.read_bytes()).hexdigest()+'\n')
+          print('CRM_FINAL_DATABASE_SNAPSHOT: verified')
+          PY
+          docker rm "$CID" >/dev/null
+          if docker inspect "$CID" >/dev/null 2>&1; then echo 'CRM container still exists'; exit 1; fi
+          [[ "$(sha256sum .env | cut -d' ' -f1)" = "$ENV_STATE" ]]
+          cd /root
+          mv -- "$REPO" "$ARCHIVE/app"
+          [[ ! -e "$REPO" && -d "$ARCHIVE/app/data" ]]
+          [[ "$(sha256sum "$ARCHIVE/app/.env" | cut -d' ' -f1)" = "$ENV_STATE" ]]
+          python3 - "$ARCHIVE" <<'PY'
+          import json,pathlib,subprocess,sys
+          p=pathlib.Path(sys.argv[1]);before=json.loads((p/'others-before.json').read_text())
+          ids=subprocess.check_output(['docker','ps','-aq'],text=True).split()
+          rows=json.loads(subprocess.check_output(['docker','inspect',*ids],text=True)) if ids else []
+          after={r['Id']:{'image':r['Image'],'running':r['State']['Running'],'started':r['State']['StartedAt']} for r in rows}
+          unchanged=before==after
+          result={'crm_container_absent':True,'crm_active_path_absent':True,'archive_saved':True,'other_containers_unchanged':unchanged,'other_containers':len(after)}
+          (p/'result.json').write_text(json.dumps(result));print('CRM_RETIRED:',json.dumps(result))
+          assert unchanged, 'Other container state changed; inspect separately, do not modify it'
+          PY
           REMOTE
 # Read-only CRM preflight for scout reliability update.
 
