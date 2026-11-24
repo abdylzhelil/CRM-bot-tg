@@ -16,7 +16,7 @@ from app.bot import captcha, intro, notify
 from app.bot.access import IsAdmin, UserMiddleware
 from app.bot.common import ADMIN_MENU, ADMIN_ONLY, MENU, USER_MENU, kb
 from app.bot.handlers import (
-    accounts, adposts, blacklist, board, broadcast, credits, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, feedback, leads, mute, mysearch, profile, settings, stats,
+    business_contacts, accounts, adposts, blacklist, board, broadcast, credits, catalog, categories, clients, licenses, payments, groups, ingroup, inputs, keywords, feedback, leads, mute, mysearch, profile, settings, stats,
     submissions, users_admin,
 )
 from app.db import Session
@@ -113,7 +113,7 @@ async def _help(m: Message):
     await m.answer(HELP, reply_markup=await help_keyboard())
 
 
-def admin_panel(unread: int = 0):
+def admin_panel(unread: int = 0, owner: bool = False):
     from app.bot.common import kb
 
     return kb([
@@ -123,6 +123,7 @@ def admin_panel(unread: int = 0):
         [("🛡 Чёрный список", "adm:blacklist"), ("⚙️ Настройки", "adm:settings")],
         [("📣 Рассылка", "adm:broadcast"), ("🪪 Лицензии", "adm:licenses")],
         [("💰 Кредиты", "cra:menu")],
+        *([[("📇 Контакты Дагестана", "dc:menu")]] if owner else []),
     ])
 
 
@@ -301,7 +302,7 @@ async def _admin_home(m: Message) -> None:
 
     async with Session() as s:
         unread = await feedback_svc.unread_count(s)
-    await m.answer("🛠 <b>Управление ботом</b>", reply_markup=admin_panel(unread))
+    await m.answer("🛠 <b>Управление ботом</b>", reply_markup=admin_panel(unread, owner=m.from_user.id in config.OWNER_IDS))
 
 
 admin_nav = Router(name="admin_nav")
@@ -353,7 +354,7 @@ def build(scout_manager) -> tuple[Bot, Dispatcher]:
     admin.message.filter(IsAdmin())
     admin.callback_query.filter(IsAdmin())
     admin.include_routers(
-        accounts.router, adposts.admin_router, groups.router, categories.router, keywords.router, blacklist.router,
+        business_contacts.router, accounts.router, adposts.admin_router, groups.router, categories.router, keywords.router, blacklist.router,
         settings.router, users_admin.router, submissions.router, broadcast.router, licenses.router, mysearch.admin_router, feedback.admin_router, board.admin_router, credits.admin_router, admin_nav,
     )
     # личка: всем пользователям
