@@ -51,7 +51,7 @@ jobs:
   deploy:
     name: Deploy CRM
     needs: [test, test-postgres]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/ccr-a042c0a9-cjx9fv' && vars.CRM_AUTO_DEPLOY_ENABLED == 'true'
+    if: ${{ false }} # CRM retired from VPS at owner's request, 2026-11-24
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
