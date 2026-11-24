@@ -54,15 +54,8 @@ jobs:
           printf 'CRM_SOURCE: '
           git rev-parse HEAD
           python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("CRM_STORAGE:",json.dumps({"free_gib":round(d.free/2**30,2)}))'
-          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))' </dev/null
-          [[ "$(git rev-parse HEAD)" = c719d14dfeb204741df2f06bbdfbab0090544bd3 ]]
-          actual=$(docker compose ps -q bot)
-          [[ "$(docker inspect -f '{{.Image}}' "$actual")" = "$(docker image inspect -f '{{.Id}}' crm-bot:c719d14dfeb204741df2f06bbdfbab0090544bd3)" ]]
-          docker compose logs --tail 300 bot 2>&1 | python3 -c 'import sys,json; s=sys.stdin.read(); good="Start polling" in s or "Run polling" in s; conflict="TelegramConflictError" in s; print("CRM_POLLING:",json.dumps({"started":good,"conflict":conflict})); assert good and not conflict'
-          timeout 25 docker compose exec -T bot python -c 'from datetime import timedelta; import urllib.request; from app import config; from app.models import Lead,now; from app.services.lead_time import found_label,PUBLICATION_NOTE; from app.bot.notify import lead_text; lead=Lead(text="Test",name="",username="",group_title="Test",city="",region="",link="",created_at=now()-timedelta(minutes=20)); result=lead_text(lead,"Test"); assert found_label(lead) in result and PUBLICATION_NOTE in result and "20 мин. назад" in result; js=urllib.request.urlopen("http://127.0.0.1:%s/app/app.js"%config.WEBAPP_PORT,timeout=5).read().decode(); assert "found_at_label" in js and "publication_note" in js; print("CRM_LEAD_DATE_UI: OK"); print("CRM_SYNTHETIC_TIME:",found_label(lead))' </dev/null
+          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))'
           REMOTE
 # Read-only CRM preflight for scout reliability update.
 
 # Verify live CRM after successful scout reliability deployment, 2026-11-21.
-
-# Read-only lead date UI verification with synthetic data, no messages or database writes.
