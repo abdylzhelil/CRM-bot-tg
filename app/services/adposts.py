@@ -401,6 +401,12 @@ async def mark_paid(s: AsyncSession, order_id: int, yk_id: str, amount_kop: int 
                   charge_id=f"yk:{yk_id}", provider_id=yk_id)  # days=0 — это реклама, тариф не трогаем
     s.add(pay)
     s.add_all(await _new_posts(s, order))
+    from app.models import User
+    from app.services import boards
+
+    buyer = await s.get(User, order.user_id)
+    if buyer is not None and currency == "RUB":
+        await boards.reward(s, buyer, pay.amount, pay.charge_id)
     await s.commit()  # оплата, статус и очередь постов — одним сохранением
     return order, pay
 

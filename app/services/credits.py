@@ -223,9 +223,11 @@ async def release_due(s: AsyncSession) -> list[tuple[int, int]]:
         user = await s.get(User, tx.user_id)
         if user is None:
             continue
-        user.credits_hold = max(0, (user.credits_hold or 0) - tx.amount)
-        user.credits = (user.credits or 0) + tx.amount
-        out[user.tg_id] = out.get(user.tg_id, 0) + tx.amount
+        amount = await _remaining(s, tx)
+        if amount:
+            user.credits_hold = max(0, (user.credits_hold or 0) - amount)
+            user.credits = (user.credits or 0) + amount
+            out[user.tg_id] = out.get(user.tg_id, 0) + amount
     return list(out.items())
 
 
@@ -236,41 +238,63 @@ async def claim(s: AsyncSession, user: User) -> int:
     total = 0
     for tx in rows:
         tx.applied = True
+        if tx.kind == "reverse" and tx.ref.startswith("rev-"):
+            continue  # included in the original commission
+        amount = await _remaining(s, tx)
         if tx.hold_until is not None and tx.hold_until > now():
-            user.credits_hold = (user.credits_hold or 0) + tx.amount
+            user.credits_hold = (user.credits_hold or 0) + amount
         else:
             tx.hold_until = None
-            user.credits = (user.credits or 0) + tx.amount
-        total += tx.amount
+            user.credits = (user.credits or 0) + amount
+        total += amount
     return total
 
 
-async def reverse_payment(s: AsyncSession, charge_id: str) -> int:
-    """Оплату вернули — забрать комиссию с неё. Ещё заморожена — просто отменяется; уже доступна — списываем,
-    сколько есть на балансе (потраченное не возвращаем). → списано с доступного."""
+async def _reversed(s, tx):
+    rows = (await s.scalars(select(CreditTx).where(
+        CreditTx.user_id == tx.user_id, CreditTx.kind == "reverse",
+        (CreditTx.ref == f"rev-{tx.id}") | CreditTx.ref.startswith(f"rev-{tx.id}-")))).all()
+    return sum(-row.amount for row in rows)
+
+
+async def _remaining(s, tx):
+    if not tx.ref.startswith("pay-"):
+        return tx.amount
+    return max(0, tx.amount - await _reversed(s, tx))
+
+
+async def reverse_payment(s: AsyncSession, charge_id: str, refund_kop=None, paid_kop=None) -> int:
+    """Reverse the cumulative refunded share, once. Preserve the hold on the rest.
+
+    Released credits are recovered only up to the available balance, as before.
+    Callers serialize refunds with payments._refund_lock.
+    """
     if not charge_id:
         return 0
     taken = 0
     for tx in (await s.scalars(select(CreditTx).where(CreditTx.ref == f"pay-{charge_id}"))).all():
-        if await s.scalar(select(CreditTx.id).where(CreditTx.ref == f"rev-{tx.id}").limit(1)):
+        target = tx.amount if refund_kop is None else (
+            tx.amount * min(max(0, refund_kop), paid_kop) // paid_kop if paid_kop and paid_kop > 0 else 0)
+        ref = f"rev-{tx.id}" if refund_kop is None else f"rev-{tx.id}-to-{target}"
+        if await s.scalar(select(CreditTx.id).where(CreditTx.ref == ref).limit(1)):
+            continue
+        amount = max(0, target - await _reversed(s, tx))
+        if not amount:
             continue
         user = await s.get(User, tx.user_id) if tx.applied else None
-        held = tx.hold_until is not None and tx.hold_until > now()
-        if held or not tx.applied:
-            amount = tx.amount  # ещё не тратилось: отменяем целиком
-            if held and user is not None:
-                user.credits_hold = max(0, (user.credits_hold or 0) - tx.amount)
-                user.credits = (user.credits or 0) + tx.amount  # освобождаем и тут же списываем ниже
-        else:
-            if user is None:
-                continue
-            amount = min(tx.amount, user.credits or 0)
-        tx.hold_until = None
+        # An expired hold still belongs to credits_hold until release_due runs.
+        held = tx.hold_until is not None
         if user is not None:
-            user.credits = (user.credits or 0) - amount
-            taken += amount if not held else 0
-        s.add(CreditTx(user_id=tx.user_id, amount=-amount, kind="reverse", note="оплату приглашённого вернули",
-                       ref=f"rev-{tx.id}", applied=tx.applied))
+            if held:
+                user.credits_hold = max(0, (user.credits_hold or 0) - amount)
+            else:
+                amount = min(amount, user.credits or 0)
+                user.credits = (user.credits or 0) - amount
+                taken += amount
+        if not amount:
+            continue
+        s.add(CreditTx(user_id=tx.user_id, amount=-amount, kind="reverse",
+                       note="оплату приглашённого вернули", ref=ref, applied=tx.applied))
     return taken
 
 

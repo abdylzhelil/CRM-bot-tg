@@ -116,6 +116,9 @@ class RefundError(Exception):
 
 async def take_back(s: AsyncSession, payment: Payment) -> None:
     """Снять дни этого платежа с тарифа пользователя (деньги здесь не трогаем). Платёж за рекламу (days=0) отменяет заказ."""
+    from app.services import credits
+
+    await credits.reverse_payment(s, payment.charge_id)
     user = await s.get(User, payment.user_id)
     if payment.days == 0:  # реклама: тариф и привязанная карта не трогаем
         from app.models import AdOrder
@@ -131,9 +134,6 @@ async def take_back(s: AsyncSession, payment: Payment) -> None:
         payment.refunded, payment.refunded_at = True, now()
         await s.commit()
         return
-    from app.services import credits
-
-    await credits.reverse_payment(s, payment.charge_id)  # комиссию админу группы с этой оплаты забираем
     if user is not None and not user.is_admin and user.plan_until is not None:
         user.plan_until = user.plan_until - timedelta(days=payment.days)
         if user.plan_until <= now():
@@ -202,6 +202,9 @@ async def refund_part(s: AsyncSession, payment: Payment, amount_kop: int, call=N
         if data.get("status") not in ("succeeded", "pending"):
             raise RefundError(f"ЮKassa отказала: {data.get('description') or data.get('status') or data.get('_http')}")
         payment.refunded_amount += amount
+        from app.services import credits
+
+        await credits.reverse_payment(s, payment.charge_id, payment.refunded_amount, payment.amount)
         if payment.refunded_amount >= payment.amount:
             payment.refunded, payment.refunded_at = True, now()
         await s.commit()
@@ -216,6 +219,9 @@ async def mark_manual_refund(s: AsyncSession, payment: Payment, amount_kop: int)
         if payment.refunded or amount <= 0:
             raise RefundError("Возвращать нечего.")
         payment.refunded_amount += amount
+        from app.services import credits
+
+        await credits.reverse_payment(s, payment.charge_id, payment.refunded_amount, payment.amount)
         if payment.refunded_amount >= payment.amount:
             payment.refunded, payment.refunded_at = True, now()
         await s.commit()
