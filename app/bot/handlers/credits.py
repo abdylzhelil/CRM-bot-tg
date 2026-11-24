@@ -79,6 +79,7 @@ async def show(target, user: User) -> None:
             f"• {credits.MOD_KINDS.get(c.kind, (c.kind,))[0].replace('🛡 ', '')}: <code>{esc(c.code)}</code>" for c in codes]
     lines += ["", "📜 <b>История</b>"] + ([esc(credits.tx_line(t)) for t in hist] or ["пока пусто"])
     rows = [[("💎 Дни за кредиты", "cr:days"), ("🛡 Бот модерации", "cr:mod")]]
+    rows.append([("📊 Партнёрский отчёт", "cr:partner")])
     rows += [[(f"↩️ Отменить заявку на код (+{w.price})", f"cr:cancel:{w.id}")] for w in waiting]
     link = await board.add_link()
     if link:
@@ -89,6 +90,30 @@ async def show(target, user: User) -> None:
 @router.callback_query(F.data == "cr:menu")
 async def cr_menu(cb: CallbackQuery, user: User) -> None:
     await show(cb, user)
+
+
+@router.callback_query(F.data == "cr:partner")
+async def partner_report(cb: CallbackQuery, user: User) -> None:
+    from app.services import partner_report as report
+    async with Session() as s:
+        data=await report.summary(s,user.tg_id)
+    await reply(cb,(
+        "📊 <b>Мой партнёрский отчёт</b>\n\n"
+        f"Ваших групп: {data['groups']}\n"
+        f"Зарегистрировались по ссылкам групп: {data['visitors']}\n"
+        f"Оплат подписок с записанной вам комиссией: {data['payments']}\n"
+        f"Сумма оплат: {data['gross_kop']/100:.2f} ₽\n"
+        f"Возвраты по учёту бота: {data['refunds_kop']/100:.2f} ₽\n"
+        f"Оплаты за вычетом возвратов: {data['net_kop']/100:.2f} ₽\n\n"
+        f"Начислено комиссии за всё время: {data['commission_credits']} кредитов\n"
+        f"Общий доступный баланс: {data['available_credits']} кредитов\n"
+        f"Общий замороженный баланс: {data['held_credits']} кредитов\n"
+        f"Текущая ставка: {data['percent']}% (не пересчитывает старые начисления).\n\n"
+        "Оплаты — выручка сервиса, а не ваш денежный доход. "
+        "Сейчас вознаграждение начисляется внутренними кредитами; вывода деньгами нет. "
+        "Общий баланс учитывает также покупки и другие начисления. "
+        "Если комиссия по старой оплате не записана, она не включена в этот отчёт."
+    ),kb([[("🔄 Обновить","cr:partner")],[("◀️ Назад","cr:menu")]]))
 
 
 @router.message(Command("credits"))
