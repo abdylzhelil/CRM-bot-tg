@@ -1,0 +1,28 @@
+{
+  "verified": true,
+  "files_verified": 3263,
+  "sqlite_snapshots_verified": 1,
+  "images_verified": 15,
+  "layers_verified": 141,
+  "manifest_sha256": "7255be714ef7bc0d7cc712c613e567caf049484ad0f5706efb89743399e32035",
+  "encrypted_checksums": {
+    "crm-images-20261124.docker.tar.gz.cms": "49b394ae8f84b419e11c97e937548a61ac971f5818094af0e2c2209199f7b55e",
+    "crm-retired-20261124.tar.gz.cms": "7208e6c5e09a982f398c6a7d5624d43448750200a2366628c6691318e9dc619f",
+    "recipient-cert.pem": "8f94e61afd6dd09d939789273badfcfb4b6f85ab32d50144a9a745e839062856"
+  },
+  "archive_bytes": 262915542,
+  "server_cleanup": {
+    "server_archive_removed": true,
+    "image_tags_removed": 28,
+    "image_ids_removed": 15,
+    "eligible_image_ids_remaining": 0,
+    "skipped_images": 0,
+    "removal_refusals": 0,
+    "other_containers_unchanged": true,
+    "other_containers": 8,
+    "free_bytes_before": 1776168960,
+    "free_bytes_after": 3005153280,
+    "free_bytes_gained": 1228984320
+  },
+  "release_url": "https://github.com/abdylzhelil/CRM-bot-tg/releases/tag/crm-retired-backup-20261124"
+}
