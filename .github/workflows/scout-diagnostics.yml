@@ -51,43 +51,11 @@ jobs:
           cd -- "$1"
           [[ "$(git branch --show-current)" = ccr-a042c0a9-cjx9fv ]]
           [[ "$(git remote get-url origin)" = *abdylzhelil/CRM-bot-tg* ]]
-          timeout 90 docker compose exec -T -i bot python - <<'INVENTORY_PY'
-          import asyncio,json,re
-          from collections import Counter
-          from sqlalchemy import select,text
-          from app import config
-          from app.db import Session
-          from app.models import Group,ScoutAccount,FeedChat,User,now
-          from app.services import adposts,settings,geo
-          async def main():
-              async with Session() as s:
-                  await s.execute(text("PRAGMA query_only=ON"))
-                  groups=(await s.scalars(select(Group))).all()
-                  accounts={a.id:a for a in (await s.scalars(select(ScoutAccount))).all()}
-                  feeds=(await s.scalars(select(FeedChat))).all()
-                  visible=await adposts.eligible_groups(s)
-                  visible_ids={g.id for g in visible}
-                  reasons=Counter()
-                  allowed=[]
-                  for g in groups:
-                      if not g.ads_allowed:reasons["not_permitted"]+=1
-                      if g.status!="joined":reasons["not_joined"]+=1
-                      if g.ad_closed_at:reasons["temporarily_closed"]+=1
-                      if g.captcha_since:reasons["captcha"]+=1
-                      aid=g.ad_account_id if g.ad_account_id is not None else g.account_id
-                      a=accounts.get(aid)
-                      if a is None:reasons["no_publisher"]+=1
-                      elif not a.enabled:reasons["publisher_disabled"]+=1
-                      elif not a.can_post:reasons["publisher_cannot_post"]+=1
-                      if g.ads_allowed:
-                          allowed.append({"name":g.title if g.username else "nonpublic","public_url":"https://t.me/"+g.username if g.username else None,"visible":g.id in visible_ids,"status":g.status,"closed":bool(g.ad_closed_at),"captcha":bool(g.captcha_since),"publisher_present":a is not None,"publisher_enabled":bool(a and a.enabled),"publisher_can_post":bool(a and a.can_post),"rules_policy":g.rules_policy,"rules_age_days":(now()-g.rules_checked_at).days if g.rules_checked_at else None,"city":g.city,"region":g.region,"no_media":g.no_media})
-                  own_ids={f.tg_id for f in feeds if f.own}
-                  own=[g for g in groups if g.tg_id in own_ids or g.board_admin in config.OWNER_IDS]
-                  home=await settings.get(s,"home_region")
-                  out={"measured_at_utc":now().isoformat(),"ad_enabled":await settings.get(s,"adpost_enabled"),"total_group_records":len(groups),"joined":sum(g.status=="joined" for g in groups),"allowed":sum(g.ads_allowed for g in groups),"visible":len(visible),"visible_with_photo":len(await adposts.eligible_groups(s,photo=True)),"local_visible":sum(geo.priority(g.city,g.region,g.title,home)==0 for g in visible),"blockers_overlap":dict(reasons),"allowed_details":allowed,"owned_or_owner_managed_records":len(own),"owned_visible":sum(g.id in visible_ids for g in own),"owned_blockers":{"not_permitted":sum(not g.ads_allowed for g in own),"not_joined":sum(g.status!="joined" for g in own),"no_assigned_publisher":sum((g.ad_account_id if g.ad_account_id is not None else g.account_id) not in accounts for g in own)},"owner_roles":[{"exists":(u:=await s.get(User,uid)) is not None,"admin":bool(u and u.is_admin)} for uid in sorted(config.OWNER_IDS)]}
-                  assert not s.dirty
-                  print("CRM_AD_INVENTORY:",json.dumps(out,ensure_ascii=False))
-          asyncio.run(main())
-          INVENTORY_PY
+          printf 'CRM_SOURCE: '
+          git rev-parse HEAD
+          python3 -c 'import json,shutil; d=shutil.disk_usage("."); print("CRM_STORAGE:",json.dumps({"free_gib":round(d.free/2**30,2)}))'
+          timeout 20 docker compose exec -T bot python -c 'import urllib.request,json; from app import config; r=urllib.request.urlopen("http://127.0.0.1:%s/healthz"%config.WEBAPP_PORT,timeout=5); print("CRM_HEALTH:",r.status,json.load(r))'
           REMOTE
-# Read-only advertising inventory; no messages, permissions or payment changes.
+# Read-only CRM preflight for scout reliability update.
+
+# Verify live CRM after successful scout reliability deployment, 2026-11-21.
